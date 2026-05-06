@@ -610,6 +610,225 @@ class ItemUnit(Base):
         )
 
 
+class MovementType(enum.StrEnum):
+    """Kind of stock movement (M1+).
+
+    ``in``         — receipt of new stock (manual or via PO). Creates a cost
+                     layer; bumps ``item.current_qty`` upward.
+    ``out``        — consumed in production / scrapped / lost. Consumes cost
+                     layers FIFO; reduces ``item.current_qty``.
+    ``adjustment`` — stock-take correction. Positive adjustments behave like
+                     ``in`` (create a layer); negative adjustments behave like
+                     ``out`` (consume FIFO). The ``qty`` column is signed —
+                     positive for "found extra", negative for "missing" — and
+                     the engine routes to the receipt or consume path based on
+                     sign.
+    ``transfer``   — between locations. No cost change in v1; the route layer
+                     records two movements (or a single movement plus a
+                     location flip) without touching cost layers.
+    """
+
+    IN = "in"
+    OUT = "out"
+    ADJUSTMENT = "adjustment"
+    TRANSFER = "transfer"
+
+
+class StockMovement(Base):
+    """A single mutation of an item's stock (M1+).
+
+    Append-only by mission (§3 "Cost layer history is part of the audit trail
+    and cannot be edited. Corrections are made via new movements"). The route
+    layer creates a row for every recorded action; the cost engine
+    (``app/cost_engine.py``) reads the row's id when stitching consumptions
+    onto an out / negative-adjustment movement, and writes ``total_cost`` once
+    the engine finishes.
+
+    ``po_id`` and ``stock_take_id`` are plain integer columns (no FK
+    constraint) in M1 because the ``purchase_orders`` and ``stock_takes``
+    tables don't exist yet. The FK constraint is added in PO2 / ST1's
+    migrations.
+    """
+
+    __tablename__ = "stock_movements"
+    __table_args__ = (
+        Index("ix_stock_movements_item_id", "item_id"),
+        Index("ix_stock_movements_item_unit_id", "item_unit_id"),
+        Index("ix_stock_movements_user_id", "user_id"),
+        Index("ix_stock_movements_type", "type"),
+        Index("ix_stock_movements_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    item_unit_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("item_units.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    type: Mapped[MovementType] = mapped_column(
+        SAEnum(
+            MovementType,
+            name="stock_movement_type",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+    )
+    qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    po_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stock_take_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<StockMovement id={self.id} item_id={self.item_id} type={self.type} "
+            f"qty={self.qty} total_cost={self.total_cost}>"
+        )
+
+
+class CostLayerSource(enum.StrEnum):
+    """Where a cost layer came from (audit aid; FIFO doesn't branch on it).
+
+    ``po_receipt``         — created by receiving against a purchase order.
+    ``manual_in``          — manual stock-in (receipt outside a PO).
+    ``positive_adjustment``— a stock-take found extra units; the operator
+                             entered a unit cost.
+    """
+
+    PO_RECEIPT = "po_receipt"
+    MANUAL_IN = "manual_in"
+    POSITIVE_ADJUSTMENT = "positive_adjustment"
+
+
+class CostLayer(Base):
+    """A FIFO cost layer for an item (M1+).
+
+    Created on every ``in`` / positive-adjustment movement at the unit cost
+    entered at the moment of receipt. ``qty_remaining`` is decremented by
+    consumptions (out / negative-adjustment movements); ``qty_received``,
+    ``unit_cost``, and ``received_at`` are immutable once written. Once
+    ``qty_remaining`` hits zero the layer stays in the table — it's part of
+    the audit trail. Corrections are made via new movements.
+
+    FIFO ordering is ``(received_at ASC, id ASC)``: a backdated receipt can
+    land before existing layers, and ties are broken deterministically by id.
+    The composite index ``ix_cost_layers_item_received`` covers that ORDER BY.
+    """
+
+    __tablename__ = "cost_layers"
+    __table_args__ = (
+        Index("ix_cost_layers_item_id", "item_id"),
+        Index("ix_cost_layers_source_movement_id", "source_movement_id"),
+        Index(
+            "ix_cost_layers_item_received",
+            "item_id",
+            "received_at",
+            "id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    qty_received: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    qty_remaining: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source: Mapped[CostLayerSource] = mapped_column(
+        SAEnum(
+            CostLayerSource,
+            name="cost_layer_source",
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+    )
+    source_movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("stock_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<CostLayer id={self.id} item_id={self.item_id} "
+            f"qty_received={self.qty_received} qty_remaining={self.qty_remaining} "
+            f"unit_cost={self.unit_cost} source={self.source}>"
+        )
+
+
+class CostLayerConsumption(Base):
+    """One layer-tap by a single out / negative-adjustment movement.
+
+    A movement that crosses N layers produces N consumption rows. Each row
+    records the qty drawn from that layer and the unit cost at the moment of
+    consumption (snapshot — the layer's ``unit_cost`` is itself immutable, so
+    the snapshot will always equal it, but storing it explicitly makes the
+    consumption row self-contained for reporting).
+    """
+
+    __tablename__ = "cost_layer_consumptions"
+    __table_args__ = (
+        Index("ix_cost_layer_consumptions_layer_id", "layer_id"),
+        Index("ix_cost_layer_consumptions_movement_id", "movement_id"),
+        Index(
+            "ix_cost_layer_consumptions_movement_layer",
+            "movement_id",
+            "layer_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    layer_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("cost_layers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    movement_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("stock_movements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    qty_consumed: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    unit_cost_at_consumption: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<CostLayerConsumption id={self.id} layer_id={self.layer_id} "
+            f"movement_id={self.movement_id} qty_consumed={self.qty_consumed}>"
+        )
+
+
 class AuditLog(Base):
     """Append-only record of every state-changing action.
 
