@@ -113,6 +113,13 @@
             <em>This PO is {{ po.status.value.replace("_", " ") }}; it cannot be edited.</em>
         </p>
 
+        {% if is_receivable %}
+            <p data-testid="po-receive-link-block">
+                <a href="/admin/purchase-orders/{{ po.id }}/receive"
+                   data-testid="po-receive-link">Receive against this PO &rarr;</a>
+            </p>
+        {% endif %}
+
         <dl>
             <dt>Expected date</dt>
             <dd data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</dd>

@@ -1,12 +1,16 @@
-"""End-to-end walk for the reorder dashboard (PO1).
+"""End-to-end walk for the full reorder → PO chain (PO1 → PO2 → PO2b → PO3
+→ PO4 → PO5).
 
 A manager creates a supplier + a category + two items: one already at zero
 stock against a positive threshold (below threshold), one with stock above
 threshold. The manager visits the reorder dashboard via the nav link, sees
 *only* the below-threshold item in the supplier's group, asserts the
-threshold + deficit cells, clicks the stock-in link, records enough stock to
-clear the threshold, and returns to the dashboard via the nav link to see
-the empty-state.
+threshold + deficit cells, drafts a PO from the supplier group, edits the
+draft (PO2b), downloads the PDF (PO3), sends it to the supplier (PO4), then
+receives against the sent PO with an actual unit cost (PO5). The receive
+flow flips the PO to "received" status and bumps the linked item's
+``current_qty`` via the cost engine, which is verified by re-visiting the
+reorder dashboard and confirming the empty state.
 
 Cleanup at the end archives both items + the supplier + the category so
 downstream walks see clean active lists.
@@ -271,28 +275,45 @@ def test_manager_reorder_dashboard_walk(
     expect(mgr_page.get_by_test_id("po-send-form")).to_have_count(0)
     expect(mgr_page.get_by_test_id("po-pdf-link")).to_be_visible()
 
-    # Back to reorder dashboard via nav.
-    mgr_page.get_by_test_id("nav-reorder").click()
-    mgr_page.wait_for_url(f"{app_server}/admin/reorder")
-    # The PO doesn't change current_qty, so RD-LOW is still listed.
-    low_reorder_row = mgr_page.locator(
-        '[data-testid="reorder-row"]', has_text="RD-LOW"
+    # Step 6d (PO5): Receive the sent PO. Click the receive link on the
+    # detail page → fill the form → submit → status flips to "received".
+    expect(mgr_page.get_by_test_id("po-receive-link")).to_be_visible()
+    mgr_page.get_by_test_id("po-receive-link").click()
+    mgr_page.wait_for_url(
+        f"{app_server}/admin/purchase-orders/{po_id}/receive"
     )
-    expect(low_reorder_row).to_be_visible()
+    # The form has one line (RD-LOW); outstanding equals qty_ordered (120).
+    expect(mgr_page.get_by_test_id("po-receive-form")).to_be_visible()
+    expect(
+        mgr_page.locator('[data-testid="po-receive-line-row"]')
+    ).to_have_count(1)
+    expect(mgr_page.get_by_test_id("po-receive-outstanding")).to_have_text(
+        "120.0000"
+    )
+    mgr_page.get_by_test_id("po-receive-received-input").fill("120")
+    mgr_page.get_by_test_id("po-receive-cost-input").fill("2.00")
+    mgr_page.get_by_test_id("po-receive-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
+    # Status reads "received"; receive link is gone (received POs can't
+    # receive against themselves again).
+    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text(
+        "received"
+    )
+    expect(mgr_page.get_by_test_id("po-receive-link")).to_have_count(0)
+    # The line cell now shows qty_received=120.
+    expect(mgr_page.get_by_test_id("po-line-qty-received")).to_have_text(
+        "120.0000"
+    )
 
-    # Step 7: Click the stock-in link on the below-threshold row → land on
-    # /admin/items/{id}/in for that item.
-    low_reorder_row.get_by_test_id("reorder-stock-in-link").click()
-    mgr_page.wait_for_url(f"{app_server}/admin/items/{low_id}/in")
+    # Verify the linked item's current_qty was bumped via the cost engine.
+    mgr_page.goto(f"{app_server}/admin/items/{low_id}/in")
+    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
+        "120.0000"
+    )
 
-    # Stock in 25 (above the threshold of 10).
-    mgr_page.get_by_test_id("stock-in-qty-input").fill("25")
-    mgr_page.get_by_test_id("stock-in-unit-cost-input").fill("1.00")
-    mgr_page.get_by_test_id("stock-in-submit").click()
-    mgr_page.wait_for_url(f"{app_server}/admin/items/{low_id}/in")
-    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text("25.0000")
-
-    # Step 8: Back to the reorder dashboard via the nav link → empty state.
+    # Back to reorder dashboard via nav. RD-LOW now has qty=120 (well above
+    # threshold=10) so the dashboard should be empty — verifies that the PO
+    # receive flow actually moved stock through the cost engine.
     mgr_page.get_by_test_id("nav-reorder").click()
     mgr_page.wait_for_url(f"{app_server}/admin/reorder")
     expect(mgr_page.get_by_test_id("reorder-empty")).to_be_visible()

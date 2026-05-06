@@ -2770,3 +2770,898 @@ class TestPOSendDetailRender:
         po = self._setup(db_session, client, po_status=POStatus.CANCELLED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert 'data-testid="po-send-form"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# PO5 — Receive against a PO
+# ---------------------------------------------------------------------------
+
+
+def _receive_po(
+    client: TestClient,
+    po_id: int,
+    *,
+    received: dict[int, str] | None = None,
+    cost: dict[int, str] | None = None,
+) -> Any:
+    """Build a receive form post and submit it.
+
+    ``received`` and ``cost`` are line-id-keyed dicts. Lines not in the dicts
+    submit as blank (== zero received / no cost).
+    """
+    received = received or {}
+    cost = cost or {}
+    data: dict[str, str] = {"csrf_token": _csrf(client)}
+    for line_id, qty in received.items():
+        data[f"received_{line_id}"] = qty
+    for line_id, cost_value in cost.items():
+        data[f"cost_{line_id}"] = cost_value
+    return client.post(
+        f"/admin/purchase-orders/{po_id}/receive",
+        data=data,
+        follow_redirects=False,
+    )
+
+
+def _make_po_for_receive(
+    db: Session,
+    *,
+    actor: User,
+    supplier: Supplier | None = None,
+    leaf: TaxonomyNode | None = None,
+    skus: list[str] | None = None,
+    qty_ordered: Decimal = Decimal("10"),
+    expected_unit_cost: Decimal | None = Decimal("2.00"),
+    po_status: POStatus = POStatus.SENT,
+) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
+    """Build a receivable PO (default status=sent) for the test cases."""
+    sup = supplier or _make_supplier(
+        db, name="ACME", email="acme@example.test"
+    )
+    lf = leaf or _make_leaf(db)
+    po, lines = _make_draft_po(
+        db,
+        supplier=sup,
+        leaf=lf,
+        actor=actor,
+        skus=skus or ["RECV-1"],
+        qty_ordered=qty_ordered,
+        expected_unit_cost=expected_unit_cost,
+        po_status=po_status,
+    )
+    return po, lines
+
+
+class TestPOReceiveRoleEnforcement:
+    def _make(self, db: Session) -> PurchaseOrder:
+        u = _make_user(db, email="creator@x.test", role=Role.MANAGER)
+        po, _lines = _make_po_for_receive(db, actor=u)
+        return po
+
+    def test_anon_get_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 401
+
+    def test_anon_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        resp = _receive_po(client, po.id)
+        assert resp.status_code == 401
+
+    def test_pending_get_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 403
+
+    def test_pending_post_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = _receive_po(client, po.id)
+        assert resp.status_code == 403
+
+    def test_workshop_get_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 403
+
+    def test_workshop_post_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = _receive_po(client, po.id)
+        assert resp.status_code == 403
+
+    def test_manager_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+
+    def test_office_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+
+    def test_admin_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session)
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+
+
+class TestPOReceiveStatusGuard:
+    def _make(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        po_status: POStatus,
+    ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db, actor=u, po_status=po_status, skus=["GS-1"]
+        )
+        _login_as(client, u)
+        return po, lines
+
+    def test_unknown_po_get_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders/9999/receive")
+        assert resp.status_code == 404
+
+    def test_unknown_po_post_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = _receive_po(client, 9999)
+        assert resp.status_code == 404
+
+    def test_draft_get_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _ = self._make(db_session, client, po_status=POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 400
+
+    def test_draft_post_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._make(db_session, client, po_status=POStatus.DRAFT)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "5"},
+            cost={lines[0].id: "2.00"},
+        )
+        assert resp.status_code == 400
+
+    def test_received_get_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _ = self._make(db_session, client, po_status=POStatus.RECEIVED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 400
+
+    def test_cancelled_get_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _ = self._make(db_session, client, po_status=POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 400
+
+    def test_partially_received_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _ = self._make(
+            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
+        )
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+
+
+class TestPOReceiveValidation:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        qty_ordered: Decimal = Decimal("10"),
+    ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db, actor=u, skus=["VAL-1"], qty_ordered=qty_ordered
+        )
+        _login_as(client, u)
+        return po, lines
+
+    def test_negative_received_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "-1"},
+            cost={lines[0].id: "2.00"},
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_received_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "abc"},
+            cost={lines[0].id: "2.00"},
+        )
+        assert resp.status_code == 400
+
+    def test_negative_cost_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "5"},
+            cost={lines[0].id: "-1"},
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_cost_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "5"},
+            cost={lines[0].id: "x"},
+        )
+        assert resp.status_code == 400
+
+    def test_blank_cost_with_qty_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "5"},
+            cost={lines[0].id: ""},
+        )
+        assert resp.status_code == 400
+
+    def test_over_receipt_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        # qty_ordered=10, qty_received=0 → receiving 11 should reject.
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "11"},
+            cost={lines[0].id: "2.00"},
+        )
+        assert resp.status_code == 400
+
+    def test_over_receipt_after_partial_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        line_id = lines[0].id
+        # First receipt: 6 of 10. After this, 4 outstanding.
+        resp1 = _receive_po(
+            client,
+            po.id,
+            received={line_id: "6"},
+            cost={line_id: "2.00"},
+        )
+        assert resp1.status_code == 303
+        # Second receipt: try 5 — should reject (only 4 outstanding).
+        resp2 = _receive_po(
+            client,
+            po.id,
+            received={line_id: "5"},
+            cost={line_id: "2.00"},
+        )
+        assert resp2.status_code == 400
+
+    def test_failed_validation_writes_no_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={lines[0].id: "11"},
+            cost={lines[0].id: "2.00"},
+        )
+        assert resp.status_code == 400
+        # No movement, no cost layer, no audit row, status unchanged.
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.SENT
+        line_reloaded = db_session.get(PurchaseOrderLine, lines[0].id)
+        assert line_reloaded is not None
+        assert line_reloaded.qty_received == Decimal("0")
+        assert (
+            db_session.execute(select(StockMovement)).first() is None
+        )
+        from app.models import CostLayer
+
+        assert db_session.execute(select(CostLayer)).first() is None
+        assert (
+            _po_audit_rows(db_session, action="purchase_order.received") == []
+        )
+
+
+class TestPOReceiveHappyPathSingleFull:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+    ) -> tuple[PurchaseOrder, PurchaseOrderLine, Item, User]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db, actor=u, skus=["FULL-1"], qty_ordered=Decimal("10")
+        )
+        item = db.get(Item, lines[0].item_id)
+        assert item is not None
+        _login_as(client, u)
+        return po, lines[0], item, u
+
+    def test_status_flips_to_received(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, _item, _u = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.RECEIVED
+
+    def test_movement_created_with_po_id_and_type_in(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        movements = list(
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.item_id == item.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(movements) == 1
+        m = movements[0]
+        assert m.type == MovementType.IN
+        assert m.po_id == po.id
+        assert m.qty == Decimal("10")
+        assert m.total_cost == Decimal("25.0000")  # 10 * 2.50 (engine quantises)
+
+    def test_cost_layer_created_with_po_receipt_source(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import CostLayer as _CostLayer
+        po, line, item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        layers = list(
+            db_session.execute(
+                select(_CostLayer).where(_CostLayer.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(layers) == 1
+        layer = layers[0]
+        assert layer.source == CostLayerSource.PO_RECEIPT
+        assert layer.qty_received == Decimal("10")
+        assert layer.qty_remaining == Decimal("10")
+        assert layer.unit_cost == Decimal("2.5000")
+
+    def test_line_qty_received_bumped(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, _item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        db_session.expire_all()
+        line_reloaded = db_session.get(PurchaseOrderLine, line.id)
+        assert line_reloaded is not None
+        assert line_reloaded.qty_received == Decimal("10")
+
+    def test_item_current_qty_bumped(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        db_session.expire_all()
+        item_reloaded = db_session.get(Item, item.id)
+        assert item_reloaded is not None
+        assert item_reloaded.current_qty == Decimal("10.0000")
+
+    def test_audit_row_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, _item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        rows = _po_audit_rows(db_session, action="purchase_order.received")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.entity_type == "purchase_order"
+        assert row.entity_id == po.id
+        assert row.before_json == {"status": "sent"}
+        after = row.after_json
+        assert after is not None
+        assert after["status"] == "received"
+        assert isinstance(after["lines"], list)
+        assert len(after["lines"]) == 1
+        line_after = after["lines"][0]
+        assert line_after["line_id"] == line.id
+        assert line_after["received_qty"] == "10"
+        assert line_after["actual_unit_cost"] == "2.50"
+        assert isinstance(line_after["movement_id"], int)
+
+    def test_redirect_target_is_detail(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, _item, _u = self._setup(db_session, client)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        assert resp.headers["location"] == f"/admin/purchase-orders/{po.id}"
+
+    def test_flash_says_fully_received(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, line, _item, _u = self._setup(db_session, client)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "10"},
+            cost={line.id: "2.50"},
+        )
+        # Follow redirect to render the flash.
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert "fully received" in resp.text.lower()
+
+
+class TestPOReceiveHappyPathPartial:
+    def test_partial_receive_flips_status_to_partially_received(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["PART-1"],
+            qty_ordered=Decimal("10"),
+        )
+        line = lines[0]
+        _login_as(client, u)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={line.id: "5"},
+            cost={line.id: "2.00"},
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.PARTIALLY_RECEIVED
+        line_reloaded = db_session.get(PurchaseOrderLine, line.id)
+        assert line_reloaded is not None
+        assert line_reloaded.qty_received == Decimal("5")
+
+    def test_second_receipt_completes_to_received(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["PART-2"],
+            qty_ordered=Decimal("10"),
+        )
+        line = lines[0]
+        _login_as(client, u)
+        # First receipt: 4 of 10 → partially_received.
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "4"},
+            cost={line.id: "2.00"},
+        )
+        # Second receipt: remaining 6 → received.
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "6"},
+            cost={line.id: "2.20"},
+        )
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.RECEIVED
+        line_reloaded = db_session.get(PurchaseOrderLine, line.id)
+        assert line_reloaded is not None
+        assert line_reloaded.qty_received == Decimal("10")
+
+    def test_partial_creates_two_cost_layers_at_different_unit_costs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import CostLayer as _CostLayer
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["PART-3"],
+            qty_ordered=Decimal("10"),
+        )
+        line = lines[0]
+        item = db_session.get(Item, line.item_id)
+        assert item is not None
+        _login_as(client, u)
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "4"},
+            cost={line.id: "2.00"},
+        )
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "6"},
+            cost={line.id: "2.20"},
+        )
+        layers = list(
+            db_session.execute(
+                select(_CostLayer)
+                .where(_CostLayer.item_id == item.id)
+                .order_by(_CostLayer.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(layers) == 2
+        assert layers[0].unit_cost == Decimal("2.0000")
+        assert layers[1].unit_cost == Decimal("2.2000")
+        # Both must carry source=PO_RECEIPT.
+        for layer in layers:
+            assert layer.source == CostLayerSource.PO_RECEIPT
+
+
+class TestPOReceiveHappyPathMultiLine:
+    def test_mixed_full_and_partial_flips_to_partially_received(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["MULTI-A", "MULTI-B"],
+            qty_ordered=Decimal("10"),
+        )
+        line_a, line_b = lines
+        _login_as(client, u)
+        # A fully received, B half received.
+        resp = _receive_po(
+            client,
+            po.id,
+            received={line_a.id: "10", line_b.id: "5"},
+            cost={line_a.id: "2.00", line_b.id: "3.00"},
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.PARTIALLY_RECEIVED
+
+    def test_zero_received_line_writes_no_movement(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["MULTI-C", "MULTI-D"],
+            qty_ordered=Decimal("10"),
+        )
+        line_a, line_b = lines
+        item_b = db_session.get(Item, line_b.item_id)
+        assert item_b is not None
+        _login_as(client, u)
+        # Only A receives; B is left blank.
+        _receive_po(
+            client,
+            po.id,
+            received={line_a.id: "10"},
+            cost={line_a.id: "2.00"},
+        )
+        db_session.expire_all()
+        # No movement on item B.
+        movements_b = list(
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.item_id == item_b.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert movements_b == []
+        # Audit lines list has only the A entry.
+        rows = _po_audit_rows(db_session, action="purchase_order.received")
+        assert len(rows) == 1
+        after = rows[0].after_json
+        assert after is not None
+        assert len(after["lines"]) == 1
+        assert after["lines"][0]["line_id"] == line_a.id
+
+    def test_all_movements_carry_po_id(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["MULTI-E", "MULTI-F"],
+            qty_ordered=Decimal("10"),
+        )
+        line_a, line_b = lines
+        _login_as(client, u)
+        _receive_po(
+            client,
+            po.id,
+            received={line_a.id: "10", line_b.id: "5"},
+            cost={line_a.id: "2.00", line_b.id: "3.00"},
+        )
+        movements = list(
+            db_session.execute(select(StockMovement)).scalars().all()
+        )
+        assert len(movements) == 2
+        for m in movements:
+            assert m.po_id == po.id
+            assert m.type == MovementType.IN
+
+
+class TestPOReceiveNoOpSubmit:
+    def test_all_zero_submit_writes_no_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session, actor=u, skus=["NOOP-1"]
+        )
+        _login_as(client, u)
+        # Send all-blanks (no received_<id> keys at all).
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/receive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.SENT
+        line_reloaded = db_session.get(PurchaseOrderLine, lines[0].id)
+        assert line_reloaded is not None
+        assert line_reloaded.qty_received == Decimal("0")
+        # No movement, no cost layer, no audit row.
+        from app.models import CostLayer as _CostLayer
+
+        assert (
+            db_session.execute(select(StockMovement)).first() is None
+        )
+        assert db_session.execute(select(_CostLayer)).first() is None
+        assert (
+            _po_audit_rows(db_session, action="purchase_order.received")
+            == []
+        )
+
+    def test_explicit_zero_submit_writes_no_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session, actor=u, skus=["NOOP-2"]
+        )
+        line = lines[0]
+        _login_as(client, u)
+        resp = _receive_po(
+            client,
+            po.id,
+            received={line.id: "0"},
+            cost={line.id: "2.00"},
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.SENT
+
+
+class TestPOReceiveDetailRender:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        po_status: POStatus,
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        po, _lines = _make_po_for_receive(
+            db, actor=u, skus=["DR-1"], po_status=po_status
+        )
+        _login_as(client, u)
+        return po
+
+    def test_draft_does_not_show_receive_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-receive-link"' not in resp.text
+
+    def test_sent_shows_receive_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.SENT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-receive-link"' in resp.text
+        assert 'data-testid="po-readonly-banner"' in resp.text
+
+    def test_partially_received_shows_receive_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(
+            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
+        )
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-receive-link"' in resp.text
+
+    def test_received_does_not_show_receive_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.RECEIVED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-receive-link"' not in resp.text
+
+    def test_cancelled_does_not_show_receive_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-receive-link"' not in resp.text
+
+
+class TestPOReceiveFormRender:
+    def test_form_shows_lines_with_outstanding(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["RF-1"],
+            qty_ordered=Decimal("10"),
+        )
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+        assert 'data-testid="po-receive-form"' in resp.text
+        assert 'data-testid="po-receive-line-row"' in resp.text
+        assert f'data-line-id="{lines[0].id}"' in resp.text
+        assert 'data-testid="po-receive-outstanding"' in resp.text
+        # Outstanding for a fresh sent PO equals qty_ordered.
+        assert "10.0000" in resp.text
+
+    def test_form_after_partial_shows_remaining_outstanding(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        po, lines = _make_po_for_receive(
+            db_session,
+            actor=u,
+            skus=["RF-2"],
+            qty_ordered=Decimal("10"),
+        )
+        line = lines[0]
+        _login_as(client, u)
+        # Receive 4 → outstanding 6.
+        _receive_po(
+            client,
+            po.id,
+            received={line.id: "4"},
+            cost={line.id: "2.00"},
+        )
+        resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
+        assert resp.status_code == 200
+        # The outstanding cell should now read 6.0000.
+        assert "6.0000" in resp.text

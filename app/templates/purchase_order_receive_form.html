@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Receive PO #{{ po.id }} — UC Inventory{% endblock %}
+{% block content %}
+    <p>
+        <a href="/admin/purchase-orders/{{ po.id }}">&larr; Back to PO</a>
+    </p>
+    <h1 data-testid="po-receive-heading">Receive PO #{{ po.id }}</h1>
+    <p>
+        <strong>Supplier:</strong>
+        <span data-testid="po-receive-supplier">{{ supplier.name if supplier else "?" }}</span>
+        &middot;
+        <strong>Status:</strong>
+        <span data-testid="po-receive-status" data-status="{{ po.status.value }}">{{ po.status.value.replace("_", " ") }}</span>
+    </p>
+
+    <form method="post" action="/admin/purchase-orders/{{ po.id }}/receive"
+          data-testid="po-receive-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p><em>For each line, enter how much you received in this delivery and the actual unit cost. Leave received blank or 0 for lines that didn't arrive yet.</em></p>
+
+        {% if lines %}
+            <table data-testid="po-receive-lines-table">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Name</th>
+                        <th>Unit</th>
+                        <th>Qty ordered</th>
+                        <th>Already received</th>
+                        <th>Outstanding</th>
+                        <th>Receiving now</th>
+                        <th>Actual unit cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for line in lines %}
+                        <tr data-testid="po-receive-line-row"
+                            data-line-id="{{ line.id }}"
+                            data-item-id="{{ line.item_id }}">
+                            <td data-testid="po-receive-line-sku">{{ line.item_sku }}</td>
+                            <td>{{ line.item_name }}</td>
+                            <td>{{ line.item_unit }}</td>
+                            <td data-testid="po-receive-line-qty-ordered">{{ line.qty_ordered }}</td>
+                            <td data-testid="po-receive-line-qty-received">{{ line.qty_received }}</td>
+                            <td data-testid="po-receive-outstanding">{{ line.outstanding }}</td>
+                            <td>
+                                <input type="text" inputmode="decimal"
+                                       name="received_{{ line.id }}"
+                                       value=""
+                                       placeholder="0"
+                                       data-testid="po-receive-received-input"
+                                       data-line-id="{{ line.id }}">
+                            </td>
+                            <td>
+                                <input type="text" inputmode="decimal"
+                                       name="cost_{{ line.id }}"
+                                       value="{{ line.expected_unit_cost if line.expected_unit_cost is not none else '' }}"
+                                       placeholder="0.00"
+                                       data-testid="po-receive-cost-input"
+                                       data-line-id="{{ line.id }}">
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p data-testid="po-receive-no-lines">No lines on this PO.</p>
+        {% endif %}
+
+        <p>
+            <button type="submit" class="button" data-testid="po-receive-submit">
+                Record receipt
+            </button>
+        </p>
+    </form>
+{% endblock %}

@@ -1,10 +1,15 @@
-"""Purchase orders (PO2 + PO2b): draft creation, edit, and cancel.
+"""Purchase orders (PO2 + PO2b + PO3 + PO4 + PO5): draft creation, edit,
+cancel, PDF, send, and receive.
 
 First write surface in the PO/reorder track. Manager + Office click a
 "Draft PO" button on a supplier group on ``/admin/reorder`` → POST to
 ``/admin/reorder/draft-po`` creates a draft ``PurchaseOrder`` with one
 ``PurchaseOrderLine`` per active item below threshold under that supplier.
 PO2b adds the editable surface MISSION §3 requires plus a cancel path.
+PO5 closes the loop: receive against a sent PO with actual unit costs,
+which creates ``StockMovement(type=IN, po_id=po.id)`` rows + cost layers
+(via the engine) and flips ``po.status`` to ``partially_received`` /
+``received`` based on cumulative line state.
 
 Route surface (mounted across two prefixes — see ``app/main.py``):
 
@@ -75,6 +80,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.config import settings as app_settings
+from app.cost_engine import record_receipt
 from app.db import get_session
 from app.email_backend import (
     EmailAttachment,
@@ -83,11 +89,14 @@ from app.email_backend import (
 )
 from app.models import (
     CostLayer,
+    CostLayerSource,
     Item,
+    MovementType,
     POStatus,
     PurchaseOrder,
     PurchaseOrderLine,
     Role,
+    StockMovement,
     Supplier,
     User,
 )
@@ -401,6 +410,7 @@ def purchase_order_detail(
             "created_by_email": created_by_email,
             "lines": lines,
             "is_draft": po.status == POStatus.DRAFT,
+            "is_receivable": po.status in _RECEIVABLE_STATUSES,
         },
     )
 
@@ -931,3 +941,334 @@ def send_purchase_order(
         url=f"/admin/purchase-orders/{po.id}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+# ---------------------------------------------------------------------------
+# PO5 — Receive against a PO (sent / partially_received → partially_received
+# / received)
+# ---------------------------------------------------------------------------
+#
+# Operator visits ``/admin/purchase-orders/{po_id}/receive`` (GET → form), fills
+# per-line ``received_<line_id>`` + ``cost_<line_id>``, submits. For each line
+# with ``received > 0``: build a ``StockMovement(type=IN, po_id=po.id)``,
+# flush, call the FIFO engine's ``record_receipt`` (creates a cost layer with
+# ``source=PO_RECEIPT``, bumps ``item.current_qty``, sets ``movement.total_cost``),
+# increment ``line.qty_received``. After all lines are processed, flip
+# ``po.status`` to ``RECEIVED`` if every line is fully received, else
+# ``PARTIALLY_RECEIVED``. Audit row carries the new status + a per-line list of
+# what was received in this transaction (only lines with ``received > 0``).
+#
+# Audit shape — ``purchase_order.received``: ``before={"status": prev_status}``,
+# ``after={"status": new_status, "lines": [{"line_id", "received_qty" (str),
+# "actual_unit_cost" (str), "movement_id"} ...]}``. The movement_id pins each
+# line entry to the exact ``StockMovement`` row it created (and the cost layer
+# is reachable from there via ``cost_layers.source_movement_id``). A no-op
+# submit (every line received=0) writes no movement, no layer, no audit row,
+# and flashes "no receipts".
+#
+# Status guard: only ``sent`` and ``partially_received`` can be received. Draft
+# / received / cancelled all 400 — drafts must be sent first; received POs are
+# closed; cancelled POs aren't expected to receive (cancellation happens before
+# any receipt). Receiving against a received PO would over-receive. The
+# operator who receives "extra" stock outside what the PO ordered records a
+# manual stock-in (M2) instead.
+#
+# No over-receipt: cumulative ``line.qty_received + new_received`` cannot exceed
+# ``line.qty_ordered``. The operator who orders 100 but receives 110 must first
+# bump qty_ordered via the (currently draft-only) edit route — not modeled in
+# v1 since edit is gated on draft status. Pragmatic v1 path: record a manual
+# stock-in for the +10 and document via the audit log + reason.
+
+
+def _parse_optional_non_negative_decimal_or_zero(
+    raw: str, *, field_name: str
+) -> Decimal:
+    """Parse ``raw`` as a non-negative Decimal; blank → ``Decimal("0")``.
+
+    PO5 receive uses this for the per-line ``received_<id>`` field — a blank or
+    "0" entry means "received nothing on this line this time", which is a
+    perfectly valid partial-receive scenario (the operator only got one of two
+    suppliers' line items). Negative / non-numeric still 400.
+    """
+    text = (raw or "").strip()
+    if text == "":
+        return Decimal("0")
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a number",
+        ) from exc
+    if value < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} cannot be negative",
+        )
+    return value
+
+
+_RECEIVABLE_STATUSES: tuple[POStatus, ...] = (
+    POStatus.SENT,
+    POStatus.PARTIALLY_RECEIVED,
+)
+
+
+def _require_receivable(po: PurchaseOrder) -> None:
+    """400 unless the PO is in a status that accepts receipts."""
+    if po.status not in _RECEIVABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"PO is {po.status.value}; only sent or partially-received "
+                "POs can be received against"
+            ),
+        )
+
+
+def _receive_lines_view(
+    db: Session, po_id: int
+) -> list[dict[str, Any]]:
+    """Per-line view dicts for the receive form.
+
+    Same SKU-ordering as the read-only render. Adds ``outstanding`` =
+    ``qty_ordered - qty_received`` so the template can show the operator how
+    much is still expected on each line.
+    """
+    line_stmt = (
+        select(PurchaseOrderLine, Item)
+        .join(Item, PurchaseOrderLine.item_id == Item.id)
+        .where(PurchaseOrderLine.po_id == po_id)
+        .order_by(Item.sku)
+    )
+    out: list[dict[str, Any]] = []
+    for line, item in db.execute(line_stmt).all():
+        out.append(
+            {
+                "id": line.id,
+                "item_id": item.id,
+                "item_sku": item.sku,
+                "item_name": item.name,
+                "item_unit": item.unit,
+                "qty_ordered": line.qty_ordered,
+                "qty_received": line.qty_received,
+                "outstanding": line.qty_ordered - line.qty_received,
+                "expected_unit_cost": line.expected_unit_cost,
+            }
+        )
+    return out
+
+
+@list_router.get("/{po_id}/receive", response_class=HTMLResponse)
+def receive_purchase_order_form(
+    request: Request,
+    po_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Render the receive form. Status guard: sent / partially_received only."""
+    po = db.get(PurchaseOrder, po_id)
+    if po is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
+        )
+    _require_receivable(po)
+    supplier = db.get(Supplier, po.supplier_id)
+    return templates.TemplateResponse(
+        request,
+        "purchase_order_receive_form.html",
+        {
+            "current_user": user,
+            "po": po,
+            "supplier": supplier,
+            "lines": _receive_lines_view(db, po.id),
+        },
+    )
+
+
+@list_router.post("/{po_id}/receive")
+async def receive_purchase_order(
+    request: Request,
+    po_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Receive against a sent / partially-received PO.
+
+    Reads per-line ``received_<line_id>`` + ``cost_<line_id>`` from the form
+    body. For each line where the new received qty is > 0:
+
+    1. Build a ``StockMovement(type=IN, po_id=po.id, qty=new_received)``,
+       flush.
+    2. Call ``record_receipt(item, qty, unit_cost, source=PO_RECEIPT,
+       movement, received_at=now())`` — engine creates the cost layer + bumps
+       ``item.current_qty`` + sets ``movement.total_cost``.
+    3. Increment ``line.qty_received`` by ``new_received``.
+
+    After processing, flip ``po.status`` to ``RECEIVED`` if every line is now
+    fully received (``qty_received == qty_ordered``), else
+    ``PARTIALLY_RECEIVED``. Write a ``purchase_order.received`` audit row and
+    commit. An all-zero submit is a no-op (no movement, no layer, no audit, no
+    status change; flash "no receipts").
+    """
+    po = db.get(PurchaseOrder, po_id)
+    if po is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
+        )
+    _require_receivable(po)
+    prev_status = po.status
+
+    form_data = await request.form()
+    lines = _po_lines(db, po.id)
+
+    # First pass: parse + validate every line. No mutation yet — atomic
+    # validation per the rest of the PO module's pattern.
+    parsed: list[tuple[PurchaseOrderLine, Decimal, Decimal]] = []
+    for line in lines:
+        rec_key = f"received_{line.id}"
+        cost_key = f"cost_{line.id}"
+        rec_raw = str(form_data.get(rec_key, "") or "")
+        cost_raw = str(form_data.get(cost_key, "") or "")
+        new_received = _parse_optional_non_negative_decimal_or_zero(
+            rec_raw, field_name="received qty"
+        )
+        # Reject over-receipt before any movement is created.
+        if line.qty_received + new_received > line.qty_ordered:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"line {line.id}: cannot receive more than ordered "
+                    f"(ordered {line.qty_ordered}, received "
+                    f"{line.qty_received}, requested {new_received})"
+                ),
+            )
+        # Cost is only required when something is being received on this line.
+        # When ``new_received == 0`` we don't validate the cost field — the
+        # operator can leave it blank and we don't write a movement anyway.
+        actual_cost: Decimal
+        if new_received > 0:
+            actual_cost = _parse_non_negative_decimal_required(
+                cost_raw, field_name="actual unit cost"
+            )
+        else:
+            actual_cost = Decimal("0")
+        parsed.append((line, new_received, actual_cost))
+
+    # Second pass: write the movements + cost layers + bump line.qty_received.
+    received_at = datetime.now(UTC)
+    audit_lines: list[dict[str, Any]] = []
+    for line, new_received, actual_cost in parsed:
+        if new_received <= 0:
+            continue
+        item = db.get(Item, line.item_id)
+        # Item shouldn't be missing (PO line FK + RESTRICT); defensive 400.
+        if item is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"line {line.id}: item not found",
+            )
+        movement = StockMovement(
+            item_id=item.id,
+            type=MovementType.IN,
+            qty=new_received,
+            user_id=user.id,
+            po_id=po.id,
+        )
+        db.add(movement)
+        db.flush()
+        record_receipt(
+            db,
+            item=item,
+            qty=new_received,
+            unit_cost=actual_cost,
+            source=CostLayerSource.PO_RECEIPT,
+            movement=movement,
+            received_at=received_at,
+        )
+        line.qty_received = line.qty_received + new_received
+        audit_lines.append(
+            {
+                "line_id": line.id,
+                "received_qty": str(new_received),
+                "actual_unit_cost": str(actual_cost),
+                "movement_id": movement.id,
+            }
+        )
+
+    if not audit_lines:
+        # All-zero submit — bail without changing state.
+        _flash(request, f"PO #{po.id} — no receipts entered.")
+        return RedirectResponse(
+            url=f"/admin/purchase-orders/{po.id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    # Decide the new status from the cumulative state across every line on the
+    # PO (not just those received this transaction).
+    fully = all(line.qty_received >= line.qty_ordered for line in lines)
+    new_status = POStatus.RECEIVED if fully else POStatus.PARTIALLY_RECEIVED
+    po.status = new_status
+
+    record_audit(
+        db,
+        actor=user,
+        action="purchase_order.received",
+        entity_type="purchase_order",
+        entity_id=po.id,
+        before={"status": prev_status.value},
+        after={
+            "status": new_status.value,
+            "lines": audit_lines,
+        },
+    )
+    db.commit()
+
+    if new_status == POStatus.RECEIVED:
+        _flash(
+            request,
+            f"PO #{po.id} fully received "
+            f"({len(audit_lines)} line(s) updated).",
+        )
+    else:
+        _flash(
+            request,
+            f"PO #{po.id} partial receipt recorded "
+            f"({len(audit_lines)} line(s) updated).",
+        )
+    return RedirectResponse(
+        url=f"/admin/purchase-orders/{po.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _parse_non_negative_decimal_required(
+    raw: str, *, field_name: str
+) -> Decimal:
+    """Parse a non-negative decimal; blank rejects.
+
+    Distinct from ``_parse_optional_non_negative_decimal`` (which accepts
+    blank → None) and from ``movements._parse_non_negative_decimal`` (which is
+    in the movements module). Used by the receive route for the actual unit
+    cost on a line where qty > 0 — zero allowed for sample stock, blank
+    rejected because the operator must affirm a price.
+    """
+    text = (raw or "").strip()
+    if text == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} is required",
+        )
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a number",
+        ) from exc
+    if value < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} cannot be negative",
+        )
+    return value

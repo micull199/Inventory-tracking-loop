@@ -644,10 +644,9 @@ class StockMovement(Base):
     onto an out / negative-adjustment movement, and writes ``total_cost`` once
     the engine finishes.
 
-    ``po_id`` and ``stock_take_id`` are plain integer columns (no FK
-    constraint) in M1 because the ``purchase_orders`` and ``stock_takes``
-    tables don't exist yet. The FK constraint is added in PO2 / ST1's
-    migrations.
+    ``po_id`` carries the FK to ``purchase_orders.id`` (added in migration
+    0012 by PO5 — the receive path is what activates the link).
+    ``stock_take_id`` is still a plain integer column (no FK) until ST1 lands.
     """
 
     __tablename__ = "stock_movements"
@@ -688,7 +687,11 @@ class StockMovement(Base):
     )
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    po_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    po_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("purchase_orders.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     stock_take_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
