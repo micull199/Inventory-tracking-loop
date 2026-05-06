@@ -270,6 +270,13 @@
                         Transfer &rarr;
                     </a>
                 </p>
+                {% if item.requires_checkout %}
+                    <p>
+                        <a href="/admin/items/{{ item.id }}/checkout" data-testid="checkout-link">
+                            Check out &rarr;
+                        </a>
+                    </p>
+                {% endif %}
             {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 <p>

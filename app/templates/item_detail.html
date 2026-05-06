@@ -47,6 +47,12 @@
             <a href="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-link">
                 Transfer &rarr;
             </a>
+            {% if item.requires_checkout %}
+                &middot;
+                <a href="/admin/items/{{ item.id }}/checkout" data-testid="checkout-link">
+                    Check out &rarr;
+                </a>
+            {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 &middot;
                 <a href="/admin/items/{{ item.id }}/units" data-testid="manage-units">

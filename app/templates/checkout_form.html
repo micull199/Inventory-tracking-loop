@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Check out — {{ item.name }} — UC Inventory{% endblock %}
+{% block content %}
+    <p>
+        <a href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    </p>
+    <h1 data-testid="checkout-form-heading">Check out: {{ item.name }}</h1>
+    <p>
+        <strong>SKU:</strong> {{ item.sku }} &middot;
+        <strong>Current quantity:</strong>
+        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+        {{ item.unit }} &middot;
+        <span data-testid="item-requires-checkout-badge">requires check-out</span>
+    </p>
+
+    {% if open_checkouts %}
+        <section data-testid="checkout-status-block">
+            <h2>Currently checked out</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Unit</th>
+                        <th>Holder</th>
+                        <th>Out since</th>
+                        <th>Due back</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for co in open_checkouts %}
+                        <tr data-testid="checkout-open-row" data-checkout-id="{{ co.id }}">
+                            <td data-testid="checkout-open-unit">
+                                {% if co.unit_label %}{{ co.unit_label }}{% else %}—{% endif %}
+                            </td>
+                            <td data-testid="checkout-open-actor">
+                                {{ co.actor_email or "(deleted user)" }}
+                            </td>
+                            <td data-testid="checkout-open-since">
+                                {{ co.checked_out_at.strftime("%Y-%m-%d %H:%M") }}
+                            </td>
+                            <td>
+                                {% if co.expected_return %}
+                                    {{ co.expected_return.strftime("%Y-%m-%d") }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    {% endif %}
+
+    <form method="post" action="/admin/items/{{ item.id }}/checkout"
+          data-testid="checkout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        {% if is_unique %}
+            <p>
+                <label for="item_unit_id">Unit <span aria-hidden="true">*</span></label><br>
+                <select id="item_unit_id" name="item_unit_id" required
+                        data-testid="checkout-unit-input">
+                    <option value="">— pick a unit —</option>
+                    {% for u in available_units %}
+                        <option value="{{ u.id }}" data-unit-id="{{ u.id }}"
+                                {% if form.item_unit_id == (u.id | string) %}selected{% endif %}>
+                            {{ u.serial_or_label }}
+                        </option>
+                    {% endfor %}
+                </select>
+                {% if not available_units %}
+                    <em>no units are available right now</em>
+                {% endif %}
+            </p>
+        {% endif %}
+
+        <p>
+            <label for="expected_return">Expected return</label><br>
+            <input type="date" id="expected_return" name="expected_return"
+                   value="{{ form.expected_return }}"
+                   data-testid="checkout-expected-return-input">
+            <em>optional — leave blank if not known</em>
+        </p>
+
+        <p>
+            <label for="condition_note">Condition note</label><br>
+            <textarea id="condition_note" name="condition_note"
+                      rows="3" cols="50" maxlength="2000"
+                      data-testid="checkout-note-input">{{ form.condition_note }}</textarea>
+        </p>
+
+        {% if can_submit %}
+            <p>
+                <button type="submit" class="button" data-testid="checkout-submit">
+                    Record check-out
+                </button>
+            </p>
+        {% else %}
+            <p>
+                <em data-testid="checkout-no-submit-note">
+                    {% if is_unique %}
+                        No units available to check out right now.
+                    {% else %}
+                        This item is already checked out.
+                    {% endif %}
+                </em>
+            </p>
+        {% endif %}
+    </form>
+{% endblock %}
