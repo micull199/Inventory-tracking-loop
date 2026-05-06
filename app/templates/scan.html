@@ -49,27 +49,119 @@
                     </em>
                 </p>
             {% else %}
-                <p>
-                    <a href="/admin/items/{{ resolved_item.id }}/in"
-                       class="button"
-                       data-testid="scan-action-in">
-                        Stock in &rarr;
-                    </a>
-                </p>
-                <p>
-                    <a href="/admin/items/{{ resolved_item.id }}/out"
-                       class="button"
-                       data-testid="scan-action-out">
-                        Stock out &rarr;
-                    </a>
-                </p>
-                <p>
-                    <a href="/admin/items/{{ resolved_item.id }}/adjust"
-                       class="button"
-                       data-testid="scan-action-adjust">
-                        Adjust &rarr;
-                    </a>
-                </p>
+                <section data-testid="scan-out-form">
+                    <h3>Stock out</h3>
+                    <form method="post"
+                          action="/admin/items/{{ resolved_item.id }}/out">
+                        <input type="hidden" name="csrf_token"
+                               value="{{ csrf_token }}">
+                        <p>
+                            <label for="scan-out-qty">Quantity</label>
+                            <input type="text" id="scan-out-qty" name="qty"
+                                   data-testid="scan-out-qty-input"
+                                   inputmode="decimal" required
+                                   autocomplete="off"
+                                   placeholder="qty">
+                            <em>{{ resolved_item.unit }} (FIFO oldest cost layer
+                                consumed first)</em>
+                        </p>
+                        <p>
+                            <button type="submit" class="button"
+                                    data-testid="scan-out-submit">
+                                Stock out
+                            </button>
+                        </p>
+                    </form>
+                </section>
+
+                <section data-testid="scan-in-form">
+                    <h3>Stock in</h3>
+                    <form method="post"
+                          action="/admin/items/{{ resolved_item.id }}/in">
+                        <input type="hidden" name="csrf_token"
+                               value="{{ csrf_token }}">
+                        <p>
+                            <label for="scan-in-qty">Quantity</label>
+                            <input type="text" id="scan-in-qty" name="qty"
+                                   data-testid="scan-in-qty-input"
+                                   inputmode="decimal" required
+                                   autocomplete="off"
+                                   placeholder="qty">
+                            <em>{{ resolved_item.unit }}</em>
+                        </p>
+                        <p>
+                            <label for="scan-in-unit-cost">Unit cost</label>
+                            <input type="text" id="scan-in-unit-cost"
+                                   name="unit_cost"
+                                   data-testid="scan-in-unit-cost-input"
+                                   inputmode="decimal" required
+                                   autocomplete="off"
+                                   placeholder="0.00">
+                            <em>per {{ resolved_item.unit }} (zero allowed
+                                for sample / gifted stock)</em>
+                        </p>
+                        <p>
+                            <button type="submit" class="button"
+                                    data-testid="scan-in-submit">
+                                Stock in
+                            </button>
+                        </p>
+                    </form>
+                </section>
+
+                <section data-testid="scan-adjust-form">
+                    <h3>Adjust</h3>
+                    <form method="post"
+                          action="/admin/items/{{ resolved_item.id }}/adjust">
+                        <input type="hidden" name="csrf_token"
+                               value="{{ csrf_token }}">
+                        <p>
+                            <label for="scan-adjust-direction">Direction</label>
+                            <select id="scan-adjust-direction" name="direction"
+                                    data-testid="scan-adjust-direction-input"
+                                    required>
+                                <option value="">— pick one —</option>
+                                <option value="increase">increase</option>
+                                <option value="decrease">decrease</option>
+                            </select>
+                        </p>
+                        <p>
+                            <label for="scan-adjust-qty">Quantity</label>
+                            <input type="text" id="scan-adjust-qty" name="qty"
+                                   data-testid="scan-adjust-qty-input"
+                                   inputmode="decimal" required
+                                   autocomplete="off"
+                                   placeholder="qty">
+                            <em>{{ resolved_item.unit }}</em>
+                        </p>
+                        <p>
+                            <label for="scan-adjust-unit-cost">Unit cost</label>
+                            <input type="text" id="scan-adjust-unit-cost"
+                                   name="unit_cost"
+                                   data-testid="scan-adjust-unit-cost-input"
+                                   inputmode="decimal"
+                                   autocomplete="off"
+                                   placeholder="0.00">
+                            <em>required for increases; ignored for decreases</em>
+                        </p>
+                        <p>
+                            <label for="scan-adjust-reason">Reason</label>
+                            <input type="text" id="scan-adjust-reason"
+                                   name="reason"
+                                   data-testid="scan-adjust-reason-input"
+                                   required maxlength="255"
+                                   autocomplete="off"
+                                   placeholder="e.g. stock-take variance">
+                        </p>
+                        <p>
+                            <button type="submit" class="button"
+                                    data-testid="scan-adjust-submit">
+                                Adjust
+                            </button>
+                        </p>
+                    </form>
+                </section>
+
                 {% if resolved_item.requires_checkout %}
                     <p>
                         <a href="/admin/items/{{ resolved_item.id }}/checkout"

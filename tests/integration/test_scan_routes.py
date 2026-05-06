@@ -616,19 +616,24 @@ class TestScanItemPageRender:
         assert "REND-1" in resp.text
         assert "Rendered Item" in resp.text
 
-    def test_renders_three_action_links_with_correct_hrefs(
+    def test_renders_three_inline_action_forms(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """SC1c: action links are now inline forms posting to the existing
+        movement routes. Each form has a submit button + the right action."""
         item = _make_item(db_session, sku="LINK-1", qr_code=None)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get(f"/scan/item/{item.id}")
-        assert f'href="/admin/items/{item.id}/in"' in resp.text
-        assert 'data-testid="scan-action-in"' in resp.text
-        assert f'href="/admin/items/{item.id}/out"' in resp.text
-        assert 'data-testid="scan-action-out"' in resp.text
-        assert f'href="/admin/items/{item.id}/adjust"' in resp.text
-        assert 'data-testid="scan-action-adjust"' in resp.text
+        assert 'data-testid="scan-out-form"' in resp.text
+        assert f'action="/admin/items/{item.id}/out"' in resp.text
+        assert 'data-testid="scan-out-submit"' in resp.text
+        assert 'data-testid="scan-in-form"' in resp.text
+        assert f'action="/admin/items/{item.id}/in"' in resp.text
+        assert 'data-testid="scan-in-submit"' in resp.text
+        assert 'data-testid="scan-adjust-form"' in resp.text
+        assert f'action="/admin/items/{item.id}/adjust"' in resp.text
+        assert 'data-testid="scan-adjust-submit"' in resp.text
 
     def test_scan_input_still_rendered_so_next_scan_works(
         self, client: TestClient, db_session: Session
@@ -709,15 +714,19 @@ class TestScanItemPageArchived:
         self, client: TestClient, db_session: Session
     ) -> None:
         """The /in /out /adjust routes _reject_archived with HTTP 400, so
-        linking from the action picker would be a dead-end. The page
-        omits those buttons and instead renders the archived note."""
+        the inline forms would 400 on submit. SC1c omits the forms entirely
+        and renders the archived note instead. The check-out link is also
+        omitted on archived items (no posture change from SC1b)."""
         item = _make_item(db_session, sku="AR-2", archived=True)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get(f"/scan/item/{item.id}")
-        assert 'data-testid="scan-action-in"' not in resp.text
-        assert 'data-testid="scan-action-out"' not in resp.text
-        assert 'data-testid="scan-action-adjust"' not in resp.text
+        assert 'data-testid="scan-out-form"' not in resp.text
+        assert 'data-testid="scan-in-form"' not in resp.text
+        assert 'data-testid="scan-adjust-form"' not in resp.text
+        assert 'data-testid="scan-out-submit"' not in resp.text
+        assert 'data-testid="scan-in-submit"' not in resp.text
+        assert 'data-testid="scan-adjust-submit"' not in resp.text
         assert 'data-testid="scan-action-checkout"' not in resp.text
 
     def test_archived_item_still_renders_scan_input(
@@ -778,4 +787,302 @@ class TestScanItemPageResolveChain:
         assert resp.status_code == 200
         assert 'data-testid="scan-resolved-item"' in resp.text
         assert f'data-item-id="{item.id}"' in resp.text
-        assert 'data-testid="scan-action-in"' in resp.text
+        # SC1c: the action picker is now three inline forms, not links.
+        assert 'data-testid="scan-out-form"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SC1c: inline action forms — shape (action / method / CSRF)
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageInlineForms:
+    def test_stock_out_form_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="OF-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        marker = resp.text.find('data-testid="scan-out-form"')
+        assert marker >= 0
+        block = resp.text[marker : marker + 800]
+        assert 'method="post"' in block
+        assert f'action="/admin/items/{item.id}/out"' in block
+        assert 'name="csrf_token"' in block
+
+    def test_stock_in_form_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="IF-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        marker = resp.text.find('data-testid="scan-in-form"')
+        assert marker >= 0
+        block = resp.text[marker : marker + 1200]
+        assert 'method="post"' in block
+        assert f'action="/admin/items/{item.id}/in"' in block
+        assert 'name="csrf_token"' in block
+
+    def test_adjust_form_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="AF-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        marker = resp.text.find('data-testid="scan-adjust-form"')
+        assert marker >= 0
+        block = resp.text[marker : marker + 2000]
+        assert 'method="post"' in block
+        assert f'action="/admin/items/{item.id}/adjust"' in block
+        assert 'name="csrf_token"' in block
+
+
+# ---------------------------------------------------------------------------
+# SC1c: inline action forms — fields visible on each form
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageInlineFormFields:
+    def test_stock_out_form_has_qty_input_only(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Out form has the qty input + submit. No unit_cost (consumption is
+        per-layer FIFO), no reason (optional in the route — kept off the
+        scan-flow surface to keep the hot-path tight)."""
+        item = _make_item(db_session, sku="OF-2", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        out_marker = resp.text.find('data-testid="scan-out-form"')
+        in_marker = resp.text.find('data-testid="scan-in-form"')
+        assert out_marker >= 0
+        assert in_marker > out_marker
+        out_block = resp.text[out_marker:in_marker]
+        assert 'data-testid="scan-out-qty-input"' in out_block
+        assert 'data-testid="scan-out-submit"' in out_block
+        # Out form should not carry unit_cost / reason / direction inputs.
+        assert "scan-out-unit-cost" not in out_block
+        assert "scan-out-reason" not in out_block
+        assert "scan-out-direction" not in out_block
+
+    def test_stock_in_form_has_qty_and_unit_cost(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="IF-2", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        in_marker = resp.text.find('data-testid="scan-in-form"')
+        adj_marker = resp.text.find('data-testid="scan-adjust-form"')
+        assert in_marker >= 0
+        assert adj_marker > in_marker
+        in_block = resp.text[in_marker:adj_marker]
+        assert 'data-testid="scan-in-qty-input"' in in_block
+        assert 'data-testid="scan-in-unit-cost-input"' in in_block
+        assert 'data-testid="scan-in-submit"' in in_block
+        # In form should not carry direction / reason inputs.
+        assert "scan-in-direction" not in in_block
+        assert "scan-in-reason" not in in_block
+
+    def test_adjust_form_has_direction_qty_unit_cost_reason(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="AF-2", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        adj_marker = resp.text.find('data-testid="scan-adjust-form"')
+        assert adj_marker >= 0
+        block = resp.text[adj_marker:]
+        assert 'data-testid="scan-adjust-direction-input"' in block
+        assert 'data-testid="scan-adjust-qty-input"' in block
+        assert 'data-testid="scan-adjust-unit-cost-input"' in block
+        assert 'data-testid="scan-adjust-reason-input"' in block
+        assert 'data-testid="scan-adjust-submit"' in block
+
+    def test_adjust_direction_select_offers_increase_and_decrease(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="AF-3", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        marker = resp.text.find('data-testid="scan-adjust-direction-input"')
+        assert marker >= 0
+        select_end = resp.text.find("</select>", marker)
+        assert select_end > marker
+        select_block = resp.text[marker:select_end]
+        assert '<option value="increase">' in select_block
+        assert '<option value="decrease">' in select_block
+
+    def test_required_attributes_on_qty_inputs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC1c: qty inputs on all three forms are server-side required and
+        client-side flagged with `required` so the browser blocks empty
+        submits before they hit the route's 400 path."""
+        item = _make_item(db_session, sku="REQ-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        for testid in (
+            "scan-out-qty-input",
+            "scan-in-qty-input",
+            "scan-adjust-qty-input",
+        ):
+            marker = resp.text.find(f'data-testid="{testid}"')
+            assert marker >= 0
+            tag_start = resp.text.rfind("<input", 0, marker)
+            tag_end = resp.text.find(">", marker)
+            assert tag_start >= 0
+            assert tag_end > tag_start
+            tag = resp.text[tag_start : tag_end + 1]
+            assert "required" in tag, f"{testid} missing required"
+
+    def test_adjust_reason_input_is_required(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Reason is required server-side on adjust (variance attribution).
+        The inline form must mark the input as required so the browser
+        blocks empty submits."""
+        item = _make_item(db_session, sku="REQ-2", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        marker = resp.text.find('data-testid="scan-adjust-reason-input"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<input", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        assert tag_start >= 0
+        assert tag_end > tag_start
+        tag = resp.text[tag_start : tag_end + 1]
+        assert "required" in tag
+
+
+# ---------------------------------------------------------------------------
+# SC1c: inline action forms — end-to-end submission goes through to the
+# existing /admin/items/{id}/{in,out,adjust} routes (so the engine wires up).
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageInlineFormSubmission:
+    def test_workshop_submits_stock_in_via_inline_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Posting the inline stock-in form lands the engine: cost layer
+        created, current_qty bumped, audit row written, 303 redirect."""
+        item = _make_item(db_session, sku="SUB-IN-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        token = _csrf(client)
+        before = _audit_count(db_session)
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data={
+                "qty": "5",
+                "unit_cost": "1.50",
+                "csrf_token": token,
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/in"
+        after = _audit_count(db_session)
+        assert after == before + 1
+        db_session.expire_all()
+        refreshed = db_session.get(Item, item.id)
+        assert refreshed is not None
+        # Engine bumped current_qty from 0 by 5.
+        from decimal import Decimal
+
+        assert refreshed.current_qty == Decimal("5.0000")
+
+    def test_workshop_submits_stock_out_via_inline_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Posting the inline stock-out form consumes a cost layer FIFO."""
+        from decimal import Decimal
+
+        item = _make_item(db_session, sku="SUB-OUT-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        token = _csrf(client)
+        # Seed a layer first via the existing stock-in route so the out has
+        # something to consume.
+        resp_in = client.post(
+            f"/admin/items/{item.id}/in",
+            data={
+                "qty": "10",
+                "unit_cost": "2.00",
+                "csrf_token": token,
+            },
+            follow_redirects=False,
+        )
+        assert resp_in.status_code == 303
+        before = _audit_count(db_session)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data={"qty": "3", "csrf_token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/out"
+        after = _audit_count(db_session)
+        assert after == before + 1
+        db_session.expire_all()
+        refreshed = db_session.get(Item, item.id)
+        assert refreshed is not None
+        assert refreshed.current_qty == Decimal("7.0000")
+
+    def test_workshop_submits_adjust_increase_via_inline_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Adjust direction=increase + unit_cost + reason creates a layer
+        and bumps current_qty (positive-adjustment path)."""
+        from decimal import Decimal
+
+        item = _make_item(db_session, sku="SUB-ADJ-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        token = _csrf(client)
+        before = _audit_count(db_session)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data={
+                "direction": "increase",
+                "qty": "4",
+                "unit_cost": "3.25",
+                "reason": "found in storage",
+                "csrf_token": token,
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/adjust"
+        after = _audit_count(db_session)
+        assert after == before + 1
+        db_session.expire_all()
+        refreshed = db_session.get(Item, item.id)
+        assert refreshed is not None
+        assert refreshed.current_qty == Decimal("4.0000")
+
+    def test_inline_form_reaches_route_validation_path(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Empty qty (which the browser would block client-side via
+        `required`, but we test the server's 400 path directly here)
+        still returns 400 from the existing route — the inline form is
+        a thin posting surface, not its own validation layer."""
+        item = _make_item(db_session, sku="VAL-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data={"qty": "", "csrf_token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
