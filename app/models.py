@@ -10,7 +10,7 @@ import enum
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, func, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -147,6 +147,75 @@ class Location(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<Location id={self.id} name={self.name!r} archived={self.archived_at is not None}>"
+
+
+class TaxonomyNode(Base):
+    """A node in the (at most two-level) item taxonomy.
+
+    Top-level rows have ``parent_id`` null and represent categories. Sub-categories
+    (S4) point to a parent via ``parent_id``; the depth limit is enforced in the
+    application layer rather than the DB. Soft-deletable; never hard-deleted.
+
+    Uniqueness: per MISSION §3, a manager renames or archives a node; archiving
+    must not free the name. Two partial unique indexes (added in migration 0005)
+    cover both shapes:
+
+    - ``uq_taxonomy_top_name`` — unique on ``(name)`` where ``parent_id IS NULL``
+      (top-level siblings, S3).
+    - ``uq_taxonomy_child_name`` — unique on ``(parent_id, name)`` where
+      ``parent_id IS NOT NULL`` (children of the same parent, S4-ready).
+
+    Both indexes scope across active *and* archived rows, matching the Supplier
+    and Location convention.
+    """
+
+    __tablename__ = "taxonomy_nodes"
+    __table_args__ = (
+        Index(
+            "uq_taxonomy_top_name",
+            "name",
+            unique=True,
+            sqlite_where=text("parent_id IS NULL"),
+            postgresql_where=text("parent_id IS NULL"),
+        ),
+        Index(
+            "uq_taxonomy_child_name",
+            "parent_id",
+            "name",
+            unique=True,
+            sqlite_where=text("parent_id IS NOT NULL"),
+            postgresql_where=text("parent_id IS NOT NULL"),
+        ),
+        Index("ix_taxonomy_nodes_parent_id", "parent_id"),
+        Index("ix_taxonomy_nodes_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<TaxonomyNode id={self.id} name={self.name!r} "
+            f"parent_id={self.parent_id} archived={self.archived_at is not None}>"
+        )
 
 
 class AuditLog(Base):

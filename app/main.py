@@ -10,6 +10,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app import locations as locations_module
 from app import suppliers as suppliers_module
+from app import taxonomy as taxonomy_module
 from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(suppliers_module.router)
 app.include_router(locations_module.router)
+app.include_router(taxonomy_module.router)
 
 
 @app.get("/health")

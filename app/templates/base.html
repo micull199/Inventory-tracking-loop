@@ -107,6 +107,13 @@
                             Locations
                         </a>
                     </li>
+                    <li>
+                        <a href="/admin/taxonomy"
+                           data-testid="nav-taxonomy"
+                           {% if request.url.path.startswith("/admin/taxonomy") %}aria-current="page"{% endif %}>
+                            Taxonomy
+                        </a>
+                    </li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>
