@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -81,3 +82,35 @@ class User(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<User id={self.id} email={self.email!r} role={self.role} status={self.status}>"
+
+
+class AuditLog(Base):
+    """Append-only record of every state-changing action.
+
+    Writes go through ``app.audit.record_audit``. Reads are unrestricted; the
+    DB-level immutability triggers (see ``apply_immutability_triggers``) reject
+    any UPDATE/DELETE so a corrupted application code path cannot rewrite history.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<AuditLog id={self.id} action={self.action!r} "
+            f"entity={self.entity_type}:{self.entity_id} actor={self.actor_id}>"
+        )

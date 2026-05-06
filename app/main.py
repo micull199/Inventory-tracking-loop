@@ -11,6 +11,7 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
@@ -114,7 +115,18 @@ def admin_set_user_role(
             detail="cannot change your own role",
         )
 
+    previous_role = user.role
     user.role = new_role
+    if previous_role != new_role:
+        record_audit(
+            db,
+            actor=admin,
+            action="user.role_assigned",
+            entity_type="user",
+            entity_id=user.id,
+            before={"role": previous_role},
+            after={"role": new_role},
+        )
     db.commit()
     return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -152,6 +164,17 @@ def admin_set_user_status(
             detail="cannot activate a user with no role assigned",
         )
 
+    previous_status = user.status
     user.status = new_status
+    if previous_status != new_status:
+        record_audit(
+            db,
+            actor=admin,
+            action="user.status_changed",
+            entity_type="user",
+            entity_id=user.id,
+            before={"status": previous_status},
+            after={"status": new_status},
+        )
     db.commit()
     return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)

@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 
+from app.audit import record_audit
 from app.config import settings
 from app.db import get_session
 from app.models import Role, User, UserStatus
@@ -67,6 +68,7 @@ def upsert_user_from_userinfo(
 
     role: Role | None = None
     status_: UserStatus = UserStatus.PENDING
+    bootstrap_promoted = False
     if bootstrap_admin_email and email.lower() == bootstrap_admin_email.lower():
         admin_exists = db.execute(
             select(func.count()).select_from(User).where(User.role == Role.ADMIN)
@@ -74,10 +76,36 @@ def upsert_user_from_userinfo(
         if not admin_exists:
             role = Role.ADMIN
             status_ = UserStatus.ACTIVE
+            bootstrap_promoted = True
 
     user = User(google_sub=sub, email=email, name=name, role=role, status=status_)
     db.add(user)
     db.flush()
+
+    # Audit: the user is the actor of their own creation. The first sign-in is
+    # the only user-creation path, and we want a row in the log even though
+    # nobody else triggered it.
+    record_audit(
+        db,
+        actor=user,
+        action="user.created",
+        entity_type="user",
+        entity_id=user.id,
+        before=None,
+        after={"email": user.email, "role": user.role, "status": user.status},
+    )
+    if bootstrap_promoted:
+        # Separate row so the *why* of the elevated initial role is auditable
+        # even though it lands in the same DB transaction as user.created.
+        record_audit(
+            db,
+            actor=None,  # system event: no admin existed yet to grant this
+            action="user.bootstrap_admin_granted",
+            entity_type="user",
+            entity_id=user.id,
+            before={"role": None, "status": UserStatus.PENDING},
+            after={"role": Role.ADMIN, "status": UserStatus.ACTIVE},
+        )
     return user
 
 
