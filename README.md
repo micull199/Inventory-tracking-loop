@@ -151,7 +151,16 @@ For the long version, see MISSION.md.
 
 ### Adding a new supplier
 
-_TODO_
+Suppliers are vendors UC buys stock from. They are Manager-owned (Admins always pass) — Office and Workshop see them only indirectly via purchase orders.
+
+1. Sign in as a Manager (or Admin).
+2. Click **Suppliers** in the top nav (or visit `/admin/suppliers`).
+3. Click **New supplier**.
+4. Fill in **Name** (required, must be unique across active suppliers). Email, phone, and notes are optional.
+5. Click **Create supplier**.
+6. The list page reappears with the new row.
+
+To edit a supplier, click **Edit** on its row. To stop using a supplier without losing history, click **Archive** — archived suppliers move to the Archived tab and remain readable on existing purchase orders, but are hidden from new PO drafts. Click **Unarchive** to re-activate. Suppliers cannot be hard-deleted; the audit log assumes their IDs persist.
 
 ### Defining a new category and its custom fields
 
