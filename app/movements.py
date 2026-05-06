@@ -79,7 +79,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
@@ -92,6 +92,8 @@ from app.cost_engine import (
 )
 from app.db import get_session
 from app.models import (
+    CostLayer,
+    CostLayerConsumption,
     CostLayerSource,
     Item,
     MovementType,
@@ -695,4 +697,235 @@ def record_stock_adjustment(
     return RedirectResponse(
         url=f"/admin/items/{item.id}/adjust",
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/items/{item_id}/detail — read-only item detail (M6)
+# ---------------------------------------------------------------------------
+#
+# Single page that consolidates the per-form recent-movements lists from M2 /
+# M3 / M4 into one place: open cost layers + paginated full timeline + per-row
+# layer breakdown for OUT / negative-adjust rows. Read-only — no mutations, no
+# audit. Mounted on the same router because the bulk of the page is movement +
+# layer data, not item-edit data.
+#
+# Role surface: Manager + Office + Workshop (mirroring the in / out / adjust
+# routes). Workshop's first non-form per-item read surface; deep-link only
+# until I1c gives them a list.
+
+_PAGE_SIZE = 20
+
+
+def _open_layers(db: Session, item_id: int) -> list[dict[str, Any]]:
+    """Open FIFO cost layers for an item (qty_remaining > 0), oldest first.
+
+    Layers are not deleted when drained — they stay as audit history with
+    qty_remaining=0. The detail page's "open layers" section only shows the
+    rows still contributing to current_qty / open_value.
+    """
+    stmt = (
+        select(CostLayer)
+        .where(CostLayer.item_id == item_id)
+        .where(CostLayer.qty_remaining > 0)
+        .order_by(CostLayer.received_at.asc(), CostLayer.id.asc())
+    )
+    out: list[dict[str, Any]] = []
+    for layer in db.execute(stmt).scalars().all():
+        out.append(
+            {
+                "id": layer.id,
+                "received_at": layer.received_at,
+                "qty_received": layer.qty_received,
+                "qty_remaining": layer.qty_remaining,
+                "unit_cost": layer.unit_cost,
+                "source": layer.source.value,
+                "source_movement_id": layer.source_movement_id,
+            }
+        )
+    return out
+
+
+def _count_movements(db: Session, item_id: int) -> int:
+    total = db.scalar(
+        select(func.count(StockMovement.id)).where(
+            StockMovement.item_id == item_id
+        )
+    )
+    return int(total or 0)
+
+
+def _movements_page(
+    db: Session, item_id: int, *, page: int, page_size: int
+) -> list[dict[str, Any]]:
+    """One page of movements for an item, newest first.
+
+    The view-shaped dicts deliberately mirror :func:`_recent_movements` so the
+    template's ``movement-row`` rendering can be reused for the timeline. The
+    extra fields the timeline needs (``direction``, ``breakdown``) are merged
+    in by :func:`_attach_directions_and_breakdown` after this returns.
+    """
+    offset = (page - 1) * page_size
+    stmt = (
+        select(StockMovement, User.email)
+        .outerjoin(User, StockMovement.user_id == User.id)
+        .where(StockMovement.item_id == item_id)
+        .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+        .limit(page_size)
+        .offset(offset)
+    )
+    out: list[dict[str, Any]] = []
+    for movement, actor_email in db.execute(stmt).all():
+        out.append(
+            {
+                "id": movement.id,
+                "type": movement.type.value,
+                "qty": movement.qty,
+                "total_cost": movement.total_cost,
+                "reason": movement.reason,
+                "note": movement.note,
+                "actor_email": actor_email,
+                "created_at": movement.created_at,
+            }
+        )
+    return out
+
+
+def _attach_directions_and_breakdown(
+    db: Session, movements: list[dict[str, Any]]
+) -> None:
+    """Merge ``direction`` ("+"/"-") and ``breakdown`` (list) into each row.
+
+    Direction is derived from whether the movement created a cost layer
+    (a row in ``cost_layers`` with ``source_movement_id == movement.id``) or
+    consumed layers (rows in ``cost_layer_consumptions`` with
+    ``movement_id == movement.id``). For IN / positive-adjust the layer-side
+    join lights up; for OUT / negative-adjust the consumption-side join
+    lights up. Both queries are batched over the page's movement ids.
+    """
+    if not movements:
+        return
+    ids = [m["id"] for m in movements]
+
+    layer_movement_ids: set[int] = set(
+        db.execute(
+            select(CostLayer.source_movement_id)
+            .where(CostLayer.source_movement_id.in_(ids))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+
+    breakdown: dict[int, list[dict[str, Any]]] = {mid: [] for mid in ids}
+    rows = db.execute(
+        select(
+            CostLayerConsumption.movement_id,
+            CostLayerConsumption.qty_consumed,
+            CostLayerConsumption.unit_cost_at_consumption,
+            CostLayer.received_at,
+            CostLayer.id,
+        )
+        .join(CostLayer, CostLayerConsumption.layer_id == CostLayer.id)
+        .where(CostLayerConsumption.movement_id.in_(ids))
+        .order_by(
+            CostLayerConsumption.movement_id,
+            CostLayer.received_at.asc(),
+            CostLayer.id.asc(),
+        )
+    ).all()
+    for movement_id, qty_consumed, unit_cost, received_at, layer_id in rows:
+        breakdown[movement_id].append(
+            {
+                "qty_consumed": qty_consumed,
+                "unit_cost_at_consumption": unit_cost,
+                "layer_received_at": received_at,
+                "layer_id": layer_id,
+            }
+        )
+
+    for m in movements:
+        m_id = m["id"]
+        m["breakdown"] = breakdown[m_id]
+        if m_id in layer_movement_ids:
+            m["direction"] = "+"
+        elif breakdown[m_id]:
+            m["direction"] = "-"
+        else:
+            # Defensive: a movement with no layer + no consumption is a row
+            # that never went through the cost engine. Today no route writes
+            # such a row (M5 / TRANSFER will be the first), but the timeline
+            # should still render something rather than crash.
+            m["direction"] = ""
+
+
+def _paginate(total: int, page: int, page_size: int) -> dict[str, Any]:
+    """Compute pagination metadata. Out-of-range pages clamp to [1, page_count].
+
+    Clamping (vs 400-on-out-of-range) is the friendlier UX for stale links: a
+    user navigates to ``?page=5`` from a bookmark, more movements have come in,
+    and the page count has dropped — they land on the last page rather than an
+    error. Empty-list (``total=0``) collapses to ``page=1, page_count=1``.
+    """
+    if page_size <= 0:
+        page_size = _PAGE_SIZE
+    page_count = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, page_count))
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "page_count": page_count,
+        "has_prev": page > 1,
+        "has_next": page < page_count,
+    }
+
+
+def _can_edit_item(user: User) -> bool:
+    """Manager + Office can edit (matches I1b's items-edit role surface)."""
+    return user.role in (Role.MANAGER, Role.OFFICE, Role.ADMIN)
+
+
+@router.get("/{item_id}/detail", response_class=HTMLResponse)
+def item_detail(
+    request: Request,
+    item_id: int,
+    page: int = 1,
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Read-only item detail page (M6).
+
+    Surfaces the cost-engine outputs in one place: open layers + paginated
+    movement timeline (with per-row layer breakdown for OUT / negative-adjust).
+    Archived items still render — detail is a read of history, including for
+    archived items; the action links to in / out / adjust hide on archived
+    rows (mirrors ``items_form.html``).
+    """
+    item = _get_item_or_404(db, item_id)
+    layers = _open_layers(db, item.id)
+    total_movements = _count_movements(db, item.id)
+    pagination = _paginate(total_movements, page, _PAGE_SIZE)
+    movements = _movements_page(
+        db,
+        item.id,
+        page=pagination["page"],
+        page_size=pagination["page_size"],
+    )
+    _attach_directions_and_breakdown(db, movements)
+
+    return templates.TemplateResponse(
+        request,
+        "item_detail.html",
+        {
+            "current_user": user,
+            "item": item,
+            "layers": layers,
+            "open_value": open_value(db, item),
+            "movements": movements,
+            "pagination": pagination,
+            "can_edit_item": _can_edit_item(user),
+        },
     )

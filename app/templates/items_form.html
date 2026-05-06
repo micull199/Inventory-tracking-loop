@@ -215,6 +215,11 @@
                 {{ item.unit }}
                 <em>(changes via stock movements)</em>
             </p>
+            <p>
+                <a href="/admin/items/{{ item.id }}/detail" data-testid="detail-link">
+                    Details &rarr;
+                </a>
+            </p>
             {% if not item.archived_at %}
                 <p>
                     <a href="/admin/items/{{ item.id }}/in" data-testid="stock-in-link">

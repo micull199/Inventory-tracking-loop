@@ -37,7 +37,7 @@ Covers stock-out (M3):
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -2501,3 +2501,641 @@ class TestStockAdjustLinkOnEditForm:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="stock-adjust-link"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Item detail page (M6) — read-only page consolidating layers + timeline.
+# ---------------------------------------------------------------------------
+
+
+def _seed_consume(
+    db: Session,
+    *,
+    item: Item,
+    qty: Decimal | str,
+    actor: User,
+) -> StockMovement:
+    """Seed a real consumption (OUT) via the engine — opposite of _seed_layer."""
+    from app.cost_engine import consume_fifo
+
+    qty_decimal = qty if isinstance(qty, Decimal) else Decimal(qty)
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.OUT,
+        qty=qty_decimal,
+        user_id=actor.id,
+    )
+    db.add(movement)
+    db.flush()
+    consume_fifo(db, item=item, qty=qty_decimal, movement=movement)
+    db.commit()
+    db.refresh(item)
+    db.refresh(movement)
+    return movement
+
+
+def _seed_adjust_increase(
+    db: Session,
+    *,
+    item: Item,
+    qty: Decimal | str,
+    unit_cost: Decimal | str,
+    actor: User,
+) -> StockMovement:
+    """Seed a positive-adjustment (creates a layer) via the engine."""
+    qty_decimal = qty if isinstance(qty, Decimal) else Decimal(qty)
+    unit_cost_decimal = (
+        unit_cost if isinstance(unit_cost, Decimal) else Decimal(unit_cost)
+    )
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.ADJUSTMENT,
+        qty=qty_decimal,
+        user_id=actor.id,
+        reason="seed adjust increase",
+    )
+    db.add(movement)
+    db.flush()
+    record_receipt(
+        db,
+        item=item,
+        qty=qty_decimal,
+        unit_cost=unit_cost_decimal,
+        source=CostLayerSource.POSITIVE_ADJUSTMENT,
+        movement=movement,
+    )
+    db.commit()
+    db.refresh(item)
+    db.refresh(movement)
+    return movement
+
+
+def _seed_adjust_decrease(
+    db: Session,
+    *,
+    item: Item,
+    qty: Decimal | str,
+    actor: User,
+) -> StockMovement:
+    """Seed a negative-adjustment (consumes layers FIFO) via the engine."""
+    from app.cost_engine import consume_fifo
+
+    qty_decimal = qty if isinstance(qty, Decimal) else Decimal(qty)
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.ADJUSTMENT,
+        qty=qty_decimal,
+        user_id=actor.id,
+        reason="seed adjust decrease",
+    )
+    db.add(movement)
+    db.flush()
+    consume_fifo(db, item=item, qty=qty_decimal, movement=movement)
+    db.commit()
+    db.refresh(item)
+    db.refresh(movement)
+    return movement
+
+
+# Make `_seed_layer` already imported above usable here too — no work needed,
+# the helper is module-scoped.
+
+
+class TestItemDetailRoleEnforcement:
+    def test_anonymous_get_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 401
+
+    def test_pending_user_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 403
+
+    def test_workshop_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+
+    def test_office_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+
+    def test_manager_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+
+    def test_admin_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+
+
+class TestItemDetailRendering:
+    def test_unknown_item_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/99999/detail")
+        assert resp.status_code == 404
+
+    def test_archived_item_still_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Archived items show their history. Action links hide separately.
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="item-detail-archived"' in resp.text
+        # Action links suppressed on archived items.
+        assert 'data-testid="stock-in-link"' not in resp.text
+        assert 'data-testid="stock-out-link"' not in resp.text
+        assert 'data-testid="stock-adjust-link"' not in resp.text
+
+    def test_renders_item_header_and_summary(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="DET-1", name="Detail Test")
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="item-detail-heading"' in resp.text
+        assert "Detail Test" in resp.text
+        assert "DET-1" in resp.text
+        assert 'data-testid="item-current-qty"' in resp.text
+        assert 'data-testid="item-open-value"' in resp.text
+        assert 'data-testid="item-detail-threshold"' in resp.text
+
+    def test_action_links_visible_for_active_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="stock-in-link"' in resp.text
+        assert 'data-testid="stock-out-link"' in resp.text
+        assert 'data-testid="stock-adjust-link"' in resp.text
+        assert 'data-testid="edit-item-link"' in resp.text
+
+    def test_workshop_does_not_see_edit_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Workshop can see in/out/adjust action links but cannot edit the
+        # item; the edit link must hide for them (matches I1b's role table).
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="edit-item-link"' not in resp.text
+        # In/out/adjust links still visible.
+        assert 'data-testid="stock-in-link"' in resp.text
+        assert 'data-testid="stock-out-link"' in resp.text
+        assert 'data-testid="stock-adjust-link"' in resp.text
+
+
+class TestItemDetailCostLayers:
+    def test_empty_state_when_no_layers(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="cost-layers-empty"' in resp.text
+        assert 'data-testid="cost-layers-table"' not in resp.text
+
+    def test_single_layer_rendered(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="cost-layers-table"' in resp.text
+        # Exactly one row.
+        assert resp.text.count('data-testid="cost-layer-row"') == 1
+        assert "10" in resp.text  # qty_received / qty_remaining
+        assert "2.00" in resp.text  # unit_cost
+        assert "manual_in" in resp.text
+
+    def test_multi_layer_with_mixed_sources(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="5",
+            unit_cost="2.00",
+            actor=mgr,
+            received_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
+        )
+        _seed_adjust_increase(
+            db_session, item=item, qty="3", unit_cost="3.00", actor=mgr
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.text.count('data-testid="cost-layer-row"') == 2
+        assert "manual_in" in resp.text
+        assert "positive_adjustment" in resp.text
+
+    def test_fully_consumed_layer_excluded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Add a 5-unit layer; consume all 5.
+        _seed_layer(db_session, item=item, qty="5", unit_cost="2.00", actor=mgr)
+        _seed_consume(db_session, item=item, qty="5", actor=mgr)
+        # Add a fresh layer.
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="3",
+            unit_cost="4.00",
+            actor=mgr,
+            received_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # Drained layer omitted from open-layers section.
+        assert resp.text.count('data-testid="cost-layer-row"') == 1
+        assert "4.00" in resp.text
+
+    def test_layers_ordered_fifo(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Older layer with cost 9.99.
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="2",
+            unit_cost="9.99",
+            actor=mgr,
+            received_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        # Newer layer with cost 1.11.
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="2",
+            unit_cost="1.11",
+            actor=mgr,
+            received_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # Older one (9.99) appears first in body.
+        idx_older = resp.text.find("9.99")
+        idx_newer = resp.text.find("1.11")
+        assert idx_older > 0
+        assert idx_newer > idx_older
+
+
+class TestItemDetailMovementsTimeline:
+    def test_empty_state_when_no_movements(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="movements-timeline-empty"' in resp.text
+        assert 'data-testid="movements-timeline"' not in resp.text
+
+    def test_in_row_direction_plus(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="7", unit_cost="2.00", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-direction="+"' in resp.text
+        # Total cost = 7 * 2 = 14.00 (set by record_receipt).
+        assert "14.00" in resp.text
+
+    def test_out_row_direction_minus(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        _seed_consume(db_session, item=item, qty="3", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-direction="-"' in resp.text
+        # Layer-weighted total_cost stored as Numeric(14,4) → "6.0000".
+        assert "6.0000" in resp.text
+
+    def test_adjustment_increase_direction_plus(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_adjust_increase(
+            db_session, item=item, qty="5", unit_cost="3.00", actor=mgr
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # The adjustment-increase row is the only row, and direction is +.
+        assert 'data-direction="+"' in resp.text
+        assert 'data-direction="-"' not in resp.text
+
+    def test_adjustment_decrease_direction_minus(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        _seed_adjust_decrease(db_session, item=item, qty="4", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # Two rows: original IN (+) and adjust-decrease (-). Both data-direction
+        # attrs appear.
+        assert 'data-direction="+"' in resp.text
+        assert 'data-direction="-"' in resp.text
+
+    def test_timeline_ordered_newest_first(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        first = _seed_layer(
+            db_session, item=item, qty="5", unit_cost="1.00", actor=mgr
+        )
+        second = _seed_layer(
+            db_session, item=item, qty="3", unit_cost="2.00", actor=mgr
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        idx_second = resp.text.find(f'data-movement-id="{second.id}"')
+        idx_first = resp.text.find(f'data-movement-id="{first.id}"')
+        assert idx_second > 0
+        assert idx_first > 0
+        # Newest first → second.id appears before first.id in the body.
+        assert idx_second < idx_first
+
+
+class TestItemDetailLayerBreakdown:
+    def test_in_row_has_no_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="2.00", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="layer-breakdown"' not in resp.text
+
+    def test_out_row_has_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        out_movement = _seed_consume(db_session, item=item, qty="3", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="layer-breakdown"' in resp.text
+        # The breakdown's data-movement-id attribute matches the OUT movement.
+        assert f'data-movement-id="{out_movement.id}"' in resp.text
+        # Single consumption: 3 x 2 from one layer.
+        assert resp.text.count('data-testid="layer-breakdown-row"') == 1
+
+    def test_negative_adjustment_has_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        _seed_adjust_decrease(db_session, item=item, qty="4", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="layer-breakdown"' in resp.text
+        assert resp.text.count('data-testid="layer-breakdown-row"') == 1
+
+    def test_positive_adjustment_no_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_adjust_increase(
+            db_session, item=item, qty="3", unit_cost="2.00", actor=mgr
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="layer-breakdown"' not in resp.text
+
+    def test_multi_layer_out_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Two layers with distinct received_at; consume across both.
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="4",
+            unit_cost="2.00",
+            actor=mgr,
+            received_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        _seed_layer(
+            db_session,
+            item=item,
+            qty="6",
+            unit_cost="3.00",
+            actor=mgr,
+            received_at=datetime(2026, 6, 1, tzinfo=UTC),
+        )
+        _seed_consume(db_session, item=item, qty="7", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # Breakdown shows two consumption rows (4 from old + 3 from new).
+        assert resp.text.count('data-testid="layer-breakdown-row"') == 2
+        # Both unit costs visible.
+        assert "2.00" in resp.text
+        assert "3.00" in resp.text
+
+
+class TestItemDetailPagination:
+    def test_no_movements_renders_empty_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # Empty timeline → the whole timeline + pagination block is replaced
+        # with the timeline-empty marker.
+        assert 'data-testid="movements-timeline-empty"' in resp.text
+        assert 'data-testid="pagination"' not in resp.text
+
+    def test_single_page_when_total_le_page_size(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # 5 movements — well under the page size of 20.
+        for _ in range(5):
+            _seed_layer(
+                db_session, item=item, qty="1", unit_cost="1", actor=mgr
+            )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="pagination-single-page"' in resp.text
+        assert "Page 1 of 1" in resp.text
+        assert 'data-testid="pagination-next"' not in resp.text
+        assert 'data-testid="pagination-prev"' not in resp.text
+
+    def test_multi_page_with_navigation(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # 21 movements → 2 pages (page 1 of 20, page 2 of 1).
+        for i in range(21):
+            _seed_layer(
+                db_session,
+                item=item,
+                qty="1",
+                unit_cost="1",
+                actor=mgr,
+                received_at=datetime(2026, 1, 1, tzinfo=UTC)
+                + timedelta(minutes=i),
+            )
+        _login_as(client, mgr)
+        # Page 1: should have a Next link, no Prev.
+        resp1 = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="pagination-info"' in resp1.text
+        assert "Page 1 of 2" in resp1.text
+        assert 'data-testid="pagination-next"' in resp1.text
+        assert 'data-testid="pagination-prev"' not in resp1.text
+        assert resp1.text.count('data-testid="timeline-row"') == 20
+        # Page 2: Prev link, no Next, 1 row.
+        resp2 = client.get(f"/admin/items/{item.id}/detail?page=2")
+        assert "Page 2 of 2" in resp2.text
+        assert 'data-testid="pagination-prev"' in resp2.text
+        assert 'data-testid="pagination-next"' not in resp2.text
+        assert resp2.text.count('data-testid="timeline-row"') == 1
+
+    def test_out_of_range_page_clamps_to_last(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        for _ in range(3):
+            _seed_layer(
+                db_session, item=item, qty="1", unit_cost="1", actor=mgr
+            )
+        _login_as(client, mgr)
+        # Asking for page 99 against a 1-page dataset clamps to page 1 of 1.
+        resp = client.get(f"/admin/items/{item.id}/detail?page=99")
+        assert resp.status_code == 200
+        assert "Page 1 of 1" in resp.text
+
+    def test_zero_or_negative_page_clamps_to_one(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="1", unit_cost="1", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?page=0")
+        assert resp.status_code == 200
+        assert "Page 1 of 1" in resp.text
+
+
+class TestItemDetailLink:
+    def test_items_list_shows_detail_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items")
+        assert 'data-testid="detail-link"' in resp.text
+        assert f"/admin/items/{item.id}/detail" in resp.text
+
+    def test_edit_form_shows_detail_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="detail-link"' in resp.text
+        assert f"/admin/items/{item.id}/detail" in resp.text

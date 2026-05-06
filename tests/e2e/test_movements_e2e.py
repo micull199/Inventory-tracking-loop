@@ -299,6 +299,39 @@ def test_workshop_records_a_manual_stock_in(
     expect(dec_row).to_contain_text("damaged batch")
     expect(dec_row).to_contain_text("15")
 
+    # Step 6d (M6): Workshop visits the item detail page and sees the
+    # consolidated read view: open layers + paginated full timeline + per-row
+    # layer breakdown for the OUT and the negative-adjustment.
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/detail")
+    expect(ws_page.get_by_test_id("item-detail-heading")).to_contain_text(
+        "Casting alloy"
+    )
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
+    # Two open layers remain: the original IN @ 2.50 (with 55 left after OUT
+    # consumed 30 + adjust-decrease consumed 15) + the adjust-increase @ 3.00
+    # (with all 20 still open). open_value = 55*2.5 + 20*3 = 197.50.
+    expect(ws_page.get_by_test_id("item-open-value")).to_contain_text("197.5")
+    expect(
+        ws_page.locator('[data-testid="cost-layer-row"]')
+    ).to_have_count(2)
+    # The timeline shows all four movements (newest first).
+    expect(
+        ws_page.locator('[data-testid="timeline-row"]')
+    ).to_have_count(4)
+    # The OUT and the adjust-decrease both produce layer-breakdown rows; the
+    # IN and the adjust-increase do not (each "row" wraps a <ul>, so we
+    # expect 2 breakdown blocks total).
+    expect(
+        ws_page.locator('[data-testid="layer-breakdown"]')
+    ).to_have_count(2)
+    # Single page footer (well under 20 movements).
+    expect(
+        ws_page.get_by_test_id("pagination-single-page")
+    ).to_be_visible()
+    # Workshop sees the in/out/adjust action links but not the edit link.
+    expect(ws_page.get_by_test_id("stock-in-link")).to_be_visible()
+    expect(ws_page.get_by_test_id("edit-item-link")).to_have_count(0)
+
     ws_page.close()
     if ws_context is not context:
         ws_context.close()

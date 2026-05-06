@@ -46,6 +46,7 @@
                         <td>{{ i.current_qty }}</td>
                         <td>{{ i.reorder_threshold }}</td>
                         <td>
+                            <a href="/admin/items/{{ i.id }}/detail" data-testid="detail-link">Details</a>
                             <a href="/admin/items/{{ i.id }}/edit" data-testid="edit-item">Edit</a>
                             {% if can_archive %}
                                 {% if i.archived_at is none %}

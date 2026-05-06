@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}{{ item.name }} — UC Inventory{% endblock %}
+{% block content %}
+    <p>
+        <a href="/admin/items">&larr; Back to items</a>
+    </p>
+
+    <h1 data-testid="item-detail-heading">{{ item.name }}</h1>
+    <p>
+        <strong>SKU:</strong> <span data-testid="item-detail-sku">{{ item.sku }}</span>
+        {% if item.archived_at %}
+            &middot; <em data-testid="item-detail-archived">archived</em>
+        {% endif %}
+    </p>
+    <p>
+        <strong>Current quantity:</strong>
+        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+        {{ item.unit }}
+        &middot;
+        <strong>Open value:</strong>
+        <span data-testid="item-open-value">{{ open_value }}</span>
+        &middot;
+        <strong>Reorder threshold:</strong>
+        <span data-testid="item-detail-threshold">{{ item.reorder_threshold }}</span>
+    </p>
+
+    <p>
+        {% if can_edit_item %}
+            <a href="/admin/items/{{ item.id }}/edit" data-testid="edit-item-link">
+                Edit item &rarr;
+            </a>
+            {% if not item.archived_at %}&middot;{% endif %}
+        {% endif %}
+        {% if not item.archived_at %}
+            <a href="/admin/items/{{ item.id }}/in" data-testid="stock-in-link">
+                Stock in &rarr;
+            </a>
+            &middot;
+            <a href="/admin/items/{{ item.id }}/out" data-testid="stock-out-link">
+                Stock out &rarr;
+            </a>
+            &middot;
+            <a href="/admin/items/{{ item.id }}/adjust" data-testid="stock-adjust-link">
+                Adjust &rarr;
+            </a>
+            {% if item.tracking_mode.value == "unique" %}
+                &middot;
+                <a href="/admin/items/{{ item.id }}/units" data-testid="manage-units">
+                    Manage units &rarr;
+                </a>
+            {% endif %}
+        {% endif %}
+    </p>
+
+    <h2>Open cost layers</h2>
+    {% if layers %}
+        <table data-testid="cost-layers-table">
+            <thead>
+                <tr>
+                    <th>Received</th>
+                    <th>Qty received</th>
+                    <th>Qty remaining</th>
+                    <th>Unit cost</th>
+                    <th>Source</th>
+                    <th>Movement</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for layer in layers %}
+                    <tr data-testid="cost-layer-row" data-layer-id="{{ layer.id }}">
+                        <td>{{ layer.received_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                        <td>{{ layer.qty_received }}</td>
+                        <td data-testid="cost-layer-qty-remaining">{{ layer.qty_remaining }}</td>
+                        <td data-testid="cost-layer-unit-cost">{{ layer.unit_cost }}</td>
+                        <td data-testid="cost-layer-source">{{ layer.source }}</td>
+                        <td>#{{ layer.source_movement_id }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="cost-layers-empty">No open cost layers.</p>
+    {% endif %}
+
+    <h2>Movement history</h2>
+    {% if movements %}
+        <table data-testid="movements-timeline">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Total cost</th>
+                    <th>Actor</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in movements %}
+                    <tr data-testid="timeline-row" data-movement-id="{{ m.id }}" data-direction="{{ m.direction }}">
+                        <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                        <td>{{ m.type }}</td>
+                        <td data-testid="timeline-qty">{{ m.direction }}{{ m.qty }}</td>
+                        <td data-testid="timeline-total-cost">{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
+                        <td>{{ m.actor_email or "—" }}</td>
+                        <td>{{ m.reason or "" }}</td>
+                    </tr>
+                    {% if m.breakdown %}
+                        <tr data-testid="layer-breakdown" data-movement-id="{{ m.id }}">
+                            <td colspan="6">
+                                <ul data-testid="layer-breakdown-list">
+                                    {% for c in m.breakdown %}
+                                        <li data-testid="layer-breakdown-row" data-layer-id="{{ c.layer_id }}">
+                                            {{ c.qty_consumed }} &times; {{ c.unit_cost_at_consumption }}
+                                            from layer received {{ c.layer_received_at.strftime("%Y-%m-%d %H:%M") }}
+                                        </li>
+                                    {% endfor %}
+                                </ul>
+                            </td>
+                        </tr>
+                    {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <nav aria-label="Movement history pagination" data-testid="pagination">
+            {% if pagination.page_count <= 1 %}
+                <p data-testid="pagination-single-page">
+                    Page {{ pagination.page }} of {{ pagination.page_count }}
+                    ({{ pagination.total }} total)
+                </p>
+            {% else %}
+                <p data-testid="pagination-info">
+                    Page {{ pagination.page }} of {{ pagination.page_count }}
+                    ({{ pagination.total }} total)
+                </p>
+                {% if pagination.has_prev %}
+                    <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page - 1 }}"
+                       data-testid="pagination-prev">&larr; Previous</a>
+                {% endif %}
+                {% if pagination.has_next %}
+                    <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page + 1 }}"
+                       data-testid="pagination-next">Next &rarr;</a>
+                {% endif %}
+            {% endif %}
+        </nav>
+    {% else %}
+        <p data-testid="movements-timeline-empty">No movements yet for this item.</p>
+    {% endif %}
+{% endblock %}
