@@ -20,7 +20,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
@@ -28,23 +27,7 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
 from app.models import Location, Role, User
-
-# Same shared-templates pattern as ``app.suppliers``. Acceptable for two
-# routers; the S1 self-critique flagged "extract before the third one lands".
-_templates: Jinja2Templates | None = None
-
-
-def init_templates(templates: Jinja2Templates) -> None:
-    """Wire in the shared ``Jinja2Templates`` from the app factory."""
-    global _templates
-    _templates = templates
-
-
-def _t() -> Jinja2Templates:
-    if _templates is None:
-        raise RuntimeError("locations.init_templates() was never called")
-    return _templates
-
+from app.template_env import templates
 
 router = APIRouter(prefix="/admin/locations", tags=["locations"])
 
@@ -131,7 +114,7 @@ def list_locations(
     stmt = stmt.order_by(_LIST_ORDER, Location.name)
 
     rows = list(db.execute(stmt).scalars().all())
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "locations_list.html",
         {
@@ -152,7 +135,7 @@ def new_location_form(
     request: Request,
     _user: User = Depends(require_role(Role.MANAGER)),
 ) -> HTMLResponse:
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "locations_form.html",
         {
@@ -214,7 +197,7 @@ def edit_location_form(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="location not found"
         )
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "locations_form.html",
         {

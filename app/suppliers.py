@@ -20,7 +20,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
@@ -28,25 +27,7 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
 from app.models import Role, Supplier, User
-
-# Templates injected from app.main so the same Jinja env (with the CSRF
-# context processor) is shared across the app. We avoid building a second
-# Jinja2Templates instance here because that would silently drop the CSRF
-# token from supplier templates.
-_templates: Jinja2Templates | None = None
-
-
-def init_templates(templates: Jinja2Templates) -> None:
-    """Wire in the shared ``Jinja2Templates`` from the app factory."""
-    global _templates
-    _templates = templates
-
-
-def _t() -> Jinja2Templates:
-    if _templates is None:
-        raise RuntimeError("suppliers.init_templates() was never called")
-    return _templates
-
+from app.template_env import templates
 
 router = APIRouter(prefix="/admin/suppliers", tags=["suppliers"])
 
@@ -139,7 +120,7 @@ def list_suppliers(
     stmt = stmt.order_by(_LIST_ORDER, Supplier.name)
 
     rows = list(db.execute(stmt).scalars().all())
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "suppliers_list.html",
         {
@@ -160,7 +141,7 @@ def new_supplier_form(
     request: Request,
     _user: User = Depends(require_role(Role.MANAGER)),
 ) -> HTMLResponse:
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "suppliers_form.html",
         {
@@ -229,7 +210,7 @@ def edit_supplier_form(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found"
         )
-    return _t().TemplateResponse(
+    return templates.TemplateResponse(
         request,
         "suppliers_form.html",
         {

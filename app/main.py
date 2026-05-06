@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -17,9 +14,10 @@ from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
-from app.csrf import CSRFMiddleware, csrf_context_processor
+from app.csrf import CSRFMiddleware
 from app.db import get_session
 from app.models import Role, User, UserStatus
+from app.template_env import templates
 
 app = FastAPI(title="UC Inventory")
 
@@ -38,26 +36,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
-
-
-def _flash_context_processor(request: Request) -> dict[str, str | None]:
-    """Pop a one-shot flash message into the template context.
-
-    Routes set ``request.session["flash"]`` after a successful POST. The base
-    layout renders it once and the entry is consumed here so the next page
-    load is clean.
-    """
-    flash = request.session.pop("flash", None) if "session" in request.scope else None
-    return {"flash": flash}
-
-
-templates = Jinja2Templates(
-    directory=str(Path(__file__).parent / "templates"),
-    context_processors=[csrf_context_processor, _flash_context_processor],
-)
-suppliers_module.init_templates(templates)
 app.include_router(suppliers_module.router)
-locations_module.init_templates(templates)
 app.include_router(locations_module.router)
 
 
