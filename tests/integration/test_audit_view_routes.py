@@ -3,20 +3,26 @@
 The view at ``GET /admin/audit`` is the only read surface for the
 ``audit_log`` table. Writers (``app.audit.record_audit``) and the DB-level
 immutability triggers are tested elsewhere; this file focuses on the role
-gate, render shape, sort order, and pagination behaviour.
+gate, render shape, sort order, pagination, and CSV-export behaviour.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.audit_routes import PAGE_SIZE
 from app.models import AuditLog, Role, User, UserStatus
+
+
+def _audit_rows(db: Session) -> list[AuditLog]:
+    return list(db.execute(select(AuditLog)).scalars().all())
 
 
 def _make_user(
@@ -375,3 +381,278 @@ class TestAuditViewPagination:
         assert resp.status_code == 200
         assert "thing.event_59" in resp.text
         assert 'data-testid="audit-prev"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# AC1 — CSV export on /admin/audit
+# ---------------------------------------------------------------------------
+
+
+class TestAuditCsvRoleEnforcement:
+    """``?format=csv`` inherits the same Manager-only gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 403
+
+    def test_office_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+
+
+class TestAuditCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="audit_log.csv"' in cd
+
+
+class TestAuditCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, user)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+        assert (
+            resp.text
+            == "id,created_at,actor_email,action,entity_type,entity_id,before_json,after_json\r\n"
+        )
+
+    def test_one_row_one_data_row_with_actor_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="boss@x.test", role=Role.ADMIN)
+        row = _seed_row(db_session, actor=admin, action="supplier.created")
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+        # header + 1 data row + trailing empty (csv.writer terminates with \r\n).
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3
+        assert lines[2] == ""
+        # Find the row that matches our seeded id.
+        cells = lines[1].split(",")
+        assert cells[0] == str(row.id)
+        # cells[1] is the ISO timestamp — non-empty + parseable.
+        assert cells[1]
+        datetime.fromisoformat(cells[1])
+        assert cells[2] == "boss@x.test"
+        assert cells[3] == "supplier.created"
+        assert cells[4] == "user"
+
+    def test_system_action_renders_empty_actor_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _seed_row(
+            db_session,
+            actor=None,
+            action="user.bootstrap_admin_granted",
+        )
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        # Find the data row matching our action.
+        body = resp.text
+        line = next(
+            line for line in body.split("\r\n") if "user.bootstrap_admin_granted" in line
+        )
+        # actor_email is the third comma-separated field; it must be empty.
+        # Use a minimal split so embedded commas in JSON cells don't trip us.
+        # Format: id,iso_timestamp,actor_email,action,...
+        first_three = line.split(",", 3)
+        assert first_three[2] == ""
+
+    def test_before_after_round_trip_via_json_loads(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _seed_row(
+            db_session,
+            actor=admin,
+            action="thing.changed",
+            before={"role": "office"},
+            after={"role": "manager"},
+        )
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        # Pull JSON cells via stdlib csv to handle the quoting correctly.
+        import csv as csv_mod
+        from io import StringIO
+
+        reader = csv_mod.reader(StringIO(resp.text))
+        rows = list(reader)
+        # rows[0] is the header; find the row by action.
+        data = next(r for r in rows[1:] if r[3] == "thing.changed")
+        before_str, after_str = data[6], data[7]
+        assert json.loads(before_str) == {"role": "office"}
+        assert json.loads(after_str) == {"role": "manager"}
+
+    def test_null_before_renders_empty_cell(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        record_audit(
+            db_session,
+            actor=admin,
+            action="thing.created",
+            entity_type="thing",
+            entity_id=1,
+            before=None,
+            after={"x": 1},
+        )
+        db_session.commit()
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        # Find the data row by action; assert before_json cell is empty.
+        import csv as csv_mod
+        from io import StringIO
+
+        reader = csv_mod.reader(StringIO(resp.text))
+        rows = list(reader)
+        data = next(r for r in rows[1:] if r[3] == "thing.created")
+        # before_json is column 6, after_json is column 7.
+        assert data[6] == ""
+        assert json.loads(data[7]) == {"x": 1}
+
+
+class TestAuditCsvSnapshot:
+    def test_csv_export_ignores_pagination(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The HTML branch paginates at 50; the CSV exports every row."""
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        base = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
+        for i in range(60):
+            db_session.add(
+                AuditLog(
+                    actor_id=admin.id,
+                    action=f"thing.event_{i:02d}",
+                    entity_type="thing",
+                    entity_id=i,
+                    before_json=None,
+                    after_json={"i": i},
+                    created_at=base + timedelta(seconds=i),
+                )
+            )
+        db_session.commit()
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+        # Parse via csv to count rows reliably.
+        import csv as csv_mod
+        from io import StringIO
+
+        reader = csv_mod.reader(StringIO(resp.text))
+        rows = list(reader)
+        assert len(rows) == 1 + 60  # header + every seeded row
+        # Earliest event (event_00) is on page 2 of the HTML, but present in CSV.
+        actions = {r[3] for r in rows[1:]}
+        assert "thing.event_00" in actions
+        assert "thing.event_59" in actions
+        # PAGE_SIZE shouldn't constrain the CSV.
+        assert len(rows) - 1 > PAGE_SIZE
+
+
+class TestAuditCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/admin/audit")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="admin-audit-table"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="admin-audit-table"' in resp.text
+
+
+class TestAuditCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _seed_row(db_session, actor=admin, action="thing.seed")
+        before = len(_audit_rows(db_session))
+        _login_as(client, admin)
+        resp = client.get("/admin/audit?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestAuditCsvLink:
+    def test_html_renders_csv_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/admin/audit")
+        assert resp.status_code == 200
+        assert 'data-testid="audit-csv-link"' in resp.text
+        assert "format=csv" in resp.text
