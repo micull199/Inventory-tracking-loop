@@ -18,6 +18,13 @@
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
+    <p>
+        <a href="/admin/taxonomy?format=csv&show={{ show }}"
+           data-testid="taxonomy-list-csv-link">
+            Download CSV
+        </a>
+    </p>
+
     {% if nodes %}
         <table data-testid="taxonomy-table">
             <thead>

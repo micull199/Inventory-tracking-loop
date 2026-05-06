@@ -1745,3 +1745,256 @@ class TestSubCategoryArchive:
         refreshed = db_session.get(TaxonomyNode, sub_id)
         assert refreshed is not None
         assert refreshed.archived_at is not None
+
+
+# ---------------------------------------------------------------------------
+# CSV export — R5g
+# ---------------------------------------------------------------------------
+#
+# Mirrors the locations / suppliers CSV blocks (R5d / R5f). The route inherits
+# the existing Manager-only dependency for both branches; only the response
+# shape changes.
+
+
+class TestTaxonomyListCsvRoleEnforcement:
+    """``?format=csv`` inherits the same Manager-only gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 403
+
+    def test_office_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Taxonomy is Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+
+
+class TestTaxonomyListCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="taxonomy_active.csv"' in cd
+
+    def test_content_disposition_archived_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv&show=archived")
+        cd = resp.headers["content-disposition"]
+        assert 'filename="taxonomy_archived.csv"' in cd
+
+
+class TestTaxonomyListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == "id,sort_order,name\r\n"
+
+    def test_one_node_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        node = TaxonomyNode(name="Raw Materials", sort_order=10)
+        db_session.add(node)
+        db_session.commit()
+        db_session.refresh(node)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(node.id)
+        assert cells[1] == "10"
+        assert cells[2] == "Raw Materials"
+
+    def test_show_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        active = TaxonomyNode(name="Raw Materials", sort_order=10)
+        archived = TaxonomyNode(
+            name="Old Category",
+            sort_order=20,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add_all([active, archived])
+        db_session.commit()
+        _login_as(client, mgr)
+
+        # Default (active) → only the active row.
+        resp = client.get("/admin/taxonomy?format=csv")
+        body = resp.text
+        assert "Raw Materials" in body
+        assert "Old Category" not in body
+
+        # show=archived → only the archived row.
+        resp = client.get("/admin/taxonomy?format=csv&show=archived")
+        body = resp.text
+        assert "Old Category" in body
+        assert "Raw Materials" not in body
+
+    def test_sort_order_ordering_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Insert in non-ascending sort_order; the route orders by sort_order
+        # ascending within the bucket, then name.
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Tools", sort_order=30),
+                TaxonomyNode(name="Raw Materials", sort_order=10),
+                TaxonomyNode(name="Consumables", sort_order=20),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy?format=csv")
+        body = resp.text
+        raw_pos = body.index("Raw Materials")
+        cons_pos = body.index("Consumables")
+        tools_pos = body.index("Tools")
+        assert raw_pos < cons_pos < tools_pos
+
+    def test_sub_categories_not_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Only top-level nodes (``parent_id IS NULL``) are exported.
+
+        Sub-categories live under their own per-parent list view and are out
+        of scope for this CSV surface.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(name="Raw Materials", sort_order=10)
+        db_session.add(parent)
+        db_session.commit()
+        db_session.refresh(parent)
+        sub = TaxonomyNode(name="Silver", sort_order=10, parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy?format=csv")
+        body = resp.text
+        assert "Raw Materials" in body
+        assert "Silver" not in body
+
+
+class TestTaxonomyListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="taxonomy-tabs"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestTaxonomyListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        db_session.add(TaxonomyNode(name="Raw Materials", sort_order=10))
+        db_session.commit()
+        before = len(_audit_rows(db_session))
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestTaxonomyListCsvLink:
+    def test_html_renders_csv_link_with_active_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="taxonomy-list-csv-link"' in body
+        assert "format=csv" in body
+        assert "show=active" in body
+
+    def test_html_renders_csv_link_with_archived_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy?show=archived")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="taxonomy-list-csv-link"' in body
+        assert "show=archived" in body

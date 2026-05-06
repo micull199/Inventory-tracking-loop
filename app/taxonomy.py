@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.field_defs import has_active_field_defs
 from app.models import Role, TaxonomyNode, User
@@ -225,13 +226,34 @@ def _flash(request: Request, message: str) -> None:
 _LIST_ORDER = case((TaxonomyNode.archived_at.is_(None), 0), else_=1)
 
 
-@router.get("", response_class=HTMLResponse)
+_TAXONOMY_CSV_HEADERS: list[str] = [
+    "id",
+    "sort_order",
+    "name",
+]
+
+
+def _csv_rows_for_taxonomy(rows: list[TaxonomyNode]) -> list[list[Any]]:
+    """Map top-level ``TaxonomyNode`` rows to CSV cell values.
+
+    The cells mirror the HTML table's "Order" + "Name" columns one-for-one.
+    ``id`` is added at the front so a downstream consumer can join (the HTML
+    carries it as ``data-node-id`` rather than a cell). ``archived_at`` is
+    not exposed — the active partition is encoded in the filename. Caller
+    is responsible for ensuring the input contains only top-level nodes
+    (the route's ``parent_id IS NULL`` filter handles this).
+    """
+    return [[n.id, n.sort_order, n.name] for n in rows]
+
+
+@router.get("")
 def list_taxonomy(
     request: Request,
     show: str = "active",
+    format: str = "",
     _user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     if show not in {"active", "archived"}:
         show = "active"
 
@@ -243,6 +265,17 @@ def list_taxonomy(
     stmt = stmt.order_by(_LIST_ORDER, TaxonomyNode.sort_order, TaxonomyNode.name)
 
     rows = list(db.execute(stmt).scalars().all())
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=f"taxonomy_{show}.csv",
+            headers=_TAXONOMY_CSV_HEADERS,
+            rows=_csv_rows_for_taxonomy(rows),
+        )
+    ) is not None:
+        return resp
+
     # A top-level node is a leaf (and therefore eligible to own field defs) iff
     # it has no active children. The template uses this to decide whether the
     # per-row "Fields" link renders or a "manage on sub-cats instead" hint
