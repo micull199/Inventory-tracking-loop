@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Locations — UC Inventory{% endblock %}
+{% block content %}
+    <h1>Locations</h1>
+    <p>Physical places stock can live (workshop bench, store room, safe…). Archive a location when it's no longer in use — historical movements keep working.</p>
+
+    <p>
+        <a class="button" href="/admin/locations/new" data-testid="new-location">New location</a>
+    </p>
+
+    <nav aria-label="Filter locations" data-testid="locations-tabs" style="margin-bottom: 1rem;">
+        <a href="/admin/locations?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        |
+        <a href="/admin/locations?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if locations %}
+        <table data-testid="locations-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Notes</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in locations %}
+                    <tr data-testid="location-row" data-location-id="{{ l.id }}">
+                        <td data-testid="location-name">{{ l.name }}</td>
+                        <td>{{ l.notes or "" }}</td>
+                        <td>
+                            <a href="/admin/locations/{{ l.id }}/edit" data-testid="edit-location">Edit</a>
+                            {% if l.archived_at is none %}
+                                <form method="post" action="/admin/locations/{{ l.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-location">Archive</button>
+                                </form>
+                            {% else %}
+                                <form method="post" action="/admin/locations/{{ l.id }}/unarchive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="unarchive-location">Unarchive</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="locations-empty">
+            {% if show == "archived" %}No archived locations.{% else %}No locations yet. Create your first one above.{% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

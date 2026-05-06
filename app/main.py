@@ -11,6 +11,7 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import locations as locations_module
 from app import suppliers as suppliers_module
 from app.audit import record_audit
 from app.auth import get_current_user, require_role
@@ -56,6 +57,8 @@ templates = Jinja2Templates(
 )
 suppliers_module.init_templates(templates)
 app.include_router(suppliers_module.router)
+locations_module.init_templates(templates)
+app.include_router(locations_module.router)
 
 
 @app.get("/health")

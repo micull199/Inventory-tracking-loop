@@ -100,6 +100,13 @@
                             Suppliers
                         </a>
                     </li>
+                    <li>
+                        <a href="/admin/locations"
+                           data-testid="nav-locations"
+                           {% if request.url.path.startswith("/admin/locations") %}aria-current="page"{% endif %}>
+                            Locations
+                        </a>
+                    </li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/locations">&larr; Back to locations</a></p>
+    <h1>{{ title }}</h1>
+
+    <form method="post" action="{{ action }}" data-testid="location-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="name">Name <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="name" name="name" required
+                   value="{{ form.name }}"
+                   data-testid="location-name-input"
+                   maxlength="255">
+        </p>
+
+        <p>
+            <label for="notes">Notes</label><br>
+            <textarea id="notes" name="notes"
+                      data-testid="location-notes-input"
+                      maxlength="2000"
+                      rows="4" cols="50">{{ form.notes }}</textarea>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="location-submit">
+                {% if location %}Save changes{% else %}Create location{% endif %}
+            </button>
+        </p>
+    </form>
+{% endblock %}
