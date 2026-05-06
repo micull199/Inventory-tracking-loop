@@ -43,6 +43,10 @@
             <a href="/admin/items/{{ item.id }}/adjust" data-testid="stock-adjust-link">
                 Adjust &rarr;
             </a>
+            &middot;
+            <a href="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-link">
+                Transfer &rarr;
+            </a>
             {% if item.tracking_mode.value == "unique" %}
                 &middot;
                 <a href="/admin/items/{{ item.id }}/units" data-testid="manage-units">

@@ -1,13 +1,16 @@
-"""End-to-end walk for manual stock-in (M2), stock-out (M3), and adjust (M4).
+"""End-to-end walk for manual stock-in (M2), stock-out (M3), adjust (M4),
+detail (M6), and transfer (M5).
 
-Workshop's first positive-write surface: M2 + M3 + M4 are the only places a
-Workshop user can mutate the system today. After I1c, Workshop also has
-*read-only* access to the items list and per-item view. The walk:
+Workshop's first positive-write surface: M2 + M3 + M4 + M5 are the only
+places a Workshop user can mutate the system today. After I1c, Workshop also
+has *read-only* access to the items list and per-item view. The walk:
 
 1. A pending workshop user signs up via dev-login.
 2. Admin (bootstrap or pre-promoted) promotes them to Workshop + active.
-3. A manager (separately) creates a category and an item via the UI so we
-   exercise the items routes' end-to-end shape, not just inserted rows.
+3. A manager (separately) creates a pair of locations + a category + an item
+   pinned to one of those locations via the UI so we exercise the items
+   routes' end-to-end shape, not just inserted rows. The second location is
+   the M5 transfer target.
 4. The workshop user signs in. I1c: Workshop's nav now shows the items
    link; Workshop browses the list (no New CTA, "View" link instead of
    "Edit"), opens the read-only form (disabled inputs, no submit button),
@@ -24,9 +27,15 @@ Workshop user can mutate the system today. After I1c, Workshop also has
    adjustments: an increase (creates a new positive_adjustment cost layer +
    bumps qty) and a decrease (consumes FIFO + decrements qty). Both legs
    verify the flash + bumped ``current_qty`` + new movement row.
-8. Cleanup: manager archives the item + the taxonomy category so downstream
-   e2e walks see empty active lists. (No attempt to "delete" any movement —
-   the audit log is append-only by mission.)
+8. Workshop visits the M6 detail page and verifies the consolidated read.
+9. Workshop deep-links to ``/admin/items/{id}/transfer`` and moves the item
+   to the second location. The form re-renders with the flash; the recent-
+   movements row shows the TRANSFER. Re-visits detail and asserts the
+   timeline now has five rows (the new TRANSFER on top), still with two
+   layer-breakdown blocks (TRANSFER doesn't add one), and ``current_qty``
+   unchanged at 75 (transfers don't change qty or value).
+10. Cleanup: manager archives the item + the taxonomy category + both
+    locations so downstream e2e walks see empty active lists.
 """
 
 from __future__ import annotations
@@ -155,6 +164,14 @@ def test_workshop_records_a_manual_stock_in(
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
+    # Create two locations: the from-location (assigned to the item on create)
+    # and the to-location (M5 transfer target).
+    for loc_name in ("Movements From Bench", "Movements To Storage"):
+        mgr_page.goto(f"{app_server}/admin/locations/new")
+        mgr_page.get_by_test_id("location-name-input").fill(loc_name)
+        mgr_page.get_by_test_id("location-submit").click()
+        mgr_page.wait_for_url(f"{app_server}/admin/locations")
+
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("MV-E2E-001")
     mgr_page.get_by_test_id("item-name-input").fill("Casting alloy")
@@ -162,6 +179,9 @@ def test_workshop_records_a_manual_stock_in(
         label="Movements E2E Cat"
     )
     mgr_page.get_by_test_id("item-unit-input").fill("g")
+    mgr_page.get_by_test_id("item-location-input").select_option(
+        label="Movements From Bench"
+    )
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
@@ -358,6 +378,49 @@ def test_workshop_records_a_manual_stock_in(
     expect(ws_page.get_by_test_id("stock-in-link")).to_be_visible()
     expect(ws_page.get_by_test_id("edit-item-link")).to_have_count(0)
 
+    # Step 6e (M5): Workshop transfers the item from "Movements From Bench"
+    # to "Movements To Storage". The form re-renders with the flash and the
+    # recent-movements row shows a TRANSFER. current_qty unchanged at 75
+    # (transfers don't change quantity or valuation), and the timeline gains
+    # a row but no new layer-breakdown block.
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/transfer")
+    expect(ws_page.get_by_test_id("stock-transfer-from-location")).to_contain_text(
+        "Movements From Bench"
+    )
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
+    ws_page.get_by_test_id("stock-transfer-to-location-input").select_option(
+        label="Movements To Storage"
+    )
+    ws_page.get_by_test_id("stock-transfer-qty-input").fill("75")
+    ws_page.get_by_test_id("stock-transfer-reason-input").fill("end of shift")
+    ws_page.get_by_test_id("stock-transfer-submit").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/transfer")
+
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Transfer recorded")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Movements From Bench")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Movements To Storage")
+    # The newest movement row is the TRANSFER; it has no total_cost (renders
+    # as a dash) and no direction sign.
+    transfer_row = ws_page.locator('[data-testid="movement-row"]').first
+    expect(transfer_row).to_contain_text("transfer")
+    expect(transfer_row).to_contain_text("75")
+    # The from-location label has flipped — the form now shows the new
+    # current-from when re-rendered (which is the to-location of this leg).
+    expect(ws_page.get_by_test_id("stock-transfer-from-location")).to_contain_text(
+        "Movements To Storage"
+    )
+
+    # Re-visit detail: timeline now has 5 rows; still 2 layer-breakdown blocks
+    # (TRANSFER doesn't add one). current_qty unchanged at 75.
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/detail")
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
+    expect(
+        ws_page.locator('[data-testid="timeline-row"]')
+    ).to_have_count(5)
+    expect(
+        ws_page.locator('[data-testid="layer-breakdown"]')
+    ).to_have_count(2)
+
     ws_page.close()
     if ws_context is not context:
         ws_context.close()
@@ -388,6 +451,15 @@ def test_workshop_records_a_manual_stock_in(
     )
     cat_row.get_by_test_id("archive-taxonomy").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/taxonomy")
+
+    for loc_name in ("Movements From Bench", "Movements To Storage"):
+        cleanup_page.goto(f"{app_server}/admin/locations")
+        loc_row = cleanup_page.locator(
+            '[data-testid="location-row"]', has_text=loc_name
+        )
+        loc_row.get_by_test_id("archive-location").click()
+        cleanup_page.wait_for_url(f"{app_server}/admin/locations")
+
     cleanup_page.close()
     if cleanup_context is not context:
         cleanup_context.close()

@@ -261,6 +261,11 @@
                         Adjust &rarr;
                     </a>
                 </p>
+                <p>
+                    <a href="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-link">
+                        Transfer &rarr;
+                    </a>
+                </p>
             {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 <p>

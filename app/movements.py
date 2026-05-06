@@ -1,4 +1,5 @@
-"""Manual stock-in (M2), stock-out (M3), and adjustment (M4) routes.
+"""Manual stock-in (M2), stock-out (M3), adjustment (M4), and transfer (M5)
+routes plus the read-only item detail page (M6).
 
 The first slices that wire the FIFO cost engine (``app/cost_engine.py``) into
 real routes. Workshop's first positive-write surface alongside Manager +
@@ -66,9 +67,18 @@ sign. Increase additionally records ``unit_cost``, ``source`` (=
 "positive_adjustment"), and ``received_at``; decrease leaves those keys absent
 (same gap as stock-out).
 
+Audit shape — transfer (M5): ``action="stock_movement.transfer"``,
+``entity_type="stock_movement"``, ``entity_id=movement.id``,
+``before={location_id}`` (the item's prior location), ``after={item_id, qty,
+from_location_id, to_location_id, reason, note}``. Transfer is the **one**
+movement type that bypasses the cost engine — no cost layer is created or
+consumed, ``movement.total_cost`` stays ``None``, and ``item.current_qty`` is
+unchanged. The route mutates ``item.location_id`` directly (the only Item
+column it touches besides the movement insert).
+
 Out of scope (deferred): backdated ``created_at`` / ``received_at`` UI,
-PO-receipt path (PO5), partial-receive against a PO line, transfer movements
-(M5), unit-tracked item linkage on receipt / consume / adjust.
+PO-receipt path (PO5), partial-receive against a PO line, per-unit transfer
+on unique-tracked items (transfers today flip the item's location wholesale).
 """
 
 from __future__ import annotations
@@ -96,6 +106,7 @@ from app.models import (
     CostLayerConsumption,
     CostLayerSource,
     Item,
+    Location,
     MovementType,
     Role,
     StockMovement,
@@ -696,6 +707,219 @@ def record_stock_adjustment(
     _flash(request, flash_message)
     return RedirectResponse(
         url=f"/admin/items/{item.id}/adjust",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transfer between locations (M5)
+# ---------------------------------------------------------------------------
+#
+# The single movement type that bypasses the cost engine. Transfers change an
+# item's location pointer; they don't change quantity on hand and don't change
+# valuation. The route writes a ``StockMovement(type=TRANSFER, total_cost=None)``
+# for audit, flips ``item.location_id``, and records the from/to in the audit
+# row's before/after.
+#
+# Validation guards:
+# - Item exists (404), not archived (400), has a current location_id (400 —
+#   "set a location via the edit form first"; transfer presupposes a "from").
+# - ``to_location_id`` must reference an active ``Location`` and must differ
+#   from the item's current ``location_id`` (a no-op transfer would write a
+#   confusing audit row).
+# - ``qty`` must parse as a positive Decimal — same as in / out / adjust. We
+#   don't validate qty against ``current_qty``: for v1 the location pointer
+#   flips wholesale, and ``qty`` on the movement row is informational only.
+
+
+def _parse_int_id(raw: str, *, field_name: str) -> int:
+    """Parse a non-blank integer id. Blank / non-numeric raise 400."""
+    text = (raw or "").strip()
+    if text == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} is required",
+        )
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a number",
+        ) from exc
+
+
+def _resolve_active_location(db: Session, location_id: int) -> Location:
+    """Look up an active location or 400. Archived rows reject."""
+    loc = db.get(Location, location_id)
+    if loc is None or loc.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target location is not active",
+        )
+    return loc
+
+
+def _other_active_locations(
+    db: Session, *, exclude_id: int
+) -> list[dict[str, Any]]:
+    """Active locations other than ``exclude_id`` (the item's current).
+
+    Returned as view-shaped dicts so the template can iterate without ORM
+    knowledge. Ordered by name for predictable rendering and tests.
+    """
+    rows = list(
+        db.execute(
+            select(Location)
+            .where(Location.archived_at.is_(None))
+            .where(Location.id != exclude_id)
+            .order_by(Location.name)
+        )
+        .scalars()
+        .all()
+    )
+    return [{"id": loc.id, "name": loc.name} for loc in rows]
+
+
+def _render_stock_transfer_form(
+    request: Request,
+    *,
+    user: User,
+    item: Item,
+    db: Session,
+    form_values: dict[str, str],
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    # Item must have a from-location for transfer to make sense.
+    if item.location_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "this item has no location yet — set one via the edit form "
+                "before transferring"
+            ),
+        )
+    from_location = db.get(Location, item.location_id)
+    return templates.TemplateResponse(
+        request,
+        "stock_transfer_form.html",
+        {
+            "current_user": user,
+            "item": item,
+            "from_location": from_location,
+            "to_location_options": _other_active_locations(
+                db, exclude_id=item.location_id
+            ),
+            "recent_movements": _recent_movements(db, item.id),
+            "form": form_values,
+        },
+        status_code=status_code,
+    )
+
+
+@router.get("/{item_id}/transfer", response_class=HTMLResponse)
+def stock_transfer_form(
+    request: Request,
+    item_id: int,
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+    return _render_stock_transfer_form(
+        request,
+        user=user,
+        item=item,
+        db=db,
+        form_values={
+            "to_location_id": "",
+            "qty": str(item.current_qty),
+            "reason": "",
+            "note": "",
+        },
+    )
+
+
+@router.post("/{item_id}/transfer")
+def record_stock_transfer(
+    request: Request,
+    item_id: int,
+    to_location_id: str = Form(""),
+    qty: str = Form(""),
+    reason: str = Form(""),
+    note: str = Form(""),
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> Response:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+
+    # The from-location must exist for transfer to make sense; same 400 the
+    # GET handler raises so the user has a single recoverable error message.
+    from_location_id = item.location_id
+    if from_location_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "this item has no location yet — set one via the edit form "
+                "before transferring"
+            ),
+        )
+
+    target_id = _parse_int_id(to_location_id, field_name="target location")
+    if target_id == from_location_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target location must differ from the current location",
+        )
+    target = _resolve_active_location(db, target_id)
+    qty_decimal = _parse_positive_decimal(qty, field_name="quantity")
+    clean_reason = (reason or "").strip() or None
+    clean_note = (note or "").strip() or None
+    from_location = db.get(Location, from_location_id)
+
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.TRANSFER,
+        qty=qty_decimal,
+        user_id=user.id,
+        reason=clean_reason,
+        note=clean_note,
+    )
+    db.add(movement)
+    db.flush()
+    item.location_id = target.id
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_movement.transfer",
+        entity_type="stock_movement",
+        entity_id=movement.id,
+        before={"location_id": from_location_id},
+        after={
+            "item_id": item.id,
+            "qty": str(qty_decimal),
+            "from_location_id": from_location_id,
+            "to_location_id": target.id,
+            "reason": clean_reason,
+            "note": clean_note,
+        },
+    )
+    db.commit()
+
+    from_label = from_location.name if from_location is not None else "?"
+    _flash(
+        request,
+        f"Transfer recorded: {qty_decimal} {item.unit} of "
+        f"“{item.name}” from {from_label} to {target.name}.",
+    )
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/transfer",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

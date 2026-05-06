@@ -51,6 +51,7 @@ from app.models import (
     CostLayerConsumption,
     CostLayerSource,
     Item,
+    Location,
     MovementType,
     Role,
     StockMovement,
@@ -3139,3 +3140,980 @@ class TestItemDetailLink:
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="detail-link"' in resp.text
         assert f"/admin/items/{item.id}/detail" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Transfer between locations (M5)
+# ---------------------------------------------------------------------------
+#
+# Transfer is the one StockMovement type that bypasses the cost engine: no
+# layer is created or consumed, ``current_qty`` is unchanged, ``total_cost``
+# is None. The route flips ``item.location_id`` from the current row to the
+# user-picked target and records a ``stock_movement.transfer`` audit row with
+# ``before={location_id}`` and ``after={item_id, qty, from_location_id,
+# to_location_id, reason, note}``.
+
+
+def _make_location(db: Session, name: str = "Workshop bench") -> Location:
+    loc = Location(name=name)
+    db.add(loc)
+    db.commit()
+    db.refresh(loc)
+    return loc
+
+
+def _make_archived_location(db: Session, name: str) -> Location:
+    loc = Location(name=name, archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+    db.add(loc)
+    db.commit()
+    db.refresh(loc)
+    return loc
+
+
+def _make_item_at(
+    db: Session, *, leaf: TaxonomyNode, location: Location | None
+) -> Item:
+    item = Item(
+        sku="MV-LOC",
+        name="Mobile alloy",
+        taxonomy_node_id=leaf.id,
+        unit="g",
+        tracking_mode=TrackingMode.QTY,
+        location_id=location.id if location is not None else None,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def _payload_transfer(
+    *,
+    to_location_id: str = "",
+    qty: str = "5",
+    reason: str = "",
+    note: str = "",
+    csrf: str = "",
+) -> dict[str, str]:
+    return {
+        "to_location_id": to_location_id,
+        "qty": qty,
+        "reason": reason,
+        "note": note,
+        "csrf_token": csrf,
+    }
+
+
+class TestStockTransferRoleEnforcement:
+    def test_anonymous_get_form_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 401
+
+    def test_anonymous_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_pending_user_get_form_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 403
+
+    def test_workshop_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 200
+
+    def test_workshop_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "From bench")
+        target = _make_location(db_session, "To storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_office_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 200
+
+    def test_office_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "From")
+        target = _make_location(db_session, "To")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 200
+
+    def test_manager_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "From")
+        target = _make_location(db_session, "To")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_admin_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "From")
+        target = _make_location(db_session, "To")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+class TestStockTransferFormRendering:
+    def test_form_has_inputs_and_csrf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench A")
+        _make_location(db_session, "Bench B")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="stock-transfer-form"' in body
+        assert 'data-testid="stock-transfer-to-location-input"' in body
+        assert 'data-testid="stock-transfer-qty-input"' in body
+        assert 'data-testid="stock-transfer-reason-input"' in body
+        assert 'data-testid="stock-transfer-note-input"' in body
+        assert 'data-testid="stock-transfer-submit"' in body
+        assert 'name="csrf_token"' in body
+
+    def test_form_shows_current_location(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench A")
+        _make_location(db_session, "Bench B")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert "Bench A" in resp.text
+        assert 'data-testid="stock-transfer-from-location"' in resp.text
+
+    def test_form_excludes_current_from_to_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench A")
+        target = _make_location(db_session, "Bench B")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        # The "to" select should contain Bench B and exclude Bench A.
+        assert f'value="{target.id}"' in resp.text
+        # The current location id never appears as a selectable option in the
+        # to-select. The from-location label is shown elsewhere on the page.
+        select_block = resp.text.split(
+            'data-testid="stock-transfer-to-location-input"'
+        )[1].split("</select>")[0]
+        assert f'value="{loc.id}"' not in select_block
+
+    def test_form_excludes_archived_locations_from_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench A")
+        target = _make_location(db_session, "Bench B")
+        archived = _make_archived_location(db_session, "Old shed")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        select_block = resp.text.split(
+            'data-testid="stock-transfer-to-location-input"'
+        )[1].split("</select>")[0]
+        assert f'value="{target.id}"' in select_block
+        assert f'value="{archived.id}"' not in select_block
+
+    def test_form_qty_defaults_to_current_qty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench A")
+        _make_location(db_session, "Bench B")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        # Seed a layer so current_qty is non-zero.
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="42", unit_cost="1", actor=ws)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        # The qty input value attribute should pre-fill with current_qty.
+        assert 'value="42.0000"' in resp.text
+
+    def test_unknown_item_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/999999/transfer")
+        assert resp.status_code == 404
+
+    def test_archived_item_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 400
+
+    def test_item_without_location_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=None)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert resp.status_code == 400
+
+    def test_recent_movements_empty_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/transfer")
+        assert 'data-testid="movements-empty"' in resp.text
+
+
+class TestStockTransferValidation:
+    def test_blank_to_location_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(to_location_id="", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_non_int_to_location_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(to_location_id="abc", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_to_location_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id="999999", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_archived_to_location_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        archived = _make_archived_location(db_session, "Old shed")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(archived.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_same_as_current_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(loc.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_blank_qty_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), qty="", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_zero_qty_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), qty="0", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_negative_qty_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), qty="-1", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_qty_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), qty="abc", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_archived_item_post_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_item_without_location_post_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=None)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_failed_validation_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(qty="-1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="stock_movement.transfer")
+        assert rows == []
+
+    def test_failed_validation_does_not_flip_location(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        # Same-location reject path: the route should not have committed.
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(loc.id), csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        db_session.refresh(item)
+        assert item.location_id == loc.id
+        # Plus the bad-target id case.
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id="999999", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        db_session.refresh(item)
+        assert item.location_id == loc.id
+        # And no movement row written across either failure.
+        movements = list(
+            db_session.execute(
+                select(StockMovement).where(StockMovement.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert movements == []
+        # Sanity that the target was a real row before we move on.
+        db_session.refresh(target)
+        assert target.archived_at is None
+
+
+class TestStockTransferHappyPath:
+    def test_creates_movement_and_flips_location(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="3",
+                reason="end of shift",
+                note="moved by Pat",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        db_session.refresh(item)
+        assert item.location_id == target.id
+
+        movements = list(
+            db_session.execute(
+                select(StockMovement).where(StockMovement.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(movements) == 1
+        m = movements[0]
+        assert m.type == MovementType.TRANSFER
+        assert m.qty == Decimal("3")
+        assert m.user_id == ws.id
+        assert m.reason == "end of shift"
+        assert m.note == "moved by Pat"
+        assert m.total_cost is None
+
+    def test_audit_row_carries_from_to(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="3",
+                reason="end of shift",
+                note="moved by Pat",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="stock_movement.transfer")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_id == ws.id
+        assert row.entity_type == "stock_movement"
+        assert row.before_json == {"location_id": loc.id}
+        assert row.after_json == {
+            "item_id": item.id,
+            "qty": "3",
+            "from_location_id": loc.id,
+            "to_location_id": target.id,
+            "reason": "end of shift",
+            "note": "moved by Pat",
+        }
+
+    def test_blank_reason_and_note_become_none(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="3",
+                reason="   ",
+                note="",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        movements = list(
+            db_session.execute(
+                select(StockMovement).where(StockMovement.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert movements[0].reason is None
+        assert movements[0].note is None
+
+    def test_whitespace_strip_on_reason(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="3",
+                reason="  shifted  ",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        movements = list(
+            db_session.execute(
+                select(StockMovement).where(StockMovement.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert movements[0].reason == "shifted"
+
+    def test_flash_message_after_redirect(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        # Follow-redirect so we see the flash.
+        resp = client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="3",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Transfer recorded" in body
+        assert "Bench" in body
+        assert "Storage" in body
+        assert "Mobile alloy" in body
+
+
+class TestStockTransferEngineIsolation:
+    """Transfer must not touch cost layers, consumptions, or current_qty."""
+
+    def test_no_cost_layer_created(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        layers_before = list(
+            db_session.execute(
+                select(CostLayer).where(CostLayer.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="10",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        layers_after = list(
+            db_session.execute(
+                select(CostLayer).where(CostLayer.item_id == item.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(layers_after) == len(layers_before) == 1
+        # Same row + qty_remaining unchanged.
+        assert layers_after[0].id == layers_before[0].id
+        assert layers_after[0].qty_remaining == Decimal("10")
+
+    def test_no_consumption_row_created(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="10",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        consumptions = list(
+            db_session.execute(select(CostLayerConsumption))
+            .scalars()
+            .all()
+        )
+        assert consumptions == []
+
+    def test_current_qty_unchanged(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="42", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="42",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("42.0000")
+
+
+class TestStockTransferLink:
+    def test_edit_form_shows_transfer_link_active(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="stock-transfer-link"' in resp.text
+
+    def test_edit_form_hides_transfer_link_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="stock-transfer-link"' not in resp.text
+
+
+class TestStockTransferOnDetailPage:
+    def test_transfer_row_renders_with_no_direction(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="5",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        # Detail page should now render a TRANSFER timeline row with the
+        # defensive empty direction (no +/- sign) and "—" for total cost.
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="timeline-row"' in body
+        # data-direction is empty for transfer.
+        assert 'data-direction=""' in body
+        assert "transfer" in body
+        # The total-cost cell renders the dash for None.
+        assert "&mdash;" in body or "—" in body
+
+    def test_transfer_row_has_no_layer_breakdown(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="5",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        # No layer-breakdown sub-row should appear for the transfer.
+        assert 'data-testid="layer-breakdown"' not in resp.text
+
+
+class TestStockTransferDetailLink:
+    def test_detail_page_shows_transfer_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="stock-transfer-link"' in resp.text
+
+    def test_detail_page_hides_transfer_link_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session)
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert 'data-testid="stock-transfer-link"' not in resp.text
