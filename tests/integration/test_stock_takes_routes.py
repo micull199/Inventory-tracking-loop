@@ -19,12 +19,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cost_engine import record_receipt
 from app.models import (
     AuditLog,
     CostLayer,
     CostLayerConsumption,
+    CostLayerSource,
     Item,
     Location,
+    MovementType,
     Role,
     StockMovement,
     StockTake,
@@ -1924,3 +1927,1148 @@ class TestListDetailLink:
         body = resp.text
         assert 'data-testid="stock-takes-row-detail-link"' in body
         assert f'href="/admin/stock-takes/{st.id}"' in body
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — helpers
+# ---------------------------------------------------------------------------
+
+
+def _seed_layer(
+    db: Session,
+    *,
+    item: Item,
+    qty: Decimal,
+    unit_cost: Decimal,
+    received_at: datetime | None = None,
+) -> tuple[StockMovement, CostLayer]:
+    """Add an IN movement + cost layer for the item; bumps current_qty.
+
+    Mirrors the M2 ``record_receipt`` caller pattern: the engine is the
+    single owner of layer + qty mutations.
+    """
+    mov = StockMovement(
+        item_id=item.id,
+        type=MovementType.IN,
+        qty=qty,
+        reason="seed",
+    )
+    db.add(mov)
+    db.flush()
+    layer = record_receipt(
+        db,
+        item=item,
+        qty=qty,
+        unit_cost=unit_cost,
+        source=CostLayerSource.MANUAL_IN,
+        movement=mov,
+        received_at=received_at,
+    )
+    db.commit()
+    db.refresh(item)
+    return mov, layer
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — role enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestCommitRoleEnforcement:
+    def test_anonymous_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 401
+
+    def test_pending_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.OFFICE,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 403
+
+    def test_workshop_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 403
+
+    def test_office_negative_variance_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("8"),
+            variance=Decimal("-2"),
+        )
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_negative_variance_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("9"),
+            variance=Decimal("-1"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — status guard + validation
+# ---------------------------------------------------------------------------
+
+
+class TestCommitValidation:
+    def test_unknown_id_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            "/admin/stock-takes/9999/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 404
+
+    def test_scheduled_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(db_session, created_by=mgr)
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+
+    def test_completed_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(
+            db_session,
+            created_by=mgr,
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 1, 11, tzinfo=UTC),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+
+    def test_no_variances_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        # Counted equals system → variance = 0.
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("10"),
+            variance=Decimal("0"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+
+    def test_uncounted_lines_alone_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        # Variance is None — uncounted; should not commit.
+        _make_line(
+            db_session, st=st, item=item, system_qty=Decimal("10")
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+
+    def test_negative_unit_cost_on_positive_variance_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "-1",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_unit_cost_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "abc",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_blank_unit_cost_on_positive_variance_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        # No unit_cost key sent at all.
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+
+    def test_failed_validation_writes_no_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "abc",
+            },
+        )
+        assert resp.status_code == 400
+        db_session.refresh(line)
+        db_session.refresh(st)
+        assert line.committed is False
+        assert st.completed_at is None
+        assert (
+            db_session.execute(select(StockMovement)).scalars().all() == []
+        )
+        assert _audit_rows(db_session, action="stock_take.committed") == []
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — positive happy path
+# ---------------------------------------------------------------------------
+
+
+class TestCommitPositiveHappyPath:
+    def test_creates_movement_and_layer(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("13"),
+            variance=Decimal("3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "2.50",
+            },
+        )
+        movements = (
+            db_session.execute(select(StockMovement)).scalars().all()
+        )
+        assert len(movements) == 1
+        mov = movements[0]
+        assert mov.type == MovementType.ADJUSTMENT
+        assert mov.qty == Decimal("3.0000")
+        assert mov.stock_take_id == st.id
+        assert mov.user_id == mgr.id
+        assert mov.reason == f"stock take #{st.id}"
+        assert mov.total_cost == Decimal("7.5")  # 3 * 2.50
+
+        layers = db_session.execute(select(CostLayer)).scalars().all()
+        assert len(layers) == 1
+        layer = layers[0]
+        assert layer.source == CostLayerSource.POSITIVE_ADJUSTMENT
+        assert layer.qty_received == Decimal("3.0000")
+        assert layer.qty_remaining == Decimal("3.0000")
+        assert layer.unit_cost == Decimal("2.5000")
+        assert layer.source_movement_id == mov.id
+
+    def test_line_committed_and_completed_at_set(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("13"),
+            variance=Decimal("3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "2.50",
+            },
+        )
+        db_session.refresh(line)
+        db_session.refresh(st)
+        assert line.committed is True
+        assert st.completed_at is not None
+        # Detect that completed_at was set within the recent past.
+        now_utc = datetime.now(UTC)
+        completed = st.completed_at
+        # SQLite may return naive datetimes; normalise both sides to compare.
+        if completed.tzinfo is None:
+            completed = completed.replace(tzinfo=UTC)
+        delta = abs((completed - now_utc).total_seconds())
+        assert delta < 5
+
+    def test_current_qty_bumped(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(
+            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10")
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("13"),
+            variance=Decimal("3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "2",
+            },
+        )
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("13.0000")
+
+    def test_zero_unit_cost_allowed(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("11"),
+            variance=Decimal("1"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "0",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        layers = db_session.execute(select(CostLayer)).scalars().all()
+        assert layers[0].unit_cost == Decimal("0.0000")
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — negative happy path
+# ---------------------------------------------------------------------------
+
+
+class TestCommitNegativeHappyPath:
+    def test_creates_movement_and_consumption(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("7"),
+            variance=Decimal("-3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        # Two movements: the seed IN + the new ADJUSTMENT.
+        movements = (
+            db_session.execute(
+                select(StockMovement).order_by(StockMovement.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(movements) == 2
+        adj = movements[1]
+        assert adj.type == MovementType.ADJUSTMENT
+        assert adj.qty == Decimal("3.0000")
+        assert adj.stock_take_id == st.id
+        assert adj.total_cost == Decimal("6.0000")  # 3 * 2.0000
+
+        consumptions = (
+            db_session.execute(select(CostLayerConsumption)).scalars().all()
+        )
+        assert len(consumptions) == 1
+        cons = consumptions[0]
+        assert cons.movement_id == adj.id
+        assert cons.qty_consumed == Decimal("3.0000")
+        assert cons.unit_cost_at_consumption == Decimal("2.0000")
+
+    def test_current_qty_decremented(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        # current_qty is 10 after seed.
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("7"),
+            variance=Decimal("-3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("7.0000")
+
+    def test_multi_layer_fifo_consume(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("4"),
+            unit_cost=Decimal("2"),
+            received_at=datetime(2026, 4, 1, tzinfo=UTC),
+        )
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("6"),
+            unit_cost=Decimal("3"),
+            received_at=datetime(2026, 5, 1, tzinfo=UTC),
+        )
+        # current_qty is 10 across two layers.
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("3"),
+            variance=Decimal("-7"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        # Take 4 from old layer + 3 from new = 4*2 + 3*3 = 17.
+        movements = (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.ADJUSTMENT
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert movements[0].total_cost == Decimal("17.0000")
+        consumptions = (
+            db_session.execute(
+                select(CostLayerConsumption).order_by(
+                    CostLayerConsumption.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(consumptions) == 2
+        assert consumptions[0].qty_consumed == Decimal("4.0000")
+        assert consumptions[1].qty_consumed == Decimal("3.0000")
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — mixed positive + negative + zero
+# ---------------------------------------------------------------------------
+
+
+class TestCommitMixed:
+    def test_mixed_lines_only_non_zero_get_movements(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        a = _make_item(db_session, leaf=leaf, sku="A-1")  # positive variance
+        b = _make_item(db_session, leaf=leaf, sku="B-1")  # negative variance
+        c = _make_item(db_session, leaf=leaf, sku="C-1")  # zero variance
+        # Seed b so its negative variance can consume.
+        _seed_layer(
+            db_session,
+            item=b,
+            qty=Decimal("10"),
+            unit_cost=Decimal("4"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line_a = _make_line(
+            db_session,
+            st=st,
+            item=a,
+            system_qty=Decimal("0"),
+            counted_qty=Decimal("5"),
+            variance=Decimal("5"),
+        )
+        line_b = _make_line(
+            db_session,
+            st=st,
+            item=b,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("8"),
+            variance=Decimal("-2"),
+        )
+        line_c = _make_line(
+            db_session,
+            st=st,
+            item=c,
+            system_qty=Decimal("5"),
+            counted_qty=Decimal("5"),
+            variance=Decimal("0"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line_a.id}": "3",
+            },
+        )
+        # Two adjustment movements (a + b), the seed IN, no movement for c.
+        adjusts = (
+            db_session.execute(
+                select(StockMovement)
+                .where(StockMovement.type == MovementType.ADJUSTMENT)
+                .order_by(StockMovement.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(adjusts) == 2
+        # Verify per-item.
+        by_item = {m.item_id: m for m in adjusts}
+        assert by_item[a.id].qty == Decimal("5.0000")
+        assert by_item[a.id].total_cost == Decimal("15")  # 5 * 3
+        assert by_item[b.id].qty == Decimal("2.0000")
+
+        # Line c not committed; lines a + b are.
+        db_session.refresh(line_a)
+        db_session.refresh(line_b)
+        db_session.refresh(line_c)
+        assert line_a.committed is True
+        assert line_b.committed is True
+        assert line_c.committed is False
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — insufficient stock atomic rollback
+# ---------------------------------------------------------------------------
+
+
+class TestCommitInsufficientStock:
+    def test_rolls_back_atomically(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        # Seed only 5 — the stock take wants to consume 7.
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("5"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            # system_qty was 10 but reality only has 5; counted is 3 so
+            # variance is -7 — but only 5 is available to consume.
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("3"),
+            variance=Decimal("-7"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        assert resp.status_code == 400
+        # Error block visible.
+        assert "Not enough stock" in resp.text
+        # No movement / consumption / line committed / completed_at.
+        db_session.refresh(line)
+        db_session.refresh(st)
+        adjusts = (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.ADJUSTMENT
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert adjusts == []
+        consumptions = (
+            db_session.execute(select(CostLayerConsumption)).scalars().all()
+        )
+        assert consumptions == []
+        assert line.committed is False
+        assert st.completed_at is None
+        assert _audit_rows(db_session, action="stock_take.committed") == []
+
+    def test_partial_failure_leaves_no_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """First line succeeds, second raises shortage — the whole tx rolls back."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        a = _make_item(db_session, leaf=leaf, sku="A-1")  # positive — fine
+        b = _make_item(db_session, leaf=leaf, sku="B-1")  # negative — short
+        # b only has 1 in stock but variance wants to consume 5.
+        _seed_layer(
+            db_session,
+            item=b,
+            qty=Decimal("1"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line_a = _make_line(
+            db_session,
+            st=st,
+            item=a,
+            system_qty=Decimal("0"),
+            counted_qty=Decimal("3"),
+            variance=Decimal("3"),
+        )
+        line_b = _make_line(
+            db_session,
+            st=st,
+            item=b,
+            system_qty=Decimal("6"),
+            counted_qty=Decimal("1"),
+            variance=Decimal("-5"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        resp = client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line_a.id}": "1",
+            },
+        )
+        assert resp.status_code == 400
+        # No adjustment movements at all — even line_a's positive path rolls
+        # back when line_b fails.
+        adjusts = (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.ADJUSTMENT
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert adjusts == []
+        # No new layer for the positive-variance item.
+        layers = (
+            db_session.execute(
+                select(CostLayer).where(
+                    CostLayer.source == CostLayerSource.POSITIVE_ADJUSTMENT
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert layers == []
+        # Item a's current_qty unchanged.
+        db_session.refresh(a)
+        assert a.current_qty == Decimal("0.0000")
+        # Lines stay un-committed.
+        db_session.refresh(line_a)
+        db_session.refresh(line_b)
+        assert line_a.committed is False
+        assert line_b.committed is False
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit route — audit shape
+# ---------------------------------------------------------------------------
+
+
+class TestCommitAuditShape:
+    def test_committed_audit_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("13"),
+            variance=Decimal("3"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={
+                "csrf_token": token,
+                f"unit_cost_{line.id}": "2.50",
+            },
+        )
+        rows = _audit_rows(db_session, action="stock_take.committed")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_id == mgr.id
+        assert row.entity_type == "stock_take"
+        assert row.entity_id == st.id
+        assert row.before_json == {"completed_at": None}
+        assert row.after_json is not None
+        assert row.after_json["completed_at"]
+        movements = row.after_json["movements"]
+        assert len(movements) == 1
+        m = movements[0]
+        assert m["line_id"] == line.id
+        assert m["item_id"] == item.id
+        assert isinstance(m["movement_id"], int)
+        assert m["direction"] == "increase"
+        assert m["unit_cost"] == "2.50"
+        # ``total_cost = qty * unit_cost``. ``qty`` round-trips from the
+        # column at scale 4 (Decimal("3.0000")), ``unit_cost`` is scale 2 as
+        # parsed from the form (Decimal("2.50")). Decimal multiplication
+        # yields scale 6: Decimal("3.0000") * Decimal("2.50") =
+        # Decimal("7.500000"). Same wart as M3 / M4's audit shape.
+        assert m["total_cost"] == "7.500000"
+
+    def test_negative_audit_has_no_unit_cost(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="A-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("8"),
+            variance=Decimal("-2"),
+        )
+        _login_as(client, mgr)
+        token = _csrf(client)
+        client.post(
+            f"/admin/stock-takes/{st.id}/commit",
+            data={"csrf_token": token},
+        )
+        rows = _audit_rows(db_session, action="stock_take.committed")
+        movements = rows[0].after_json["movements"]
+        assert movements[0]["direction"] == "decrease"
+        assert movements[0]["unit_cost"] is None
+        # ``total_cost = take * layer.unit_cost``. ``take`` reads back from
+        # the column at scale 4 (Decimal("2.0000")); ``layer.unit_cost``
+        # likewise (Decimal("2.0000")). Decimal multiplication yields scale 8.
+        assert movements[0]["total_cost"] == "4.00000000"
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit form rendering on detail page
+# ---------------------------------------------------------------------------
+
+
+class TestCommitFormRendering:
+    def test_in_progress_with_variances_shows_commit_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        assert 'data-testid="stock-take-commit-form"' in body
+        assert 'data-testid="stock-take-commit-row"' in body
+        assert 'data-testid="stock-take-commit-unit-cost-input"' in body
+        assert 'data-testid="stock-take-commit-submit"' in body
+
+    def test_in_progress_without_variances_shows_no_variances_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("10"),
+            variance=Decimal("0"),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        assert 'data-testid="stock-take-no-variances-note"' in body
+        assert 'data-testid="stock-take-commit-form"' not in body
+
+    def test_completed_branch_hides_commit_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        st = _make_stock_take(
+            db_session,
+            created_by=mgr,
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 1, 11, tzinfo=UTC),
+        )
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            counted_qty=Decimal("10"),
+            variance=Decimal("0"),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        assert 'data-testid="stock-take-commit-form"' not in body
+
+    def test_default_unit_cost_pre_fills_from_last_layer(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("5"),
+            unit_cost=Decimal("4.25"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("5"),
+            counted_qty=Decimal("8"),
+            variance=Decimal("3"),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        # Pre-filled value from most-recent layer.
+        assert 'value="4.2500"' in body
+
+    def test_negative_variance_renders_unit_cost_na_marker(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+        )
+        st = _make_stock_take(db_session, created_by=mgr)
+        _start_st(db_session, st)
+        _make_line(
+            db_session,
+            st=st,
+            item=item,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("8"),
+            variance=Decimal("-2"),
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        assert 'data-testid="stock-take-commit-unit-cost-na"' in body
+        # No unit_cost input rendered for the negative variance row.
+        assert 'data-testid="stock-take-commit-unit-cost-input"' not in body
+
+
+class TestCommittedBadgeOnCompleted:
+    def test_committed_line_carries_yes_marker(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WID-1")
+        st = _make_stock_take(
+            db_session,
+            created_by=mgr,
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 1, 11, tzinfo=UTC),
+        )
+        line = _make_line(
+            db_session,
+            st=st,
+            item=item,
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        line.committed = True
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/stock-takes/{st.id}")
+        body = resp.text
+        assert 'data-committed="true"' in body
+        assert 'data-testid="stock-take-line-committed"' in body

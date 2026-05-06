@@ -1,4 +1,5 @@
-"""End-to-end walk for ST1 + ST2: Office user schedules + counts a stock take.
+"""End-to-end walk for ST1 + ST2 + ST3: Office user schedules, counts, and
+commits a stock take.
 
 ST1 leg: a pending office user signs in, gets promoted by admin, navigates the
 ``nav-stock-takes`` link to the empty list, clicks "New stock take", picks
@@ -12,8 +13,15 @@ the scheduled detail page, sees the scope-preview row with the seeded item +
 its current_qty, clicks "Start counting", lands on the in-progress detail
 page with one count row pre-filled with system_qty=50.0000, fills counted=48,
 submits, and asserts the variance row renders ``-2.0000``. The item's
-``current_qty`` is unchanged after the count save (engine isolation — ST3
-will commit variances).
+``current_qty`` is unchanged after the count save (engine isolation).
+
+ST3 leg: with the negative-variance row visible, office clicks the
+``stock-take-commit-submit`` button (no unit_cost needed for a decrease).
+The detail page redirects to the completed branch — the commit form is gone,
+the line carries ``data-committed="true"`` + a ``Yes`` marker, and the
+manager re-checks the stock-in form to verify ``current_qty`` has dropped
+from 50.0000 to 48.0000 — the cost engine consumed 2 units FIFO from the
+seeded layer.
 
 Cleanup archives the item and the category so subsequent walks see a clean
 active list.
@@ -255,17 +263,49 @@ def test_office_schedules_a_stock_take(
         office_page.get_by_test_id("stock-take-progress-with-variance")
     ).to_contain_text("1")
 
+    # Step 7d: engine isolation sanity — manager re-visits the items list and
+    # confirms the seeded item's current_qty is unchanged at 50.0000 (ST2
+    # records the count + variance but never touches the cost engine; ST3
+    # commits below).
+    mgr_page.goto(f"{app_server}/admin/items/{item_id}/in")
+    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
+        "50.0000"
+    )
+
+    # Step 7e (ST3): office sees the commit form with the negative-variance
+    # row, clicks Commit count. The decrease consumes FIFO automatically;
+    # no unit_cost input needed.
+    expect(office_page.get_by_test_id("stock-take-commit-form")).to_be_visible()
+    commit_row = office_page.locator(
+        '[data-testid="stock-take-commit-row"]', has_text="ST2-E2E-001"
+    )
+    expect(commit_row).to_have_attribute("data-direction", "decrease")
+    expect(
+        commit_row.get_by_test_id("stock-take-commit-unit-cost-na")
+    ).to_be_visible()
+    office_page.get_by_test_id("stock-take-commit-submit").click()
+    office_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/stock-takes/")
+    )
+    # Status flipped to completed; commit form gone; line marked committed.
+    expect(
+        office_page.get_by_test_id("stock-take-detail-status-badge")
+    ).to_have_attribute("data-status", "completed")
+    expect(office_page.get_by_test_id("stock-take-commit-form")).to_have_count(0)
+    completed_row = office_page.locator(
+        '[data-testid="stock-take-count-row"]', has_text="ST2-E2E-001"
+    )
+    expect(completed_row).to_have_attribute("data-committed", "true")
+
     office_page.close()
     if office_context is not context:
         office_context.close()
 
-    # Step 7d: engine isolation sanity — manager re-visits the items list and
-    # confirms the seeded item's current_qty is unchanged at 50.0000 (ST2
-    # records the count + variance but never touches the cost engine; ST3
-    # will commit).
+    # Step 7f (ST3): manager re-checks the stock-in form — ``current_qty``
+    # has dropped from 50.0000 to 48.0000 (engine consumed 2 units FIFO).
     mgr_page.goto(f"{app_server}/admin/items/{item_id}/in")
     expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
-        "50.0000"
+        "48.0000"
     )
 
     # Step 8: cleanup — manager archives the seeded item then the category so

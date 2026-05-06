@@ -83,8 +83,13 @@
             </p>
         {% endif %}
     {% elif status == "in_progress" %}
-        {# In-progress branch — count form + progress summary. #}
+        {# In-progress branch — count form + (when there are variances) commit form. #}
         <h2>Counting</h2>
+        {% if commit_error %}
+            <p data-testid="stock-take-commit-error" role="alert">
+                {{ commit_error }}
+            </p>
+        {% endif %}
         <p data-testid="stock-take-progress-summary">
             <strong>Counted:</strong>
             <span data-testid="stock-take-progress-counted">{{ progress.counted }}</span>
@@ -150,13 +155,79 @@
                         Save counts
                     </button>
                 </p>
+            </form>
+
+            <h2>Commit</h2>
+            {% if commit_lines %}
                 <p>
                     <em>
-                        Saving keeps the count in progress. ST3 will commit
-                        variances as adjustment movements when complete.
+                        Committing writes one adjustment movement per
+                        non-zero variance line and closes this stock take.
+                        Positive variances need a unit cost; negative
+                        variances consume FIFO layers automatically.
                     </em>
                 </p>
-            </form>
+                <form method="post"
+                      action="/admin/stock-takes/{{ st.id }}/commit"
+                      data-testid="stock-take-commit-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                    <table data-testid="stock-take-commit-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th>Name</th>
+                                <th>Unit</th>
+                                <th>Variance</th>
+                                <th>Unit cost</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cl in commit_lines %}
+                                <tr data-testid="stock-take-commit-row"
+                                    data-line-id="{{ cl.line_id }}"
+                                    data-item-id="{{ cl.item_id }}"
+                                    data-direction="{{ cl.direction }}">
+                                    <td data-testid="stock-take-commit-sku">{{ cl.item_sku }}</td>
+                                    <td data-testid="stock-take-commit-name">{{ cl.item_name }}</td>
+                                    <td>{{ cl.item_unit }}</td>
+                                    <td data-testid="stock-take-commit-variance">
+                                        {{ cl.variance_str }}
+                                    </td>
+                                    <td>
+                                        {% if cl.direction == "increase" %}
+                                            <input type="text"
+                                                   inputmode="decimal"
+                                                   name="unit_cost_{{ cl.line_id }}"
+                                                   value="{{ cl.unit_cost_default }}"
+                                                   placeholder="0.00"
+                                                   required
+                                                   data-testid="stock-take-commit-unit-cost-input"
+                                                   data-line-id="{{ cl.line_id }}">
+                                        {% else %}
+                                            <span data-testid="stock-take-commit-unit-cost-na">—</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+
+                    <p>
+                        <button type="submit"
+                                class="button"
+                                data-testid="stock-take-commit-submit">
+                            Commit count
+                        </button>
+                    </p>
+                </form>
+            {% else %}
+                <p data-testid="stock-take-no-variances-note">
+                    All counted lines match the system. Nothing to commit;
+                    re-count any lines with variances or close this stock
+                    take by ignoring it.
+                </p>
+            {% endif %}
         {% else %}
             <p data-testid="stock-take-empty-lines">
                 No lines on this stock take.
@@ -186,6 +257,7 @@
                         <th>System qty</th>
                         <th>Counted qty</th>
                         <th>Variance</th>
+                        <th>Committed?</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -193,7 +265,8 @@
                         <tr data-testid="stock-take-count-row"
                             data-line-id="{{ line.line_id }}"
                             data-item-id="{{ line.item_id }}"
-                            data-counted="{{ "true" if line.is_counted else "false" }}">
+                            data-counted="{{ "true" if line.is_counted else "false" }}"
+                            data-committed="{{ "true" if line.is_committed else "false" }}">
                             <td data-testid="stock-take-count-sku">{{ line.item_sku }}</td>
                             <td data-testid="stock-take-count-name">{{ line.item_name }}</td>
                             <td>{{ line.item_unit }}</td>
@@ -210,6 +283,9 @@
                             <td data-testid="stock-take-count-variance"
                                 data-variance-sign="{{ line.variance_sign }}">
                                 {{ line.variance_str }}
+                            </td>
+                            <td data-testid="stock-take-line-committed">
+                                {% if line.is_committed %}Yes{% else %}—{% endif %}
                             </td>
                         </tr>
                     {% endfor %}

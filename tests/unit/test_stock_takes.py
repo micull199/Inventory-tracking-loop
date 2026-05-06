@@ -14,19 +14,28 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import (
+    CostLayer,
+    CostLayerSource,
     Item,
     Location,
+    StockMovement,
     StockTake,
     StockTakeLine,
     TaxonomyNode,
     TrackingMode,
 )
 from app.stock_takes import (
+    _can_commit,
     _compute_variance,
     _format_variance,
+    _last_unit_cost,
+    _lines_with_non_zero_variance,
+    _parse_unit_cost_for_commit,
     _resolve_scope_items,
     _scope_label,
     _status_label,
@@ -354,3 +363,209 @@ class TestResolveScopeItems:
         db_session.commit()
         items = _resolve_scope_items(db_session, st)
         assert [i.sku for i in items] == ["A-1", "B-2", "C-3"]
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit helpers
+# ---------------------------------------------------------------------------
+
+
+class TestCanCommit:
+    def test_scheduled_returns_false(self) -> None:
+        st = StockTake(scheduled_for=date(2026, 6, 1))
+        assert _can_commit(st) is False
+
+    def test_in_progress_returns_true(self) -> None:
+        st = StockTake(
+            scheduled_for=date(2026, 6, 1),
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+        )
+        assert _can_commit(st) is True
+
+    def test_completed_returns_false(self) -> None:
+        st = StockTake(
+            scheduled_for=date(2026, 6, 1),
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 1, 11, tzinfo=UTC),
+        )
+        assert _can_commit(st) is False
+
+
+class TestLastUnitCost:
+    def test_no_layers_returns_none(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        assert _last_unit_cost(db_session, item.id) is None
+
+    def test_single_layer(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        # Layers FK to a movement; build a minimal movement first.
+        from app.models import MovementType
+
+        mov = StockMovement(
+            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
+        )
+        db_session.add(mov)
+        db_session.flush()
+        layer = CostLayer(
+            item_id=item.id,
+            qty_received=Decimal("5"),
+            qty_remaining=Decimal("5"),
+            unit_cost=Decimal("2.50"),
+            received_at=datetime(2026, 5, 1, tzinfo=UTC),
+            source=CostLayerSource.MANUAL_IN,
+            source_movement_id=mov.id,
+        )
+        db_session.add(layer)
+        db_session.commit()
+        assert _last_unit_cost(db_session, item.id) == Decimal("2.5000")
+
+    def test_multi_layer_newest_wins(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        from app.models import MovementType
+
+        # Older layer at 2.00, newer at 3.00 — the newer should win.
+        mov_old = StockMovement(
+            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
+        )
+        mov_new = StockMovement(
+            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
+        )
+        db_session.add_all([mov_old, mov_new])
+        db_session.flush()
+        old_layer = CostLayer(
+            item_id=item.id,
+            qty_received=Decimal("5"),
+            qty_remaining=Decimal("5"),
+            unit_cost=Decimal("2.00"),
+            received_at=datetime(2026, 4, 1, tzinfo=UTC),
+            source=CostLayerSource.MANUAL_IN,
+            source_movement_id=mov_old.id,
+        )
+        new_layer = CostLayer(
+            item_id=item.id,
+            qty_received=Decimal("5"),
+            qty_remaining=Decimal("5"),
+            unit_cost=Decimal("3.00"),
+            received_at=datetime(2026, 5, 1, tzinfo=UTC),
+            source=CostLayerSource.MANUAL_IN,
+            source_movement_id=mov_new.id,
+        )
+        db_session.add_all([old_layer, new_layer])
+        db_session.commit()
+        assert _last_unit_cost(db_session, item.id) == Decimal("3.0000")
+
+    def test_other_items_excluded(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        a = _make_item(db_session, leaf, sku="A-1")
+        b = _make_item(db_session, leaf, sku="B-1")
+        from app.models import MovementType
+
+        mov = StockMovement(
+            item_id=a.id, type=MovementType.IN, qty=Decimal("5")
+        )
+        db_session.add(mov)
+        db_session.flush()
+        layer = CostLayer(
+            item_id=a.id,
+            qty_received=Decimal("5"),
+            qty_remaining=Decimal("5"),
+            unit_cost=Decimal("2.50"),
+            received_at=datetime(2026, 5, 1, tzinfo=UTC),
+            source=CostLayerSource.MANUAL_IN,
+            source_movement_id=mov.id,
+        )
+        db_session.add(layer)
+        db_session.commit()
+        assert _last_unit_cost(db_session, b.id) is None
+
+
+class TestParseUnitCostForCommit:
+    def test_blank_optional_returns_none(self) -> None:
+        assert (
+            _parse_unit_cost_for_commit("", line_id=1, required=False) is None
+        )
+
+    def test_blank_required_raises_400(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _parse_unit_cost_for_commit("", line_id=1, required=True)
+        assert exc.value.status_code == 400
+
+    def test_whitespace_only_optional_returns_none(self) -> None:
+        assert (
+            _parse_unit_cost_for_commit("   ", line_id=1, required=False)
+            is None
+        )
+
+    def test_valid_decimal(self) -> None:
+        assert _parse_unit_cost_for_commit(
+            "2.50", line_id=1, required=True
+        ) == Decimal("2.50")
+
+    def test_zero_allowed(self) -> None:
+        assert _parse_unit_cost_for_commit(
+            "0", line_id=1, required=True
+        ) == Decimal("0")
+
+    def test_negative_raises(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _parse_unit_cost_for_commit("-1", line_id=1, required=True)
+        assert exc.value.status_code == 400
+
+    def test_non_numeric_raises(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _parse_unit_cost_for_commit("abc", line_id=1, required=True)
+        assert exc.value.status_code == 400
+
+
+class TestLinesWithNonZeroVariance:
+    def test_zero_variance_excluded(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        line = StockTakeLine(
+            stock_take_id=1,
+            item_id=item.id,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("10"),
+            variance=Decimal("0"),
+        )
+        rows = [(line, item)]
+        assert _lines_with_non_zero_variance(rows) == []
+
+    def test_none_variance_excluded(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        line = StockTakeLine(
+            stock_take_id=1,
+            item_id=item.id,
+            system_qty=Decimal("10"),
+            counted_qty=None,
+            variance=None,
+        )
+        rows = [(line, item)]
+        assert _lines_with_non_zero_variance(rows) == []
+
+    def test_positive_and_negative_kept(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        a = _make_item(db_session, leaf, sku="A-1")
+        b = _make_item(db_session, leaf, sku="B-1")
+        line_a = StockTakeLine(
+            stock_take_id=1,
+            item_id=a.id,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("12"),
+            variance=Decimal("2"),
+        )
+        line_b = StockTakeLine(
+            stock_take_id=1,
+            item_id=b.id,
+            system_qty=Decimal("10"),
+            counted_qty=Decimal("7"),
+            variance=Decimal("-3"),
+        )
+        rows = [(line_a, a), (line_b, b)]
+        result = _lines_with_non_zero_variance(rows)
+        assert len(result) == 2
+        assert {item.sku for _, item in result} == {"A-1", "B-1"}

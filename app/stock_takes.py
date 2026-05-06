@@ -1,26 +1,29 @@
-"""Stock take scheduling and counting (ST1 + ST2 — DoD #5).
+"""Stock take scheduling, counting, and commit (ST1 + ST2 + ST3 — DoD #5).
 
 Manager + Office surface mounted at ``/admin/stock-takes``:
 
 - ``GET /admin/stock-takes[?show=open|completed]`` — list (ST1).
 - ``GET /admin/stock-takes/new`` — render the scheduling form (ST1).
 - ``POST /admin/stock-takes`` — schedule a stock take (ST1).
-- ``GET /admin/stock-takes/{id}`` — detail page (ST2). Renders one of three
-  branches gated on the derived status: ``scheduled`` (start form + scope
-  preview), ``in_progress`` (count form), ``completed`` (read-only summary).
+- ``GET /admin/stock-takes/{id}`` — detail page (ST2 + ST3). Renders one of
+  three branches gated on the derived status: ``scheduled`` (start form +
+  scope preview), ``in_progress`` (count form + commit form when there are
+  variances), ``completed`` (read-only summary with committed badges).
 - ``POST /admin/stock-takes/{id}/start`` — freeze in-scope items into
   ``StockTakeLine`` rows + flip ``started_at`` (ST2).
 - ``POST /admin/stock-takes/{id}/counts`` — save per-line ``counted_qty`` +
   derived ``variance`` (ST2). Sparse diff; no-op writes no audit.
+- ``POST /admin/stock-takes/{id}/commit`` — for every line with non-zero
+  variance build one ``StockMovement(type=ADJUSTMENT)`` via the cost engine
+  (positive → ``record_receipt``; negative → ``consume_fifo``), flip
+  ``committed=True``, set ``completed_at = now()``, write a
+  ``stock_take.committed`` audit row (ST3).
 
-ST3 will add the commit-variances-as-adjustments flow that flips the row to
-``completed`` via the cost engine.
-
-Engine isolation: ST2 records counts but never actions them. No
-``StockMovement``, ``CostLayer``, or ``CostLayerConsumption`` writes; no
-``Item.current_qty`` mutations. Variance is *recorded* on the
-``StockTakeLine`` row but the item's stock and valuation don't change until
-ST3 commits.
+Engine ownership: counts (ST2) never touch the cost engine. ST3 is the slice
+that actions variances as adjustment movements via the engine. ``record_receipt``
+and ``consume_fifo`` remain the single owners of ``cost_layers.qty_remaining``,
+``item.current_qty``, and ``movement.total_cost`` — the commit route delegates
+the FIFO arithmetic to them.
 """
 
 from __future__ import annotations
@@ -36,11 +39,20 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
+from app.cost_engine import (
+    InsufficientStockError,
+    consume_fifo,
+    record_receipt,
+)
 from app.db import get_session
 from app.models import (
+    CostLayer,
+    CostLayerSource,
     Item,
     Location,
+    MovementType,
     Role,
+    StockMovement,
     StockTake,
     StockTakeLine,
     TaxonomyNode,
@@ -229,6 +241,87 @@ def _can_count(st: StockTake) -> bool:
     return st.started_at is not None and st.completed_at is None
 
 
+def _can_commit(st: StockTake) -> bool:
+    """Only an in-progress row can be committed.
+
+    Same predicate as ``_can_count`` (commit happens against the same
+    lifecycle window). A scheduled row needs to be started first; a completed
+    row is read-only.
+    """
+    return st.started_at is not None and st.completed_at is None
+
+
+def _last_unit_cost(db: Session, item_id: int) -> Decimal | None:
+    """Most recent cost layer's unit cost for an item, or ``None``.
+
+    Used to default ``unit_cost_<line_id>`` on the commit form for positive
+    variance lines. Newest by ``received_at`` (with id-tiebreak), regardless
+    of ``qty_remaining`` — a fully-consumed layer is still the most recent
+    unit-cost signal. Same shape as ``app.purchase_orders._last_unit_cost``.
+    """
+    stmt = (
+        select(CostLayer.unit_cost)
+        .where(CostLayer.item_id == item_id)
+        .order_by(CostLayer.received_at.desc(), CostLayer.id.desc())
+        .limit(1)
+    )
+    row = db.execute(stmt).first()
+    return row[0] if row is not None else None
+
+
+def _parse_unit_cost_for_commit(
+    raw: str, *, line_id: int, required: bool
+) -> Decimal | None:
+    """Parse ``unit_cost_<line_id>`` for the commit form.
+
+    Blank → ``None`` when ``required=False`` (negative-variance line; the
+    consumption price is per-layer, the input is ignored). Blank → 400 when
+    ``required=True`` (positive-variance line; the operator must affirm a
+    price even if it's zero). Non-numeric / negative → 400. Zero allowed
+    (sample / gifted stock — same posture as M2 / M4).
+    """
+    text = (raw or "").strip()
+    if text == "":
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"unit_cost for line {line_id} is required for a "
+                    "positive variance"
+                ),
+            )
+        return None
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unit_cost for line {line_id} must be a number",
+        ) from exc
+    if value < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unit_cost for line {line_id} cannot be negative",
+        )
+    return value
+
+
+def _lines_with_non_zero_variance(
+    rows: list[tuple[StockTakeLine, Item]],
+) -> list[tuple[StockTakeLine, Item]]:
+    """Filter the lines down to those that need an adjustment movement.
+
+    Zero-variance and uncounted (variance is None) lines are excluded — the
+    commit route doesn't write a movement for them, doesn't flip ``committed``
+    on them, and doesn't list them in the audit row's ``movements`` snapshot.
+    """
+    return [
+        (line, item)
+        for line, item in rows
+        if line.variance is not None and line.variance != 0
+    ]
+
+
 def _resolve_scope_items(db: Session, st: StockTake) -> list[Item]:
     """Return the list of active items in scope for this stock take, ordered by sku.
 
@@ -337,13 +430,23 @@ def _count_progress(
 
 
 def _detail_context(
-    db: Session, st: StockTake, user: User
+    db: Session,
+    st: StockTake,
+    user: User,
+    *,
+    commit_error: str | None = None,
+    commit_form_values: dict[int, str] | None = None,
 ) -> dict[str, Any]:
     """Build the template context for the detail page.
 
     Branches on the derived status (scheduled / in_progress / completed) and
     surfaces the right shape: scope items + start form for scheduled; count
-    form for in-progress; read-only table for completed.
+    form + commit form for in-progress; read-only table for completed.
+
+    ``commit_error`` + ``commit_form_values`` are populated only by the
+    insufficient-stock re-render path on a failed commit POST. They preserve
+    the operator's typed ``unit_cost_<line_id>`` inputs so a partial fix
+    doesn't lose context.
     """
     node = (
         db.get(TaxonomyNode, st.scope_node_id)
@@ -368,6 +471,7 @@ def _detail_context(
         "status": status_label,
         "scope_label": scope_label,
         "creator_email": creator_email,
+        "commit_error": commit_error,
     }
 
     if status_label == "scheduled":
@@ -391,10 +495,44 @@ def _detail_context(
                     "variance_str": _format_variance(line.variance),
                     "variance_sign": _variance_sign(line.variance),
                     "is_counted": line.counted_qty is not None,
+                    "is_committed": line.committed,
                 }
             )
         ctx["lines"] = line_views
         ctx["progress"] = progress
+
+        # Commit-form view — only relevant on the in-progress branch. The
+        # template still renders the count form alongside; the commit form is
+        # an additional sub-section gated on ``commit_lines`` being non-empty.
+        if status_label == "in_progress":
+            variance_rows = _lines_with_non_zero_variance(rows)
+            commit_views: list[dict[str, Any]] = []
+            for line, item in variance_rows:
+                # By construction `variance` is non-None on a variance row.
+                assert line.variance is not None
+                direction = "increase" if line.variance > 0 else "decrease"
+                if direction == "increase":
+                    if commit_form_values is not None and line.id in commit_form_values:
+                        unit_cost_default = commit_form_values[line.id]
+                    else:
+                        last = _last_unit_cost(db, item.id)
+                        unit_cost_default = str(last) if last is not None else ""
+                else:
+                    unit_cost_default = ""
+                commit_views.append(
+                    {
+                        "line_id": line.id,
+                        "item_id": item.id,
+                        "item_sku": item.sku,
+                        "item_name": item.name,
+                        "item_unit": item.unit,
+                        "variance": line.variance,
+                        "variance_str": _format_variance(line.variance),
+                        "direction": direction,
+                        "unit_cost_default": unit_cost_default,
+                    }
+                )
+            ctx["commit_lines"] = commit_views
     return ctx
 
 
@@ -779,6 +917,177 @@ async def update_stock_take_counts(
     _flash(
         request,
         f"Saved {len(changed)} count(s).",
+    )
+    return RedirectResponse(
+        url=f"/admin/stock-takes/{st.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ST3: commit variances as adjustment movements
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{stock_take_id}/commit")
+async def commit_stock_take(
+    request: Request,
+    stock_take_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Commit non-zero variances as adjustment movements (ST3).
+
+    For every line with ``variance != 0``: builds one
+    :class:`~app.models.StockMovement` of type ``ADJUSTMENT`` with the
+    stock-take id stamped on it (FK active since ST1's migration), routes
+    through the cost engine (``record_receipt`` for positive variance with
+    source ``POSITIVE_ADJUSTMENT``; ``consume_fifo`` for negative variance),
+    and flips ``StockTakeLine.committed=True``. Sets
+    ``StockTake.completed_at`` and writes a ``stock_take.committed`` audit
+    row carrying the per-movement snapshot.
+
+    Atomic-on-error: if any negative-variance line raises
+    :class:`~app.cost_engine.InsufficientStockError`, the whole transaction
+    is rolled back (no movement / layer / consumption rows; ``committed``
+    stays False on every line; ``completed_at`` stays None) and the detail
+    page re-renders with the error block + the operator's typed unit-cost
+    inputs preserved. Same atomic-on-raise contract as M3 / M4.
+    """
+    st = _get_stock_take_or_404(db, stock_take_id)
+    if not _can_commit(st):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stock take is not in progress; commit requires an in-progress count",
+        )
+
+    rows = _lines_with_items(db, st.id)
+    variance_rows = _lines_with_non_zero_variance(rows)
+    if not variance_rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="no variances to commit",
+        )
+
+    form_data = await request.form()
+    # First pass: parse every per-line unit_cost_<id> input — for *positive*
+    # variance lines it's required; for negative variance lines blank → None
+    # (consumption price is per-layer; the input is ignored). This pass runs
+    # before any DB write so a parse failure rejects atomically.
+    parsed_unit_costs: dict[int, Decimal | None] = {}
+    raw_unit_costs: dict[int, str] = {}
+    for line, _item in variance_rows:
+        # Variance is non-None on every variance row by the filter above.
+        assert line.variance is not None
+        key = f"unit_cost_{line.id}"
+        raw = str(form_data.get(key) or "")
+        raw_unit_costs[line.id] = raw.strip()
+        required = line.variance > 0
+        parsed_unit_costs[line.id] = _parse_unit_cost_for_commit(
+            raw, line_id=line.id, required=required
+        )
+
+    # Second pass: build movements + layers / consumptions through the engine.
+    # If the negative path raises ``InsufficientStockError`` we roll back the
+    # entire transaction (every successful prior engine call this batch
+    # included) so a single shortage can't half-commit a stock take.
+    committed_at = datetime.now(UTC)
+    movement_snapshots: list[dict[str, Any]] = []
+
+    for line, item in variance_rows:
+        assert line.variance is not None
+        direction = "increase" if line.variance > 0 else "decrease"
+        qty_abs = line.variance if line.variance > 0 else -line.variance
+        movement = StockMovement(
+            item_id=item.id,
+            type=MovementType.ADJUSTMENT,
+            qty=qty_abs,
+            user_id=user.id,
+            reason=f"stock take #{st.id}",
+            note=None,
+            stock_take_id=st.id,
+        )
+        db.add(movement)
+        db.flush()
+
+        if direction == "increase":
+            unit_cost = parsed_unit_costs[line.id]
+            assert unit_cost is not None  # required=True path
+            record_receipt(
+                db,
+                item=item,
+                qty=qty_abs,
+                unit_cost=unit_cost,
+                source=CostLayerSource.POSITIVE_ADJUSTMENT,
+                movement=movement,
+                received_at=committed_at,
+            )
+        else:
+            try:
+                consume_fifo(
+                    db, item=item, qty=qty_abs, movement=movement
+                )
+            except InsufficientStockError as exc:
+                db.rollback()
+                # Re-load the stock take after rollback.
+                st = _get_stock_take_or_404(db, stock_take_id)
+                error = (
+                    f"Not enough stock for {item.sku}: requested "
+                    f"{exc.requested}, only {exc.available} available."
+                )
+                ctx = _detail_context(
+                    db,
+                    st,
+                    user,
+                    commit_error=error,
+                    commit_form_values=raw_unit_costs,
+                )
+                return templates.TemplateResponse(
+                    request,
+                    "stock_take_detail.html",
+                    ctx,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+        line.committed = True
+        movement_snapshots.append(
+            {
+                "line_id": line.id,
+                "item_id": item.id,
+                "movement_id": movement.id,
+                "variance": str(line.variance),
+                "direction": direction,
+                "unit_cost": (
+                    str(parsed_unit_costs[line.id])
+                    if direction == "increase"
+                    else None
+                ),
+                "total_cost": (
+                    str(movement.total_cost)
+                    if movement.total_cost is not None
+                    else None
+                ),
+            }
+        )
+
+    st.completed_at = committed_at
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_take.committed",
+        entity_type="stock_take",
+        entity_id=st.id,
+        before={"completed_at": None},
+        after={
+            "completed_at": committed_at.isoformat(),
+            "movements": movement_snapshots,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Stock take committed — {len(movement_snapshots)} adjustment(s) recorded.",
     )
     return RedirectResponse(
         url=f"/admin/stock-takes/{st.id}",
