@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Stock out — {{ item.name }} — UC Inventory{% endblock %}
+{% block content %}
+    <p>
+        <a href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    </p>
+    <h1>Stock out: {{ item.name }}</h1>
+    <p>
+        <strong>SKU:</strong> {{ item.sku }} &middot;
+        <strong>Current quantity:</strong>
+        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+        {{ item.unit }} &middot;
+        <strong>Open value:</strong>
+        <span data-testid="item-open-value">{{ open_value }}</span>
+    </p>
+
+    {% if error %}
+        <p data-testid="stock-out-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/admin/items/{{ item.id }}/out" data-testid="stock-out-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="qty">Quantity to consume <span aria-hidden="true">*</span></label><br>
+            <input type="text" inputmode="decimal" id="qty" name="qty" required
+                   value="{{ form.qty }}"
+                   data-testid="stock-out-qty-input"
+                   placeholder="e.g. 25">
+            <em>{{ item.unit }} (FIFO: oldest cost layers consumed first)</em>
+        </p>
+
+        <p>
+            <label for="reason">Reason</label><br>
+            <input type="text" id="reason" name="reason"
+                   value="{{ form.reason }}"
+                   data-testid="stock-out-reason-input"
+                   maxlength="255"
+                   placeholder="e.g. production, scrapped, lost">
+        </p>
+
+        <p>
+            <label for="note">Note</label><br>
+            <textarea id="note" name="note"
+                      data-testid="stock-out-note-input"
+                      maxlength="2000"
+                      rows="3" cols="50">{{ form.note }}</textarea>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="stock-out-submit">
+                Record stock-out
+            </button>
+        </p>
+    </form>
+
+    <h2>Recent movements</h2>
+    {% if recent_movements %}
+        <table data-testid="movements-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Total cost</th>
+                    <th>Actor</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in recent_movements %}
+                    <tr data-testid="movement-row" data-movement-id="{{ m.id }}">
+                        <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                        <td>{{ m.type }}</td>
+                        <td>{{ m.qty }}</td>
+                        <td>{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
+                        <td>{{ m.actor_email or "—" }}</td>
+                        <td>{{ m.reason or "" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="movements-empty">No movements yet for this item.</p>
+    {% endif %}
+{% endblock %}

@@ -1,6 +1,6 @@
-"""End-to-end walk for manual stock-in (M2).
+"""End-to-end walk for manual stock-in (M2) and stock-out (M3).
 
-Workshop's first positive-write surface: the M2 route is the only place a
+Workshop's first positive-write surface: M2 + M3 are the only places a
 Workshop user can mutate the system today (Workshop still 403s on items list /
 edit per I3a's role table). The walk:
 
@@ -13,7 +13,10 @@ edit per I3a's role table). The walk:
    to I1c).
 5. Workshop submits a receipt; the form re-renders with the flash, the bumped
    ``current_qty``, and the new movement in the recent-movements table.
-6. Cleanup: manager archives the item + the taxonomy category so downstream
+6. Workshop deep-links to ``/admin/items/{id}/out`` and consumes part of the
+   layer; the form re-renders with the flash, the decremented ``current_qty``,
+   and the new OUT movement showing the FIFO-derived ``total_cost``.
+7. Cleanup: manager archives the item + the taxonomy category so downstream
    e2e walks see empty active lists. (No attempt to "delete" the movement — the
    audit log is append-only by mission.)
 """
@@ -205,6 +208,47 @@ def test_workshop_records_a_manual_stock_in(
     expect(movement_row).to_contain_text("First receipt")
     expect(movement_row).to_contain_text("100")
     expect(movement_row).to_contain_text("250")  # total_cost = 100 * 2.50
+
+    # Step 6b (M3): Workshop deep-links to the stock-out form and consumes 30
+    # of the 100-unit layer. FIFO drains the only layer, so total_cost should
+    # be 30 * 2.50 = 75. After the redirect, current_qty = 70.
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/out")
+    # The "open value" line shows 100 * 2.50 = 250.
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("100.0000")
+    expect(ws_page.get_by_test_id("item-open-value")).to_contain_text("250")
+
+    ws_page.get_by_test_id("stock-out-qty-input").fill("30")
+    ws_page.get_by_test_id("stock-out-reason-input").fill("Production run")
+    ws_page.get_by_test_id("stock-out-submit").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/out")
+
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Casting alloy")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("30")
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
+    # The OUT movement is newest, so the first movement-row is it. Total cost
+    # = 30 * 2.50 = 75.
+    out_row = ws_page.locator('[data-testid="movement-row"]').first
+    expect(out_row).to_contain_text("Production run")
+    expect(out_row).to_contain_text("30")
+    expect(out_row).to_contain_text("75")
+
+    # Insufficient-stock path: try to consume 1000 (only 70 left). The route
+    # returns 400 + re-renders the form with the error block + preserved input.
+    ws_page.get_by_test_id("stock-out-qty-input").fill("1000")
+    ws_page.get_by_test_id("stock-out-reason-input").fill("Way too much")
+    ws_page.get_by_test_id("stock-out-submit").click()
+    # Stays on the same URL (no 303 redirect because the response is a 400
+    # with the form re-rendered).
+    expect(ws_page.get_by_test_id("stock-out-error")).to_contain_text(
+        "Not enough stock"
+    )
+    # Inputs preserved.
+    expect(ws_page.get_by_test_id("stock-out-qty-input")).to_have_value("1000")
+    expect(ws_page.get_by_test_id("stock-out-reason-input")).to_have_value(
+        "Way too much"
+    )
+    # current_qty unchanged (still 70).
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
 
     ws_page.close()
     if ws_context is not context:

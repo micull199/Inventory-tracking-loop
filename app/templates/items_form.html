@@ -221,6 +221,11 @@
                         Stock in &rarr;
                     </a>
                 </p>
+                <p>
+                    <a href="/admin/items/{{ item.id }}/out" data-testid="stock-out-link">
+                        Stock out &rarr;
+                    </a>
+                </p>
             {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 <p>

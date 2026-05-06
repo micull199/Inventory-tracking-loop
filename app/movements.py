@@ -1,7 +1,8 @@
-"""Manual stock-in route (M2).
+"""Manual stock-in (M2) and stock-out (M3) routes.
 
-The first slice that wires the FIFO cost engine (``app/cost_engine.py``) into a
-real route. Workshop's first positive-write surface alongside Manager + Office.
+The first slices that wire the FIFO cost engine (``app/cost_engine.py``) into
+real routes. Workshop's first positive-write surface alongside Manager +
+Office.
 
 Route surface (mounted at ``/admin/items``):
 
@@ -11,6 +12,16 @@ Route surface (mounted at ``/admin/items``):
   flush, call ``record_receipt`` (which creates the cost layer + bumps
   ``current_qty`` + sets ``movement.total_cost``), write a ``stock_movement.in``
   audit row, commit, redirect 303 back with a flash.
+- ``GET  /admin/items/{item_id}/out`` — render a stock-out form (qty + reason +
+  note; no unit_cost — consumption price is per-layer) plus the same recent-
+  movements table and an "open value" summary line.
+- ``POST /admin/items/{item_id}/out`` — validate, build a ``StockMovement(type=OUT)``,
+  flush, call ``consume_fifo`` (which writes one ``CostLayerConsumption`` row
+  per layer touched, decrements ``qty_remaining``, decrements ``current_qty``,
+  sets ``movement.total_cost``), write a ``stock_movement.out`` audit row,
+  commit, redirect 303 with a flash. ``InsufficientStockError`` from the engine
+  re-renders the form with a 400 status and an in-form error message — the
+  only data-dependent failure case in the route, hence the carve-out.
 
 The route never touches ``cost_layers.qty_remaining``, ``movement.total_cost``,
 or ``item.current_qty`` directly — the engine is the single owner of those
@@ -23,15 +34,22 @@ and not be archived (400 — same posture as taxonomy/items "no new structure
 under archived"). All validation 400s fire *before* any DB write, so a failed
 request leaves the DB untouched.
 
-Audit shape: ``action="stock_movement.in"``, ``entity_type="stock_movement"``,
+Audit shape — stock-in: ``action="stock_movement.in"``, ``entity_type="stock_movement"``,
 ``entity_id=movement.id``, ``before=None``, ``after`` carries the route inputs
 plus the engine outputs (``total_cost``, ``source``, ``received_at``). The
 movement row is the audit primary; the cost layer and any future consumption
 rows are reconstructable from ``cost_layers.source_movement_id`` and
 ``cost_layer_consumptions.movement_id``.
 
-Out of M2's scope (deferred): backdated ``received_at`` UI, PO-receipt path
-(PO5), partial-receive against a PO line, "stock out" (M3), adjustments (M4).
+Audit shape — stock-out: ``action="stock_movement.out"``,
+``entity_type="stock_movement"``, ``entity_id=movement.id``, ``before=None``,
+``after={item_id, qty, total_cost, reason, note}``. No ``unit_cost`` (varies per
+layer) and no ``source`` (consumes don't carry one). The layer-level breakdown
+is in ``cost_layer_consumptions`` (queryable by ``movement_id``).
+
+Out of scope (deferred): backdated ``created_at`` / ``received_at`` UI,
+PO-receipt path (PO5), partial-receive against a PO line, adjustments (M4),
+unit-tracked item linkage on receipt / consume.
 """
 
 from __future__ import annotations
@@ -47,7 +65,12 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
-from app.cost_engine import record_receipt
+from app.cost_engine import (
+    InsufficientStockError,
+    consume_fifo,
+    open_value,
+    record_receipt,
+)
 from app.db import get_session
 from app.models import (
     CostLayerSource,
@@ -285,5 +308,148 @@ def record_stock_in(
     )
     return RedirectResponse(
         url=f"/admin/items/{item.id}/in",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/items/{item_id}/out — form
+# ---------------------------------------------------------------------------
+
+
+def _render_stock_out_form(
+    request: Request,
+    *,
+    user: User,
+    item: Item,
+    db: Session,
+    form_values: dict[str, str],
+    error: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "stock_out_form.html",
+        {
+            "current_user": user,
+            "item": item,
+            "open_value": open_value(db, item),
+            "recent_movements": _recent_movements(db, item.id),
+            "form": form_values,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+@router.get("/{item_id}/out", response_class=HTMLResponse)
+def stock_out_form(
+    request: Request,
+    item_id: int,
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+    return _render_stock_out_form(
+        request,
+        user=user,
+        item=item,
+        db=db,
+        form_values={"qty": "", "reason": "", "note": ""},
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/items/{item_id}/out — record a consumption
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{item_id}/out")
+def record_stock_out(
+    request: Request,
+    item_id: int,
+    qty: str = Form(""),
+    reason: str = Form(""),
+    note: str = Form(""),
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> Response:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+
+    qty_decimal = _parse_positive_decimal(qty, field_name="quantity")
+    clean_reason = (reason or "").strip() or None
+    clean_note = (note or "").strip() or None
+
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.OUT,
+        qty=qty_decimal,
+        user_id=user.id,
+        reason=clean_reason,
+        note=clean_note,
+    )
+    db.add(movement)
+    db.flush()
+
+    try:
+        consume_fifo(db, item=item, qty=qty_decimal, movement=movement)
+    except InsufficientStockError as exc:
+        # Atomic by engine contract: no rows mutated when this raises. Roll
+        # back to drop the (unflushed-to-commit) movement we added above and
+        # re-render the form with the user's inputs preserved + an error.
+        db.rollback()
+        # ``item`` is detached after rollback; reload for the re-render so the
+        # current_qty / open_value reflect what the user actually has.
+        item = _get_item_or_404(db, item_id)
+        return _render_stock_out_form(
+            request,
+            user=user,
+            item=item,
+            db=db,
+            form_values={
+                "qty": qty.strip(),
+                "reason": (reason or "").strip(),
+                "note": (note or "").strip(),
+            },
+            error=(
+                f"Not enough stock: requested {exc.requested}, "
+                f"only {exc.available} available."
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_movement.out",
+        entity_type="stock_movement",
+        entity_id=movement.id,
+        before=None,
+        after={
+            "item_id": item.id,
+            "qty": str(qty_decimal),
+            "total_cost": (
+                str(movement.total_cost)
+                if movement.total_cost is not None
+                else None
+            ),
+            "reason": clean_reason,
+            "note": clean_note,
+        },
+    )
+    db.commit()
+
+    _flash(
+        request,
+        f"Stock-out recorded: -{qty_decimal} {item.unit} of “{item.name}”.",
+    )
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/out",
         status_code=status.HTTP_303_SEE_OTHER,
     )

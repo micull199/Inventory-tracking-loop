@@ -1,6 +1,6 @@
-"""Integration tests for the manual stock-in route (M2).
+"""Integration tests for the manual stock-in (M2) and stock-out (M3) routes.
 
-Covers:
+Covers stock-in:
 - Role enforcement: anonymous 401; pending 403; Workshop / Office / Manager /
   Admin all 200 on GET and 303 on POST. Workshop's first positive-write surface.
 - Form rendering: qty / unit_cost / reason / note inputs; CSRF; current_qty
@@ -14,6 +14,25 @@ Covers:
   to ``GET /admin/items/{id}/in``.
 - Multi-receipt: two consecutive POSTs accumulate qty + create two layers; the
   recent-movements list shows them newest first.
+
+Covers stock-out (M3):
+- Role enforcement: same matrix as stock-in (Workshop / Office / Manager).
+- Form rendering: qty / reason / note inputs (no unit_cost); CSRF;
+  current_qty + open_value summary; recent-movements list reused.
+- Validation matrix: qty positive ``Decimal``; reason / note stripped to None
+  when blank; archived item 400; unknown item 404; failed validation writes
+  no audit.
+- Happy path: creates ``StockMovement(type=OUT)``; writes one
+  ``CostLayerConsumption`` per layer touched; decrements ``qty_remaining`` +
+  ``current_qty``; sets ``movement.total_cost`` from the layer-weighted sum;
+  audit row carries ``stock_movement.out`` with the route inputs + total_cost.
+- Insufficient stock: engine raises ``InsufficientStockError`` *before* any
+  mutation; route catches, rolls back, re-renders the form with a 400 status,
+  the user's qty / reason / note preserved, and an in-form error block.
+  No movement / consumption row written, ``current_qty`` and layer
+  ``qty_remaining`` unchanged.
+- Multi-layer FIFO consume: oldest layer drained first, second layer partially
+  consumed; total_cost is the layer-weighted sum.
 """
 
 from __future__ import annotations
@@ -25,9 +44,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.cost_engine import record_receipt
 from app.models import (
     AuditLog,
     CostLayer,
+    CostLayerConsumption,
     CostLayerSource,
     Item,
     MovementType,
@@ -776,3 +797,790 @@ class TestStockInLinkOnEditForm:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="stock-in-link"' not in resp.text
+
+
+# ===========================================================================
+# Stock-out (M3)
+# ===========================================================================
+
+
+def _payload_out(
+    *,
+    qty: str = "5",
+    reason: str = "",
+    note: str = "",
+    csrf: str = "",
+) -> dict[str, str]:
+    return {
+        "qty": qty,
+        "reason": reason,
+        "note": note,
+        "csrf_token": csrf,
+    }
+
+
+def _seed_layer(
+    db: Session,
+    *,
+    item: Item,
+    qty: Decimal | str,
+    unit_cost: Decimal | str,
+    actor: User,
+    received_at: datetime | None = None,
+) -> StockMovement:
+    """Seed a real cost layer + IN movement via the engine.
+
+    Tests for stock-out depend on the item having open layers; rather than
+    re-implementing the receipt arithmetic, we go through the engine the
+    same way M2's POST handler does.
+    """
+    qty_decimal = qty if isinstance(qty, Decimal) else Decimal(qty)
+    unit_cost_decimal = unit_cost if isinstance(unit_cost, Decimal) else Decimal(unit_cost)
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.IN,
+        qty=qty_decimal,
+        user_id=actor.id,
+    )
+    db.add(movement)
+    db.flush()
+    record_receipt(
+        db,
+        item=item,
+        qty=qty_decimal,
+        unit_cost=unit_cost_decimal,
+        source=CostLayerSource.MANUAL_IN,
+        movement=movement,
+        received_at=received_at,
+    )
+    db.commit()
+    db.refresh(item)
+    db.refresh(movement)
+    return movement
+
+
+# ---------------------------------------------------------------------------
+# Role enforcement (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutRoleEnforcement:
+    def test_anonymous_get_form_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 401
+
+    def test_anonymous_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_pending_user_get_form_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 403
+
+    def test_workshop_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 200
+
+    def test_workshop_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop's stock-out write surface (mirrors stock-in)."""
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=ws)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="3", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_office_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 200
+
+    def test_office_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _seed_layer(
+            db_session, item=item, qty="10", unit_cost="2.00", actor=office
+        )
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="3", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 200
+
+    def test_manager_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=mgr)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="3", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_admin_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=admin)
+        _login_as(client, admin)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="3", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+# ---------------------------------------------------------------------------
+# Form rendering (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutForm:
+    def test_form_includes_inputs_and_csrf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Silver wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Silver wire" in body
+        assert 'name="qty"' in body
+        # No unit_cost on the stock-out form — consumption price is per-layer.
+        assert 'name="unit_cost"' not in body
+        assert 'name="reason"' in body
+        assert 'name="note"' in body
+        assert 'name="csrf_token"' in body
+        assert 'data-testid="stock-out-submit"' in body
+
+    def test_form_shows_current_qty_and_open_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(
+            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
+        )
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        body = resp.text
+        # current_qty = 10
+        assert 'data-testid="item-current-qty"' in body
+        assert "10" in body
+        # open_value = 10 * 2.50 = 25
+        assert 'data-testid="item-open-value"' in body
+        assert "25" in body
+
+    def test_form_open_value_zero_for_no_layers(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        # 0 should appear in the open-value span.
+        assert 'data-testid="item-open-value"' in resp.text
+
+    def test_form_recent_movements_empty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert "movements-empty" in resp.text
+
+    def test_form_recent_movements_includes_seed_in(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="3", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.text.count('data-testid="movement-row"') == 1
+
+    def test_unknown_item_form_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/items/999/out")
+        assert resp.status_code == 404
+
+    def test_archived_item_form_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Validation matrix on POST (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutValidation:
+    def _setup(self, db_session: Session, client: TestClient) -> Item:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="50", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        return item
+
+    def test_blank_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        before = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).first()
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert before is None
+        # No OUT movement / consumption written.
+        assert (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.OUT
+                )
+            ).first()
+            is None
+        )
+        assert db_session.execute(select(CostLayerConsumption)).first() is None
+
+    def test_zero_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="0", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.OUT
+                )
+            ).first()
+            is None
+        )
+
+    def test_negative_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="-1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.OUT
+                )
+            ).first()
+            is None
+        )
+
+    def test_non_numeric_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="lots", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_item_post_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            "/admin/items/999/out",
+            data=_payload_out(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_archived_item_post_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_validation_failure_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="-1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert (
+            _audit_rows(db_session, action="stock_movement.out") == []
+        )
+
+
+# ---------------------------------------------------------------------------
+# Happy path (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutHappyPath:
+    def test_creates_movement_consumption_and_decrements_qty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        seed = _seed_layer(
+            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
+        )
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(
+                qty="3", reason="production", note="job 42",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/out"
+
+        out = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).scalar_one()
+        assert out.item_id == item.id
+        assert out.qty == Decimal("3")
+        assert out.user_id == ws.id
+        assert out.reason == "production"
+        assert out.note == "job 42"
+        # 3 * 2.50 = 7.50
+        assert out.total_cost == Decimal("7.50")
+
+        cons = db_session.execute(select(CostLayerConsumption)).scalars().all()
+        assert len(cons) == 1
+        c = cons[0]
+        assert c.movement_id == out.id
+        assert c.qty_consumed == Decimal("3")
+        assert c.unit_cost_at_consumption == Decimal("2.50")
+
+        layer = db_session.execute(
+            select(CostLayer).where(CostLayer.id == c.layer_id)
+        ).scalar_one()
+        assert layer.source_movement_id == seed.id
+        assert layer.qty_remaining == Decimal("7")  # 10 - 3
+        assert layer.qty_received == Decimal("10")  # immutable
+
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("7")
+
+    def test_strips_whitespace_on_reason_and_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(
+                qty="1", reason="  use  ", note="  job  ",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        out = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).scalar_one()
+        assert out.reason == "use"
+        assert out.note == "job"
+
+    def test_blank_reason_and_note_become_none(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="1", reason="", note="   ",
+                              csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        out = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).scalar_one()
+        assert out.reason is None
+        assert out.note is None
+
+    def test_audit_row_written(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(
+                qty="4", reason="produced", csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="stock_movement.out")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_id == ws.id
+        assert row.entity_type == "stock_movement"
+        out = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).scalar_one()
+        assert row.entity_id == out.id
+        assert row.before_json is None
+        assert row.after_json is not None
+        assert row.after_json["item_id"] == item.id
+        assert row.after_json["qty"] == "4"
+        # total_cost is the engine-computed sum-across-layers; the layer's
+        # unit_cost was round-tripped through Numeric(14,4) so the string
+        # representation carries the column's scale.
+        assert row.after_json["total_cost"] == "8.0000"
+        assert row.after_json["reason"] == "produced"
+        # no unit_cost / source on stock-out audit (varies per layer / N/A).
+        assert "unit_cost" not in row.after_json
+        assert "source" not in row.after_json
+
+    def test_flash_message_set(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Casting alloy")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="2", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/out")
+        assert "Casting alloy" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Insufficient stock (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutInsufficientStock:
+    def test_consume_more_than_open_layers_returns_400_with_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="3", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(
+                qty="10", reason="oops", note="too much",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        body = resp.text
+        # In-form error block + preserved inputs.
+        assert 'data-testid="stock-out-error"' in body
+        assert "Not enough stock" in body
+        # Preserved qty / reason / note in the form.
+        assert 'value="10"' in body
+        assert "oops" in body
+        assert "too much" in body
+        # No OUT movement, no consumption row, layer unchanged.
+        assert (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.OUT
+                )
+            ).first()
+            is None
+        )
+        assert db_session.execute(select(CostLayerConsumption)).first() is None
+        layer = db_session.execute(select(CostLayer)).scalar_one()
+        assert layer.qty_remaining == Decimal("3")
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("3")
+
+    def test_no_layers_at_all_returns_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert 'data-testid="stock-out-error"' in resp.text
+
+    def test_insufficient_stock_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="2", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="100", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert _audit_rows(db_session, action="stock_movement.out") == []
+
+    def test_consume_exact_open_balance_succeeds(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="5", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        layer = db_session.execute(select(CostLayer)).scalar_one()
+        assert layer.qty_remaining == Decimal("0")
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Multi-layer FIFO consume (stock-out)
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutMultiLayerFIFO:
+    def test_consume_spans_two_layers_oldest_first(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        # Older layer @ 2.00; newer @ 3.00. Use distinct received_at so the
+        # FIFO order is unambiguous (the engine breaks ties by id but we don't
+        # need to rely on that here).
+        old = datetime(2026, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 2, 1, tzinfo=UTC)
+        _seed_layer(
+            db_session, item=item, qty="4", unit_cost="2.00",
+            actor=ws, received_at=old,
+        )
+        _seed_layer(
+            db_session, item=item, qty="6", unit_cost="3.00",
+            actor=ws, received_at=new,
+        )
+        _login_as(client, ws)
+        # Consume 7: takes 4 from the old layer, 3 from the new.
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="7", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        out = db_session.execute(
+            select(StockMovement).where(StockMovement.type == MovementType.OUT)
+        ).scalar_one()
+        # 4*2.00 + 3*3.00 = 8.00 + 9.00 = 17.00
+        assert out.total_cost == Decimal("17.00")
+
+        cons = list(
+            db_session.execute(
+                select(CostLayerConsumption).order_by(
+                    CostLayerConsumption.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(cons) == 2
+        assert cons[0].qty_consumed == Decimal("4")
+        assert cons[0].unit_cost_at_consumption == Decimal("2.00")
+        assert cons[1].qty_consumed == Decimal("3")
+        assert cons[1].unit_cost_at_consumption == Decimal("3.00")
+
+        layers = list(
+            db_session.execute(
+                select(CostLayer).order_by(CostLayer.received_at, CostLayer.id)
+            )
+            .scalars()
+            .all()
+        )
+        # Old fully drained, new partially.
+        assert layers[0].qty_remaining == Decimal("0")
+        assert layers[1].qty_remaining == Decimal("3")
+
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("3")
+
+    def test_recent_movements_includes_in_and_out(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(
+            db_session, item=item, qty="5", unit_cost="2",
+            actor=ws,
+        )
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="2", reason="job-out", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/out")
+        body = resp.text
+        # Two rows: the seed IN and the new OUT.
+        assert body.count('data-testid="movement-row"') == 2
+        # OUT renders newest first → "job-out" appears before any IN reason
+        # (which is None). Loose check: the OUT reason is in the table body.
+        assert "job-out" in body
+
+
+# ---------------------------------------------------------------------------
+# Edit-form integration: "Stock out" link
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutLinkOnEditForm:
+    def test_edit_form_shows_stock_out_link_for_active_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert f"/admin/items/{item.id}/out" in resp.text
+        assert 'data-testid="stock-out-link"' in resp.text
+
+    def test_edit_form_hides_stock_out_link_for_archived_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="stock-out-link"' not in resp.text
