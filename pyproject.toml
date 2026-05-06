@@ -1,0 +1,144 @@
+[project]
+name = "uc-inventory"
+version = "0.1.0"
+description = "Inventory tracking for UC's workshop and office."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+dependencies = [
+    # Web framework
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.20",  # form parsing for HTMX posts
+
+    # Templating
+    "jinja2>=3.1",
+
+    # Database
+    "sqlalchemy>=2.0",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",      # postgres driver for prod
+
+    # Auth
+    "authlib>=1.3",
+    "itsdangerous>=2.2",         # session signing
+
+    # Settings & validation
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+
+    # Background scheduling (in-process)
+    "apscheduler>=3.11",
+
+    # PDFs (PO generation)
+    "weasyprint>=63.0",
+
+    # QR codes
+    "qrcode[pil]>=8.0",
+
+    # Email (stdlib smtplib is fine; this is just for templating later)
+    "premailer>=3.10",
+]
+
+[dependency-groups]
+dev = [
+    # Tests
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",               # async test client for FastAPI
+    "playwright>=1.49",
+    "pytest-playwright>=0.6",
+
+    # Lint, format, types
+    "ruff>=0.8",
+    "mypy>=1.13",
+
+    # Type stubs
+    "types-qrcode",
+
+    # Dev DB & utilities
+    "freezegun>=1.5",            # time travel in tests, useful for FIFO ordering
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# ruff: lint + format
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+# A pragmatic set, leaning toward "catch real bugs" not "enforce style preferences".
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes basics
+    "I",             # import sorting
+    "B",             # bugbear (likely-bug patterns)
+    "UP",            # pyupgrade
+    "SIM",           # simplifications
+    "RUF",           # ruff-specific
+    "ASYNC",         # async footguns
+    "S",             # bandit (security)
+    "PT",            # pytest idioms
+]
+ignore = [
+    "E501",   # line length is enforced by formatter, not lint
+    "S101",   # asserts are fine in tests
+    "B008",   # FastAPI uses Depends() in defaults, that's the API
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106", "S311"]  # tests can use asserts, hardcoded passwords, random
+"migrations/**" = ["E", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# mypy: strict on app/, lenient on tests
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["weasyprint.*", "apscheduler.*", "premailer.*", "authlib.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: end-to-end Playwright tests",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:passlib.*",
+]
