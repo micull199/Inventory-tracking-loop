@@ -23,6 +23,7 @@
                         <th>Holder</th>
                         <th>Out since</th>
                         <th>Due back</th>
+                        <th>Check in</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -43,6 +44,25 @@
                                 {% else %}
                                     —
                                 {% endif %}
+                            </td>
+                            <td>
+                                <form method="post"
+                                      action="/admin/items/checkouts/{{ co.id }}/return"
+                                      data-testid="checkout-return-form"
+                                      data-checkout-id="{{ co.id }}">
+                                    <input type="hidden" name="csrf_token"
+                                           value="{{ csrf_token }}">
+                                    <details>
+                                        <summary>Add return note (optional)</summary>
+                                        <textarea name="condition_note"
+                                                  rows="2" cols="40" maxlength="2000"
+                                                  data-testid="checkout-return-note-input"></textarea>
+                                    </details>
+                                    <button type="submit" class="button"
+                                            data-testid="checkout-return-submit">
+                                        Check in
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                     {% endfor %}

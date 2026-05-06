@@ -1033,3 +1033,611 @@ class TestEngineIsolation:
         assert db_session.execute(select(StockMovement)).first() is None
         db_session.refresh(item)
         assert item.current_qty == Decimal("17.0000")
+
+
+# ---------------------------------------------------------------------------
+# C3 — Check-in flow
+# ---------------------------------------------------------------------------
+
+
+def _return_payload(
+    *, condition_note: str = "", csrf: str = ""
+) -> dict[str, str]:
+    return {"condition_note": condition_note, "csrf_token": csrf}
+
+
+def _open_checkout(
+    db: Session,
+    *,
+    item: Item,
+    user: User,
+    item_unit: ItemUnit | None = None,
+    condition_note: str | None = None,
+) -> Checkout:
+    co = Checkout(
+        item_id=item.id,
+        item_unit_id=item_unit.id if item_unit is not None else None,
+        user_id=user.id,
+        checked_out_at=datetime(2026, 5, 1, 9, 0, tzinfo=UTC),
+        condition_note=condition_note,
+    )
+    db.add(co)
+    db.commit()
+    db.refresh(co)
+    return co
+
+
+class TestCheckinRoleEnforcement:
+    def test_anonymous_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_pending_post_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_workshop_can_return_other_users_checkout(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.MANAGER
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.returned_at is not None
+
+    def test_office_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_admin_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+class TestCheckinValidation:
+    def test_unknown_checkout_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            "/admin/items/checkouts/9999/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+        # No audit row written for an unknown checkout.
+        assert _audit_rows(db_session, action="checkout.returned") == []
+
+    def test_already_returned_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        # Close it manually so the route hits the already-returned guard.
+        co.returned_at = datetime(2026, 5, 2, tzinfo=UTC)
+        db_session.commit()
+        prev_returned = co.returned_at
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        db_session.refresh(co)
+        # returned_at is unchanged.
+        assert co.returned_at == prev_returned
+        # No checkout.returned audit row was written.
+        assert _audit_rows(db_session, action="checkout.returned") == []
+
+    def test_oversize_merged_note_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        # Existing note already 1500 chars; new note 700 chars + the 5-char
+        # separator pushes the merged value past 2000.
+        co = _open_checkout(
+            db_session,
+            item=item,
+            user=borrower,
+            condition_note="A" * 1500,
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(
+                condition_note="B" * 700, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        db_session.refresh(co)
+        assert co.returned_at is None
+        assert co.condition_note == "A" * 1500  # unchanged
+        assert _audit_rows(db_session, action="checkout.returned") == []
+
+    def test_oversize_fresh_note_alone_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(
+                condition_note="X" * 2001, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        db_session.refresh(co)
+        assert co.returned_at is None
+
+
+class TestCheckinHappyPathQty:
+    def test_returns_qty_tracked_checkout(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+
+        before = datetime.now(UTC)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        after = datetime.now(UTC)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/checkout"
+
+        db_session.refresh(co)
+        assert co.returned_at is not None
+        # SQLite drops tz info on round-trip; compare naive-vs-naive.
+        returned = co.returned_at.replace(tzinfo=None)
+        assert (
+            before.replace(tzinfo=None)
+            <= returned
+            <= after.replace(tzinfo=None)
+        )
+        # No fresh note → existing (None here) preserved.
+        assert co.condition_note is None
+
+        rows = _audit_rows(db_session, action="checkout.returned")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.entity_type == "checkout"
+        assert row.entity_id == co.id
+        assert row.actor_id == ws.id
+        assert row.before_json == {
+            "returned_at": None,
+            "condition_note": None,
+        }
+        assert row.after_json is not None
+        assert row.after_json["item_id"] == item.id
+        assert row.after_json["item_unit_id"] is None
+        assert row.after_json["user_id"] == borrower.id
+        assert row.after_json["condition_note"] is None
+        # returned_at is an ISO timestamp.
+        assert row.after_json["returned_at"].startswith("2026-")
+
+    def test_flash_includes_item_name(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Hammer")
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "Checked in" in resp.text
+        assert "Hammer" in resp.text
+
+
+class TestCheckinHappyPathUnique:
+    def test_returns_unique_tracked_checkout(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session,
+            leaf=leaf,
+            tracking_mode=TrackingMode.UNIQUE,
+            sku="U-1",
+        )
+        unit = _make_unit(db_session, item=item, serial="U-A")
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(
+            db_session, item=item, user=borrower, item_unit=unit
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.returned_at is not None
+
+        rows = _audit_rows(db_session, action="checkout.returned")
+        assert len(rows) == 1
+        assert rows[0].after_json is not None
+        assert rows[0].after_json["item_unit_id"] == unit.id
+
+    def test_flash_includes_unit_label(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session,
+            leaf=leaf,
+            tracking_mode=TrackingMode.UNIQUE,
+            sku="U-1",
+            name="Sledgehammer",
+        )
+        unit = _make_unit(db_session, item=item, serial="SH-9")
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(
+            db_session, item=item, user=borrower, item_unit=unit
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=True,
+        )
+        assert "SH-9" in resp.text
+        assert "Sledgehammer" in resp.text
+
+
+class TestCheckinNoteMerging:
+    def test_blank_note_preserves_existing(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(
+            db_session,
+            item=item,
+            user=borrower,
+            condition_note="went out clean",
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.condition_note == "went out clean"
+        rows = _audit_rows(db_session, action="checkout.returned")
+        assert rows[0].after_json is not None
+        assert rows[0].after_json["condition_note"] == "went out clean"
+        assert rows[0].before_json == {
+            "returned_at": None,
+            "condition_note": "went out clean",
+        }
+
+    def test_fresh_note_with_no_existing_sets_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(
+                condition_note="returned chipped", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.condition_note == "returned chipped"
+
+    def test_fresh_note_with_existing_appends(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(
+            db_session,
+            item=item,
+            user=borrower,
+            condition_note="went out clean",
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(
+                condition_note="returned chipped", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.condition_note == "went out clean\n---\nreturned chipped"
+
+    def test_whitespace_only_note_preserves_existing(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(
+            db_session,
+            item=item,
+            user=borrower,
+            condition_note="went out clean",
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(condition_note="   ", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(co)
+        assert co.condition_note == "went out clean"
+
+
+class TestCheckinEngineIsolation:
+    def test_no_stock_movement_on_return(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        item.current_qty = Decimal("42.0000")
+        db_session.commit()
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/checkouts/{co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert db_session.execute(select(StockMovement)).first() is None
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("42.0000")
+
+
+class TestCheckinFormReshrinks:
+    def test_qty_status_block_disappears_after_return(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        # Workshop checks out the item-as-a-whole.
+        resp = client.post(
+            f"/admin/items/{item.id}/checkout",
+            data=_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        # Status block exists.
+        body = client.get(f"/admin/items/{item.id}/checkout").text
+        assert 'data-testid="checkout-status-block"' in body
+        assert 'data-testid="checkout-return-form"' in body
+
+        # Find the open checkout id from the rendered form's data attribute.
+        open_co = db_session.execute(
+            select(Checkout).where(Checkout.item_id == item.id)
+        ).scalar_one()
+        # Return it.
+        resp2 = client.post(
+            f"/admin/items/checkouts/{open_co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp2.status_code == 303
+        # Status block is now gone, submit re-appears.
+        body2 = client.get(f"/admin/items/{item.id}/checkout").text
+        assert 'data-testid="checkout-status-block"' not in body2
+        assert 'data-testid="checkout-submit"' in body2
+
+    def test_unique_unit_re_enters_select_after_return(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session,
+            leaf=leaf,
+            tracking_mode=TrackingMode.UNIQUE,
+            sku="U-1",
+        )
+        unit = _make_unit(db_session, item=item, serial="U-A")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        # Check out the unit.
+        resp = client.post(
+            f"/admin/items/{item.id}/checkout",
+            data=_payload(item_unit_id=str(unit.id), csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        # The unit is no longer in the available <select>.
+        body = client.get(f"/admin/items/{item.id}/checkout").text
+        assert f'value="{unit.id}"' not in body
+        # Open-row points at it.
+        open_co = db_session.execute(
+            select(Checkout).where(Checkout.item_id == item.id)
+        ).scalar_one()
+        # Return it.
+        resp2 = client.post(
+            f"/admin/items/checkouts/{open_co.id}/return",
+            data=_return_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp2.status_code == 303
+        # Unit is back in the available select.
+        body2 = client.get(f"/admin/items/{item.id}/checkout").text
+        assert f'value="{unit.id}"' in body2
+
+    def test_status_block_renders_inline_return_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        borrower = _make_user(
+            db_session, email="b@x.test", role=Role.WORKSHOP
+        )
+        co = _open_checkout(db_session, item=item, user=borrower)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        body = client.get(f"/admin/items/{item.id}/checkout").text
+        assert 'data-testid="checkout-status-block"' in body
+        assert 'data-testid="checkout-return-form"' in body
+        assert f'data-checkout-id="{co.id}"' in body
+        assert 'data-testid="checkout-return-submit"' in body
+        assert 'data-testid="checkout-return-note-input"' in body
+        # Action URL points at the right route.
+        assert f"/admin/items/checkouts/{co.id}/return" in body

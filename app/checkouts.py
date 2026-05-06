@@ -1,21 +1,25 @@
-"""Tool / mould check-out flow (C2 — first half of DoD #4).
+"""Tool / mould check-out and check-in flow (C2 + C3 — DoD #4).
 
-Two routes mounted at ``/admin/items``:
+Three routes mounted at ``/admin/items``:
 
 - ``GET  /admin/items/{item_id}/checkout`` — render a check-out form. For a
   unique-tracked item the form includes a ``<select>`` of *available* units
   (active + status=available + not-currently-in-an-open-checkout); for a qty-
   tracked item there's no unit select. The page also surfaces a status block
   listing any open checkouts so the operator can see "this is already out"
-  before they POST.
+  before they POST. Each open-checkout row carries an inline check-in form.
 - ``POST /admin/items/{item_id}/checkout`` — validate, create a ``Checkout``
   row, write a ``checkout.created`` audit row, commit, 303 back with a flash.
+- ``POST /admin/items/checkouts/{checkout_id}/return`` — close an open
+  checkout: set ``returned_at = now()``, optionally append a fresh condition
+  note, write a ``checkout.returned`` audit row, commit, 303 back to the
+  originating ``/checkout`` page with a flash. Manager + Office + Workshop;
+  the actor doesn't need to be the original borrower.
 
-Engine isolation: a checkout is custody, not consumption. The route does NOT
-call the cost engine, does NOT create a ``StockMovement``, and does NOT change
-``item.current_qty`` — a tool that's checked out still belongs to UC. C3 will
-add the symmetric check-in route; C4 the manager "currently out / overdue"
-view.
+Engine isolation: a checkout (open or closed) is custody, not consumption.
+None of the routes call the cost engine, create a ``StockMovement``, or change
+``item.current_qty`` — a tool that's checked out still belongs to UC. C4 will
+add the manager "currently out / overdue" view across all items.
 
 Validation (all 400, before any DB write so a failure is atomic):
 - Item exists (404), not archived (400), ``requires_checkout=True`` (400).
@@ -29,11 +33,19 @@ Validation (all 400, before any DB write so a failure is atomic):
   row is written with ``item_unit_id=None``. At-most-one-open-per-item is
   enforced by a query against the open-checkout set.
 
-Audit shape: ``action="checkout.created"``, ``entity_type="checkout"``,
-``entity_id=checkout.id``, ``before=None``, ``after={item_id, item_unit_id,
-user_id, checked_out_at (ISO), expected_return (ISO | None), condition_note}``.
-The ``expected_return`` is upgraded to a UTC-midnight ``datetime`` so the
-column accepts it; serialised back to ISO for the audit row.
+Audit shapes:
+
+- ``checkout.created``: ``before=None``, ``after={item_id, item_unit_id,
+  user_id, checked_out_at (ISO), expected_return (ISO | None),
+  condition_note}``. The ``expected_return`` is upgraded to a UTC-midnight
+  ``datetime`` so the column accepts it; serialised back to ISO for the audit
+  row.
+- ``checkout.returned``: ``before={returned_at: None, condition_note: <prev>}``,
+  ``after={returned_at: <ISO>, condition_note: <merged>, item_id,
+  item_unit_id, user_id}``. The new note is appended to the existing one
+  (separator ``\\n---\\n``) so the original C2 note isn't lost; a blank new
+  note leaves the existing note untouched. The merged note must fit within the
+  2000-char column else 400.
 """
 
 from __future__ import annotations
@@ -351,6 +363,112 @@ def record_checkout(
         else item.name
     )
     _flash(request, f"Checked out: {label}.")
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/checkout",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/items/checkouts/{checkout_id}/return — close an open checkout
+# ---------------------------------------------------------------------------
+
+
+def _merge_condition_note(prev: str | None, fresh: str | None) -> str | None:
+    """Combine the existing note with a fresh return-time note.
+
+    A blank new note leaves the existing note unchanged. A non-blank new note
+    is appended to the existing one (with a ``\\n---\\n`` separator) so the
+    C2 "what state did this go out in" trail is preserved alongside C3's
+    "what state did it come back in". When there's no existing note, the new
+    note becomes the value as-is.
+    """
+    if fresh is None or fresh == "":
+        return prev
+    if prev is None or prev == "":
+        return fresh
+    return f"{prev}\n---\n{fresh}"
+
+
+@router.post("/checkouts/{checkout_id}/return")
+def return_checkout(
+    request: Request,
+    checkout_id: int,
+    condition_note: str = Form(""),
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> Response:
+    co = db.get(Checkout, checkout_id)
+    if co is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="checkout not found",
+        )
+    if co.returned_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="this check-out is already closed",
+        )
+
+    fresh_note = _parse_optional_note(condition_note)
+    merged = _merge_condition_note(co.condition_note, fresh_note)
+    # The merged value goes through the same column-length rule as the C2 note;
+    # the existing one already passed validation but a long-existing + long-new
+    # could still overflow.
+    if merged is not None and len(merged) > _CONDITION_NOTE_MAX:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"condition_note must be {_CONDITION_NOTE_MAX} characters or fewer"
+            ),
+        )
+
+    item = db.get(Item, co.item_id)
+    if item is None:  # pragma: no cover — checkouts FK to items RESTRICT
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
+        )
+
+    unit_label: str | None = None
+    if co.item_unit_id is not None:
+        unit_row = db.get(ItemUnit, co.item_unit_id)
+        if unit_row is not None:
+            unit_label = unit_row.serial_or_label
+
+    prev_note = co.condition_note
+    now = datetime.now(UTC)
+    co.returned_at = now
+    co.condition_note = merged
+    db.flush()
+
+    record_audit(
+        db,
+        actor=user,
+        action="checkout.returned",
+        entity_type="checkout",
+        entity_id=co.id,
+        before={
+            "returned_at": None,
+            "condition_note": prev_note,
+        },
+        after={
+            "returned_at": now.isoformat(),
+            "condition_note": merged,
+            "item_id": co.item_id,
+            "item_unit_id": co.item_unit_id,
+            "user_id": co.user_id,
+        },
+    )
+    db.commit()
+
+    label = (
+        f"{item.name} (unit {unit_label})"
+        if unit_label is not None
+        else item.name
+    )
+    _flash(request, f"Checked in: {label}.")
     return RedirectResponse(
         url=f"/admin/items/{item.id}/checkout",
         status_code=status.HTTP_303_SEE_OTHER,

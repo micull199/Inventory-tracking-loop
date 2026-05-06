@@ -1,4 +1,4 @@
-"""End-to-end walk for the check-out flow (C2).
+"""End-to-end walk for the check-out + check-in flow (C2 + C3).
 
 A manager creates a flagged unique-tracked item with two units. A workshop
 user navigates via the role-aware nav into the item's read-only view, follows
@@ -11,6 +11,13 @@ and asserts:
   user's email as the holder.
 - The next form render's unit ``<select>`` no longer offers the picked unit
   (it's now in the open-checkouts set, not the available set).
+
+Then the workshop user clicks the inline "Check in" button on the open-row,
+optionally adds a return note, and asserts:
+
+- The flash includes "Checked in" + the item name + the unit serial.
+- The status block is now hidden (no open checkouts left).
+- CHK-A is back in the available ``<select>``.
 
 Cleanup archives the units + item + taxonomy category so downstream walks see
 empty active lists.
@@ -204,6 +211,30 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     options_text = available.inner_text()
     assert "CHK-A" not in options_text
     assert "CHK-B" in options_text
+
+    # Step 6b (C3): workshop checks the unit back in via the inline form on
+    # the open-row, with an optional return note. The note input lives inside
+    # a collapsed <details>; expand it before filling.
+    open_row = ws_page.locator('[data-testid="checkout-open-row"]').first
+    open_row.locator("details summary").click()
+    open_row.get_by_test_id("checkout-return-note-input").fill(
+        "returned clean, ready for next pour"
+    )
+    open_row.get_by_test_id("checkout-return-submit").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/checkout")
+
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Checked in")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Wax mould A")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("CHK-A")
+
+    # Status block is gone — no more open checkouts on this item.
+    expect(ws_page.get_by_test_id("checkout-status-block")).not_to_be_visible()
+
+    # CHK-A is back in the available <select>; CHK-B is still there too.
+    available_after = ws_page.get_by_test_id("checkout-unit-input")
+    options_after = available_after.inner_text()
+    assert "CHK-A" in options_after
+    assert "CHK-B" in options_after
     ws_page.close()
 
     # Step 7: cleanup. Manager signs back in and archives the units, item, cat.
