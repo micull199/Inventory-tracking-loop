@@ -261,6 +261,24 @@ class TestRoleEnforcement:
         resp = client.get("/admin/items")
         assert resp.status_code == 200
 
+    def test_admin_can_create_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """DoD #2: Admin creates items. ``require_role(MANAGER)`` lets Admin
+        through, but the explicit assertion lives here so a future tightening
+        of that rule can't quietly remove Admin's create access."""
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        leaf = _make_leaf(db_session)
+        _login_as(client, admin)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.sku == "RM-001"
+
     def test_workshop_create_is_403(
         self, client: TestClient, db_session: Session
     ) -> None:

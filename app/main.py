@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import field_defs as field_defs_module
+from app import item_units as item_units_module
 from app import items as items_module
 from app import locations as locations_module
 from app import suppliers as suppliers_module
@@ -44,6 +45,7 @@ app.include_router(locations_module.router)
 app.include_router(taxonomy_module.router)
 app.include_router(field_defs_module.router)
 app.include_router(items_module.router)
+app.include_router(item_units_module.router)
 
 
 @app.get("/health")

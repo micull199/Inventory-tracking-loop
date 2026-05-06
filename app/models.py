@@ -522,6 +522,94 @@ class ItemFieldValue(Base):
         )
 
 
+class ItemUnitStatus(enum.StrEnum):
+    """Lifecycle state of one physical unit of a unique-tracked item (I3).
+
+    ``available`` is the normal in-the-workshop state. ``lost`` flags a unit
+    that can't be found / is presumed missing but hasn't been formally retired
+    via archive — useful for inventory audits where the manager wants to keep
+    the unit visible-but-flagged. The "checked out" state is *not* stored on
+    the unit; it's derived from there being an open ``checkouts`` row pointing
+    at the unit (C-series), so this enum stays small and orthogonal.
+    """
+
+    AVAILABLE = "available"
+    LOST = "lost"
+
+
+class ItemUnit(Base):
+    """One physical unit of a unique-tracked item (I3).
+
+    Only items with ``tracking_mode == UNIQUE`` may have unit rows; the route
+    layer enforces that invariant. Each unit has its own serial/label, status,
+    and (optionally) its own location — a single item can have units spread
+    across multiple workshop locations.
+
+    ``serial_or_label`` is unique *within an item* across active and archived
+    rows (same archive-doesn't-free-the-name reasoning as Supplier names). Two
+    different items can legitimately share a serial — labels are item-scoped.
+
+    Soft-deletable; never hard-deleted. Per MISSION §6 the column ``status``
+    lives on this table, not derived from ``checkouts``: that table doesn't
+    exist yet (C-series), and a no-checkout-yet "lost" state is still useful.
+    """
+
+    __tablename__ = "item_units"
+    __table_args__ = (
+        Index(
+            "uq_item_units_item_serial",
+            "item_id",
+            "serial_or_label",
+            unique=True,
+        ),
+        Index("ix_item_units_item_id", "item_id"),
+        Index("ix_item_units_location_id", "location_id"),
+        Index("ix_item_units_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    serial_or_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[ItemUnitStatus] = mapped_column(
+        SAEnum(
+            ItemUnitStatus,
+            name="item_unit_status",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+        default=ItemUnitStatus.AVAILABLE,
+    )
+    location_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("locations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<ItemUnit id={self.id} item_id={self.item_id} "
+            f"serial_or_label={self.serial_or_label!r} status={self.status}>"
+        )
+
+
 class AuditLog(Base):
     """Append-only record of every state-changing action.
 

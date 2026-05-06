@@ -218,6 +218,89 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     )
     expect(restored_row).to_be_visible()
 
+    # Step 11b (I3): flip the item to unique-tracking, then add two units.
+    # Verifies the unique-tracked half of DoD #2.
+    restored_row.get_by_test_id("edit-item").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    mgr_page.get_by_test_id("item-tracking-mode-input").select_option("unique")
+    mgr_page.get_by_test_id("item-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/items")
+
+    # Reopen the edit form and follow the "Manage units" link.
+    item_row_after = mgr_page.locator(
+        '[data-testid="item-row"]', has_text="RM-E2E-001"
+    )
+    item_row_after.get_by_test_id("edit-item").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    mgr_page.get_by_test_id("manage-units").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    expect(mgr_page.get_by_test_id("item-units-empty")).to_be_visible()
+
+    # Create the first unit.
+    mgr_page.get_by_test_id("new-item-unit").click()
+    mgr_page.wait_for_url(
+        lambda u: "/units/new" in u
+        and u.startswith(f"{app_server}/admin/items/")
+    )
+    mgr_page.get_by_test_id("item-unit-serial-input").fill("SN-001")
+    mgr_page.get_by_test_id("item-unit-submit").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    expect(
+        mgr_page.locator('[data-testid="item-unit-row"]', has_text="SN-001")
+    ).to_be_visible()
+
+    # Create the second unit.
+    mgr_page.get_by_test_id("new-item-unit").click()
+    mgr_page.wait_for_url(
+        lambda u: "/units/new" in u
+        and u.startswith(f"{app_server}/admin/items/")
+    )
+    mgr_page.get_by_test_id("item-unit-serial-input").fill("SN-002")
+    mgr_page.get_by_test_id("item-unit-submit").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+
+    # Archive one of the units, switch to archived tab, confirm it's there.
+    sn001_row = mgr_page.locator(
+        '[data-testid="item-unit-row"]', has_text="SN-001"
+    )
+    sn001_row.get_by_test_id("archive-item-unit").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    expect(
+        mgr_page.locator('[data-testid="item-unit-row"]', has_text="SN-001")
+    ).to_have_count(0)
+    mgr_page.get_by_test_id("tab-archived").click()
+    mgr_page.wait_for_url(
+        lambda u: "/units?show=archived" in u
+        and u.startswith(f"{app_server}/admin/items/")
+    )
+    expect(
+        mgr_page.locator('[data-testid="item-unit-row"]', has_text="SN-001")
+    ).to_be_visible()
+
+    # Bounce back to the items list for the cleanup step.
+    mgr_page.goto(f"{app_server}/admin/items")
+    restored_row = mgr_page.locator(
+        '[data-testid="item-row"]', has_text="RM-E2E-001"
+    )
+
     # Step 12: Cleanup — archive the item *and* the taxonomy category so
     # downstream e2e tests (notably ``test_taxonomy_e2e``) start with an empty
     # *active* taxonomy list. The session-scoped DB means the alphabetical

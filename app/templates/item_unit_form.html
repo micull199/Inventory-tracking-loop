@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="{{ back_url }}" data-testid="back-to-units">&larr; Back to units</a></p>
+    <h1>{{ title }}</h1>
+    <p>Item: <strong>{{ item.name }}</strong> ({{ item.sku }})</p>
+
+    <form method="post" action="{{ action }}" data-testid="item-unit-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="serial_or_label">Serial / label <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="serial_or_label" name="serial_or_label" required
+                   value="{{ form.serial_or_label }}"
+                   data-testid="item-unit-serial-input"
+                   maxlength="128">
+        </p>
+
+        <p>
+            <label for="status">Status</label><br>
+            <select id="status" name="status" data-testid="item-unit-status-input">
+                {% for s in statuses %}
+                    <option value="{{ s }}"
+                            {% if form.status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label for="location_id">Location</label><br>
+            <select id="location_id" name="location_id" data-testid="item-unit-location-input">
+                <option value="">— none —</option>
+                {% for l in location_options %}
+                    <option value="{{ l.id }}"
+                            {% if form.location_id == (l.id | string) %}selected{% endif %}>
+                        {{ l.label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="item-unit-submit">
+                {% if unit %}Save changes{% else %}Create unit{% endif %}
+            </button>
+        </p>
+    </form>
+{% endblock %}
