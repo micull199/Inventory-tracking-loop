@@ -29,6 +29,13 @@
         </a>
     </nav>
 
+    <p>
+        <a data-testid="checkouts-admin-csv-link"
+           href="/admin/checkouts?format=csv&amp;show={{ show }}">
+            Download CSV
+        </a>
+    </p>
+
     {% if rows %}
         <table data-testid="checkouts-table">
             <thead>

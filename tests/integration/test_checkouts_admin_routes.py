@@ -23,9 +23,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AuditLog,
     Checkout,
     Item,
     ItemUnit,
@@ -36,6 +38,12 @@ from app.models import (
     User,
     UserStatus,
 )
+
+
+def _audit_rows(db: Session) -> list[AuditLog]:
+    return list(
+        db.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+    )
 
 # ---------------------------------------------------------------------------
 # Test scaffolding
@@ -636,3 +644,315 @@ class TestDashboardOverdueWiring:
         resp = client.get("/admin/dashboard")
         body = resp.text
         assert 'data-testid="dashboard-overdue-checkouts">0<' in body
+
+
+# ---------------------------------------------------------------------------
+# R5h — CSV export on the cross-item checkouts admin list
+# ---------------------------------------------------------------------------
+
+
+class TestCheckoutsAdminCsvRoleEnforcement:
+    """``?format=csv`` inherits the same Manager+Office gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+
+
+class TestCheckoutsAdminCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="checkouts_open.csv"' in cd
+
+    def test_content_disposition_overdue_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv&show=overdue")
+        cd = resp.headers["content-disposition"]
+        assert 'filename="checkouts_overdue.csv"' in cd
+
+
+class TestCheckoutsAdminCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == (
+            "checkout_id,item_id,item_sku,item_name,item_archived,"
+            "unit_serial,holder_email,checked_out_at,expected_return,"
+            "is_overdue,days_overdue\r\n"
+        )
+
+    def test_one_open_qty_tracked_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session, leaf=leaf, sku="QTY-1", name="Polishing kit"
+        )
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        co = _open_checkout(db_session, item=item, user=ws)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(co.id)
+        assert cells[1] == str(item.id)
+        assert cells[2] == "QTY-1"
+        assert cells[3] == "Polishing kit"
+        assert cells[4] == "no"  # item_archived
+        assert cells[5] == ""  # unit_serial empty (qty-tracked)
+        assert cells[6] == "ws@x.test"
+        # checked_out_at is an ISO datetime
+        assert "2026-05-01T09:00:00" in cells[7]
+        assert cells[8] == ""  # expected_return is None
+        assert cells[9] == "no"  # is_overdue
+        assert cells[10] == ""  # days_overdue
+
+    def test_unique_tracked_row_carries_unit_serial(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session,
+            leaf=leaf,
+            sku="MOULD-1",
+            name="Wax mould A",
+            tracking_mode=TrackingMode.UNIQUE,
+        )
+        unit = _make_unit(db_session, item=item, serial="CHK-A")
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        _open_checkout(db_session, item=item, user=ws, item_unit=unit)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        body = resp.text
+        assert "CHK-A" in body
+        # unit_serial cell should be the serial.
+        data_line = body.split("\r\n")[1]
+        cells = data_line.split(",")
+        assert cells[5] == "CHK-A"
+
+    def test_null_user_renders_empty_holder(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        # user=None — represents a hard-deleted holder (FK SET NULL).
+        _open_checkout(db_session, item=item, user=None)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        data_line = resp.text.split("\r\n")[1]
+        cells = data_line.split(",")
+        assert cells[6] == ""  # holder_email empty
+
+    def test_archived_item_renders_yes(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session, leaf=leaf, sku="OLD-1", archived=True
+        )
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        _open_checkout(db_session, item=item, user=ws)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        data_line = resp.text.split("\r\n")[1]
+        cells = data_line.split(",")
+        assert cells[4] == "yes"  # item_archived
+
+    def test_past_due_renders_overdue_yes_and_days(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A checkout with expected_return in the past must surface as overdue."""
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        # Far in the past so the integer days_overdue is unambiguously > 0.
+        past = datetime(2020, 1, 1, tzinfo=UTC)
+        _open_checkout(
+            db_session, item=item, user=ws, expected_return=past
+        )
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        data_line = resp.text.split("\r\n")[1]
+        cells = data_line.split(",")
+        # is_overdue=yes, days_overdue is a positive int.
+        assert cells[9] == "yes"
+        assert cells[10].isdigit()
+        assert int(cells[10]) > 0
+
+    def test_show_overdue_narrows_to_past_due_only(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item_a = _make_item(db_session, leaf=leaf, sku="OD-1")
+        item_b = _make_item(db_session, leaf=leaf, sku="OD-2")
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        # One overdue, one with no due-date.
+        _open_checkout(
+            db_session,
+            item=item_a,
+            user=ws,
+            expected_return=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+        _open_checkout(
+            db_session, item=item_b, user=ws, expected_return=None
+        )
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+
+        # ?show=open → both rows.
+        resp_open = client.get("/admin/checkouts?format=csv&show=open")
+        assert "OD-1" in resp_open.text
+        assert "OD-2" in resp_open.text
+
+        # ?show=overdue → only the past-due row.
+        resp_od = client.get("/admin/checkouts?format=csv&show=overdue")
+        assert "OD-1" in resp_od.text
+        assert "OD-2" not in resp_od.text
+
+    def test_returned_checkouts_excluded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="RET-1")
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        _open_checkout(
+            db_session,
+            item=item,
+            user=ws,
+            returned_at=datetime(2026, 5, 2, 12, 0, tzinfo=UTC),
+        )
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        # Header row only — the returned row is excluded by the base query.
+        assert resp.text.count("\r\n") == 1
+        assert "RET-1" not in resp.text
+
+
+class TestCheckoutsAdminCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="checkouts-admin-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestCheckoutsAdminCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="ws@x.test", role=Role.WORKSHOP)
+        _open_checkout(db_session, item=item, user=ws)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        before = len(_audit_rows(db_session))
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestCheckoutsAdminCsvLink:
+    def test_html_renders_csv_link_with_active_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="checkouts-admin-csv-link"' in body
+        assert "format=csv" in body
+        assert "show=open" in body
+
+    def test_html_renders_csv_link_with_overdue_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts?show=overdue")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="checkouts-admin-csv-link"' in body
+        assert "show=overdue" in body

@@ -30,11 +30,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Checkout, Item, ItemUnit, Role, User
 from app.template_env import templates
@@ -42,6 +43,65 @@ from app.template_env import templates
 router = APIRouter(prefix="/admin/checkouts", tags=["checkouts-admin"])
 
 _VALID_SHOW = ("open", "overdue")
+
+_CHECKOUTS_ADMIN_CSV_HEADERS: list[str] = [
+    "checkout_id",
+    "item_id",
+    "item_sku",
+    "item_name",
+    "item_archived",
+    "unit_serial",
+    "holder_email",
+    "checked_out_at",
+    "expected_return",
+    "is_overdue",
+    "days_overdue",
+]
+
+
+def _csv_rows_for_checkouts(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """Map view-shaped checkout rows to CSV cell values.
+
+    The cells mirror the HTML table one-for-one (8 visual columns) plus three
+    explicit ID/state columns: ``checkout_id`` + ``item_id`` (HTML carries
+    them as ``data-checkout-id`` / ``data-item-id`` attributes — making them
+    columns lets a downstream consumer join), and ``is_overdue`` (the HTML
+    conflates it with ``days_overdue`` into a single "Status" cell; the CSV
+    separates them so a downstream filter can target one or the other).
+
+    ``item_archived`` + ``is_overdue`` render as the literal strings ``"yes"``
+    / ``"no"`` (matching R5/R5b's PO list ``supplier_archived`` and items
+    list ``requires_checkout`` precedent — spreadsheet receivers find
+    yes/no easier to filter on than ``True``/``False``).
+
+    ``unit_serial`` + ``holder_email`` render as empty strings when ``None``
+    (matching ``csv_response``'s coercion). The HTML renders ``—`` for these
+    but a CSV cell of ``—`` would mis-sort against actual values.
+
+    ``expected_return`` is the full datetime (ISO) when set, empty when
+    ``None``. The HTML formats as ``%Y-%m-%d`` but the CSV preserves the
+    full datetime so a downstream consumer can sort precisely.
+
+    ``days_overdue`` is the integer when overdue, empty otherwise. Matches
+    the ``is_overdue=False → days_overdue is None`` pairing in
+    ``_list_open_checkouts``.
+    """
+    return [
+        [
+            r["checkout_id"],
+            r["item_id"],
+            r["item_sku"],
+            r["item_name"],
+            "yes" if r["item_archived"] else "no",
+            r["unit_serial"],
+            r["holder_email"],
+            r["checked_out_at"],
+            r["expected_return"],
+            "yes" if r["is_overdue"] else "no",
+            r["days_overdue"],
+        ]
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -167,16 +227,28 @@ def _list_open_checkouts(
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("")
 def list_checkouts(
     request: Request,
+    format: str = "",
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     """Render the manager-facing currently-out / overdue list."""
     show = _coerce_show(request.query_params.get("show"))
     now = datetime.now(UTC)
     rows = _list_open_checkouts(db, show=show, now=now)
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=f"checkouts_{show}.csv",
+            headers=_CHECKOUTS_ADMIN_CSV_HEADERS,
+            rows=_csv_rows_for_checkouts(rows),
+        )
+    ) is not None:
+        return resp
+
     open_n = _open_count(db)
     overdue_n = overdue_count(db, now=now)
 
