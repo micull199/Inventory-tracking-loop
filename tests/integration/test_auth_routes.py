@@ -71,6 +71,40 @@ class TestAuthMe:
         assert body["role"] == "office"
         assert body["status"] == "active"
 
+    def test_disabled_user_with_valid_session_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Disabling a user must take effect immediately, even mid-session."""
+        user = _make_user(
+            db_session,
+            email="banned@example.com",
+            role=Role.OFFICE,
+            status=UserStatus.ACTIVE,
+        )
+        client.post(
+            "/auth/_dev-login",
+            data={"email": user.email, "sub": user.google_sub},
+            follow_redirects=False,
+        )
+        # Mid-session, an admin disables the account.
+        user.status = UserStatus.DISABLED
+        db_session.commit()
+
+        resp = client.get("/auth/me")
+        assert resp.status_code == 403
+
+    def test_pending_user_with_valid_session_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A pending user (no role yet) shouldn't see the /me payload either."""
+        client.post(
+            "/auth/_dev-login",
+            data={"email": "pending@example.com", "sub": "g-pending"},
+            follow_redirects=False,
+        )
+        resp = client.get("/auth/me")
+        assert resp.status_code == 403
+
 
 # ---------------------------------------------------------------------------
 # Role enforcement on /admin/users
@@ -266,7 +300,12 @@ def test_logout_clears_session(client: TestClient, db_session: Session) -> None:
         follow_redirects=False,
     )
     assert client.get("/auth/me").status_code == 200
+    csrf = client.cookies["csrftoken"]
 
-    resp = client.post("/auth/logout", follow_redirects=False)
+    resp = client.post(
+        "/auth/logout",
+        data={"csrf_token": csrf},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303
     assert client.get("/auth/me").status_code == 401

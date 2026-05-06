@@ -47,6 +47,13 @@ def _login_as(client: TestClient, user: User) -> None:
     assert resp.status_code == 303
 
 
+def _csrf(client: TestClient) -> str:
+    """Return the active CSRF token, bootstrapping the cookie if needed."""
+    if "csrftoken" not in client.cookies:
+        client.get("/")
+    return client.cookies["csrftoken"]
+
+
 def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
     stmt = select(AuditLog).order_by(AuditLog.id)
     if action is not None:
@@ -132,7 +139,7 @@ class TestRoleChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "manager"},
+            data={"role": "manager", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -159,7 +166,7 @@ class TestRoleChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": ""},
+            data={"role": "", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -182,7 +189,7 @@ class TestRoleChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "workshop"},  # same as current
+            data={"role": "workshop", "csrf_token": _csrf(client)},  # same as current
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -199,7 +206,7 @@ class TestRoleChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "wizard"},
+            data={"role": "wizard", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -220,7 +227,7 @@ class TestStatusChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "active"},
+            data={"status": "active", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -245,7 +252,7 @@ class TestStatusChangeAudit:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "active"},  # already active
+            data={"status": "active", "csrf_token": _csrf(client)},  # already active
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -261,7 +268,7 @@ class TestStatusChangeAudit:
 
         resp = client.post(
             f"/admin/users/{admin.id}/status",
-            data={"status": "disabled"},
+            data={"status": "disabled", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400

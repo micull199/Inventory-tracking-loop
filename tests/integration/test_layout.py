@@ -1,0 +1,142 @@
+"""Integration tests for the base layout: role-aware nav, accessibility, HTMX.
+
+The layout has to:
+- Show the role-appropriate primary nav (e.g. Users link only for admins).
+- Mark the current page with ``aria-current="page"`` so assistive tech can
+  announce it.
+- Render a "skip to content" link for keyboard users.
+- Load HTMX once globally (no duplicate <script> tags per page).
+- Render the sign-out form (with CSRF) only when there's a current user.
+"""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.models import Role, User, UserStatus
+
+
+def _make_user(
+    db: Session,
+    *,
+    email: str,
+    role: Role | None,
+    status: UserStatus = UserStatus.ACTIVE,
+) -> User:
+    user = User(
+        google_sub=f"sub-{email}",
+        email=email,
+        name=email.split("@")[0].title(),
+        role=role,
+        status=status,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _login_as(client: TestClient, user: User) -> None:
+    client.post(
+        "/auth/_dev-login",
+        data={"email": user.email, "sub": user.google_sub},
+        follow_redirects=False,
+    )
+
+
+class TestBaseLayoutAccessibility:
+    def test_skip_link_is_first_focusable_element(self, client: TestClient) -> None:
+        resp = client.get("/")
+        assert resp.status_code == 200
+        # The skip link must precede the header so it's the first tab stop.
+        skip_idx = resp.text.find('class="skip-link"')
+        header_idx = resp.text.find("<header")
+        assert skip_idx > 0
+        assert skip_idx < header_idx
+
+    def test_skip_link_targets_main_content(self, client: TestClient) -> None:
+        resp = client.get("/")
+        assert 'href="#main"' in resp.text
+        assert 'id="main"' in resp.text
+
+    def test_htmx_script_is_loaded(self, client: TestClient) -> None:
+        resp = client.get("/")
+        assert "htmx.org" in resp.text
+
+    def test_htmx_script_loaded_only_once(self, client: TestClient) -> None:
+        resp = client.get("/")
+        # Tolerate version bumps; just count the import.
+        assert resp.text.count("unpkg.com/htmx.org") == 1
+
+
+class TestRoleAwareNav:
+    def test_anonymous_has_no_primary_nav(self, client: TestClient) -> None:
+        resp = client.get("/")
+        # Header is shown unconditionally, but the role-gated primary nav
+        # should NOT render for an anonymous visitor.
+        assert 'data-testid="primary-nav"' not in resp.text
+
+    def test_pending_user_has_no_primary_nav(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Pending = signed in but not yet activated. They get the holding page,
+        # not the workshop nav.
+        _login_as(
+            client,
+            _make_user(
+                db_session,
+                email="pending@x.test",
+                role=None,
+                status=UserStatus.PENDING,
+            ),
+        )
+        resp = client.get("/")
+        assert 'data-testid="primary-nav"' not in resp.text
+
+    def test_workshop_nav_excludes_users_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _login_as(
+            client,
+            _make_user(db_session, email="w@x.test", role=Role.WORKSHOP),
+        )
+        resp = client.get("/")
+        assert 'data-testid="primary-nav"' in resp.text
+        assert 'data-testid="nav-users"' not in resp.text
+
+    def test_admin_nav_includes_users_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="primary-nav"' in resp.text
+        assert 'data-testid="nav-users"' in resp.text
+        assert 'href="/admin/users"' in resp.text
+
+    def test_aria_current_set_on_active_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/admin/users")
+        # The Users link is the active page → aria-current="page".
+        snippet = resp.text[resp.text.find('data-testid="nav-users"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
+
+class TestHeaderSignOut:
+    def test_anonymous_has_no_signout_form(self, client: TestClient) -> None:
+        resp = client.get("/")
+        assert 'action="/auth/logout"' not in resp.text
+
+    def test_signed_in_user_sees_signout_form_with_csrf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        user = _make_user(db_session, email="signed@x.test", role=Role.OFFICE)
+        _login_as(client, user)
+        resp = client.get("/")
+        assert 'action="/auth/logout"' in resp.text
+        assert 'name="csrf_token"' in resp.text
+        assert 'data-testid="sign-out"' in resp.text

@@ -21,6 +21,7 @@
                     <td>{{ u.name }}</td>
                     <td>
                         <form method="post" action="/admin/users/{{ u.id }}/role" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <select name="role" data-testid="role-select" {% if u.id == current_user.id %}disabled{% endif %}>
                                 <option value="" {% if u.role is none %}selected{% endif %}>— (no role)</option>
                                 {% for r in roles %}
@@ -34,6 +35,7 @@
                     </td>
                     <td>
                         <form method="post" action="/admin/users/{{ u.id }}/status" style="display:inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <select name="status" data-testid="status-select" {% if u.id == current_user.id %}disabled{% endif %}>
                                 {% for s in statuses %}
                                     <option value="{{ s.value }}" {% if u.status == s %}selected{% endif %}>{{ s.value }}</option>

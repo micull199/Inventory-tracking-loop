@@ -15,21 +15,32 @@ from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
+from app.csrf import CSRFMiddleware, csrf_context_processor
 from app.db import get_session
 from app.models import Role, User, UserStatus
 
 app = FastAPI(title="UC Inventory")
 
+# Middleware order matters: the *last* added is the outermost. We want CSRF to
+# run first (outermost) so it can short-circuit forged requests before the
+# session cookie is even decoded. SessionMiddleware is added first, then CSRF.
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.secret_key,
     same_site="lax",
     https_only=settings.app_env == "prod",
 )
+app.add_middleware(
+    CSRFMiddleware,
+    secure=settings.app_env == "prod",
+)
 
 app.include_router(auth_router)
 
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates = Jinja2Templates(
+    directory=str(Path(__file__).parent / "templates"),
+    context_processors=[csrf_context_processor],
+)
 
 
 @app.get("/health")

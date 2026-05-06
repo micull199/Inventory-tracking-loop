@@ -45,6 +45,13 @@ def _login_as(client: TestClient, user: User) -> None:
     assert resp.status_code == 303
 
 
+def _csrf(client: TestClient) -> str:
+    """Return the active CSRF token, bootstrapping the cookie if needed."""
+    if "csrftoken" not in client.cookies:
+        client.get("/")
+    return client.cookies["csrftoken"]
+
+
 class TestAdminSetRole:
     def test_admin_assigns_role_to_pending_user(
         self, client: TestClient, db_session: Session
@@ -57,7 +64,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "manager"},
+            data={"role": "manager", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -81,7 +88,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": ""},
+            data={"role": "", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -100,7 +107,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "wizard"},
+            data={"role": "wizard", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -115,7 +122,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             f"/admin/users/{admin.id}/role",
-            data={"role": "workshop"},
+            data={"role": "workshop", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -133,7 +140,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             f"/admin/users/{admin.id}/role",
-            data={"role": ""},
+            data={"role": "", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -148,7 +155,7 @@ class TestAdminSetRole:
 
         resp = client.post(
             "/admin/users/9999/role",
-            data={"role": "workshop"},
+            data={"role": "workshop", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 404
@@ -168,7 +175,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "active"},
+            data={"status": "active", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -187,7 +194,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "disabled"},
+            data={"status": "disabled", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -206,7 +213,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "snoozing"},
+            data={"status": "snoozing", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -224,7 +231,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "active"},
+            data={"status": "active", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -242,7 +249,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{admin.id}/status",
-            data={"status": "disabled"},
+            data={"status": "disabled", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -260,7 +267,7 @@ class TestAdminSetStatus:
 
         resp = client.post(
             f"/admin/users/{admin.id}/status",
-            data={"status": "pending"},
+            data={"status": "pending", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -278,7 +285,7 @@ class TestNonAdminCannotMutate:
 
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "admin"},
+            data={"role": "admin", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 403
@@ -299,7 +306,7 @@ class TestNonAdminCannotMutate:
 
         resp = client.post(
             f"/admin/users/{target.id}/status",
-            data={"status": "disabled"},
+            data={"status": "disabled", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 403
@@ -307,10 +314,13 @@ class TestNonAdminCannotMutate:
     def test_unauthenticated_post_is_401(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """Anon user with valid CSRF gets 401 — auth check runs after CSRF."""
         target = _make_user(db_session, email="t@x.test")
+        # GET first to bootstrap a CSRF token; without that the request would
+        # 403 on CSRF before reaching the auth check.
         resp = client.post(
             f"/admin/users/{target.id}/role",
-            data={"role": "admin"},
+            data={"role": "admin", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 401

@@ -131,6 +131,22 @@ def require_user(current_user: User | None = Depends(get_current_user)) -> User:
     return current_user
 
 
+def require_active_user(current_user: User = Depends(require_user)) -> User:
+    """Reject signed-in but non-active users (pending, disabled) with a 403.
+
+    Routes that should reflect *current* account state — including any future
+    user-data endpoint — should depend on this rather than ``require_user``.
+    Without it, a user disabled mid-session continues to read their own
+    profile via a still-valid cookie until they sign out.
+    """
+    if current_user.status is not UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account not active",
+        )
+    return current_user
+
+
 def require_role(*allowed: Role):  # type: ignore[no-untyped-def]
     """Build a FastAPI dependency that requires the user to hold one of ``allowed``.
 
@@ -224,7 +240,7 @@ async def logout(request: Request) -> Response:
 
 
 @router.get("/me")
-async def me(current_user: User = Depends(require_user)) -> JSONResponse:
+async def me(current_user: User = Depends(require_active_user)) -> JSONResponse:
     return JSONResponse(
         {
             "id": current_user.id,
