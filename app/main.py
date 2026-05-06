@@ -18,6 +18,7 @@ from app import locations as locations_module
 from app import movements as movements_module
 from app import purchase_orders as purchase_orders_module
 from app import reorder as reorder_module
+from app import stock_takes as stock_takes_module
 from app import suppliers as suppliers_module
 from app import taxonomy as taxonomy_module
 from app.audit import record_audit
@@ -59,6 +60,7 @@ app.include_router(reorder_module.router)
 app.include_router(purchase_orders_module.draft_router)
 app.include_router(purchase_orders_module.list_router)
 app.include_router(dashboard_module.router)
+app.include_router(stock_takes_module.router)
 
 
 @app.get("/health")

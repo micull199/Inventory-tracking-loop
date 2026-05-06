@@ -646,7 +646,9 @@ class StockMovement(Base):
 
     ``po_id`` carries the FK to ``purchase_orders.id`` (added in migration
     0012 by PO5 — the receive path is what activates the link).
-    ``stock_take_id`` is still a plain integer column (no FK) until ST1 lands.
+    ``stock_take_id`` carries the FK to ``stock_takes.id`` (added in migration
+    0014 by ST1 — the receive path will activate the link in ST3 when stock
+    takes start writing adjustment movements).
     """
 
     __tablename__ = "stock_movements"
@@ -692,7 +694,11 @@ class StockMovement(Base):
         ForeignKey("purchase_orders.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    stock_take_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stock_take_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("stock_takes.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -1047,6 +1053,134 @@ class PurchaseOrderLine(Base):
         return (
             f"<PurchaseOrderLine id={self.id} po_id={self.po_id} "
             f"item_id={self.item_id} qty_ordered={self.qty_ordered}>"
+        )
+
+
+class StockTake(Base):
+    """A scheduled stock-take session (ST1+).
+
+    Lifecycle is **derived from timestamps** (no status enum, matching MISSION
+    §6 which lists only the timestamps):
+
+    - ``scheduled``    — both ``started_at`` and ``completed_at`` are NULL.
+    - ``in_progress``  — ``started_at`` is set, ``completed_at`` is NULL.
+    - ``completed``    — ``completed_at`` is set.
+
+    Scope is mutually exclusive across ``scope_node_id`` and
+    ``scope_location_id`` — at most one may be set; both null = "all items".
+    The XOR invariant is enforced in the route layer (same posture as taxonomy
+    leaf invariants and item-units qty-vs-unique rule); a DB-level CHECK
+    constraint is a future tightening pass.
+
+    ``created_by`` is FK SET NULL (a user soft-delete shouldn't cascade through
+    history). ``scope_node_id`` and ``scope_location_id`` are FK RESTRICT —
+    once a stock take has been scheduled against a category / location, that
+    parent cannot be hard-deleted (soft-archive is the v1 path). No
+    ``archived_at``: a stock take row is part of the audit trail; corrections
+    are made via new movements (ST3+).
+
+    ST1 only writes the ``scheduled`` state. ST2 will add the start /
+    in-progress / counting flow; ST3 will add the commit-variances-as-
+    adjustments flow that flips the row to ``completed``.
+    """
+
+    __tablename__ = "stock_takes"
+    __table_args__ = (
+        Index("ix_stock_takes_scope_node_id", "scope_node_id"),
+        Index("ix_stock_takes_scope_location_id", "scope_location_id"),
+        Index("ix_stock_takes_scheduled_for", "scheduled_for"),
+        Index("ix_stock_takes_completed_at", "completed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope_node_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    scope_location_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("locations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    scheduled_for: Mapped[date] = mapped_column(Date, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<StockTake id={self.id} scheduled_for={self.scheduled_for} "
+            f"node={self.scope_node_id} location={self.scope_location_id} "
+            f"started={self.started_at is not None} "
+            f"completed={self.completed_at is not None}>"
+        )
+
+
+class StockTakeLine(Base):
+    """One item-line on a stock-take session (ST2+).
+
+    Created when the stock-take starts (ST2 captures the current
+    ``item.current_qty`` into ``system_qty`` so a later edit to current_qty
+    doesn't shift the variance). ``counted_qty`` is populated as the operator
+    works through the count; ``variance = counted_qty - system_qty`` is
+    populated on commit. ``committed`` flips True once ST3 has written the
+    paired adjustment movement.
+
+    ST1 doesn't write any rows here; the table exists so ST2 can land
+    without a follow-up migration.
+    """
+
+    __tablename__ = "stock_take_lines"
+    __table_args__ = (
+        Index("ix_stock_take_lines_stock_take_id", "stock_take_id"),
+        Index("ix_stock_take_lines_item_id", "item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    stock_take_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("stock_takes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    system_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    counted_qty: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4), nullable=True
+    )
+    variance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    committed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<StockTakeLine id={self.id} stock_take_id={self.stock_take_id} "
+            f"item_id={self.item_id} system_qty={self.system_qty} "
+            f"counted_qty={self.counted_qty} committed={self.committed}>"
         )
 
 

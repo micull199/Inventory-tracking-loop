@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Stock takes — UC Inventory{% endblock %}
+{% block content %}
+    <h1 data-testid="stock-takes-heading">Stock takes</h1>
+
+    <p>
+        <a href="/admin/stock-takes/new"
+           class="button"
+           data-testid="stock-takes-new-link">
+            New stock take
+        </a>
+    </p>
+
+    <nav aria-label="Filter">
+        <a href="/admin/stock-takes?show=open"
+           data-testid="filter-open"
+           {% if show == "open" %}aria-current="page"{% endif %}>
+            Open
+        </a>
+        &middot;
+        <a href="/admin/stock-takes?show=completed"
+           data-testid="filter-completed"
+           {% if show == "completed" %}aria-current="page"{% endif %}>
+            Completed
+        </a>
+    </nav>
+
+    {% if rows %}
+        <table data-testid="stock-takes-table">
+            <thead>
+                <tr>
+                    <th>Scope</th>
+                    <th>Scheduled for</th>
+                    <th>Status</th>
+                    <th>Created by</th>
+                    <th>Created at</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                    <tr data-testid="stock-takes-row"
+                        data-stock-take-id="{{ row.id }}"
+                        data-status="{{ row.status }}">
+                        <td data-testid="stock-takes-row-scope">{{ row.scope_label }}</td>
+                        <td data-testid="stock-takes-row-scheduled-for">
+                            {{ row.scheduled_for.isoformat() }}
+                        </td>
+                        <td>
+                            <span data-testid="stock-takes-row-status-badge">
+                                {{ row.status }}
+                            </span>
+                        </td>
+                        <td data-testid="stock-takes-row-created-by">
+                            {% if row.created_by_email %}{{ row.created_by_email }}{% else %}—{% endif %}
+                        </td>
+                        <td data-testid="stock-takes-row-created-at">
+                            {{ row.created_at.strftime("%Y-%m-%d %H:%M") }}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="stock-takes-empty">
+            {% if show == "completed" %}
+                No completed stock takes yet.
+            {% else %}
+                No stock takes scheduled or in progress.
+            {% endif %}
+        </p>
+    {% endif %}
+{% endblock %}
