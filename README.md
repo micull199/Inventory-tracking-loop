@@ -120,7 +120,14 @@ Never commit `.env`. Only `.env.example` is in version control.
 
 ### Configuring Google SSO
 
-_TODO: walkthrough of creating an OAuth client in Google Cloud, authorised redirect URI, hosted-domain restriction, and assigning the first Admin user._
+1. **Create an OAuth client.** Google Cloud Console → APIs & Services → Credentials → "Create Credentials" → "OAuth client ID" → Web application. Add an authorised redirect URI of `${APP_BASE_URL}/auth/google/callback` (e.g. `http://localhost:8000/auth/google/callback` for dev).
+2. **Save the client ID + secret** into `.env` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Restart the app.
+3. **Optional: lock to your Workspace domain.** Set `GOOGLE_HOSTED_DOMAIN=your-domain.example` to refuse sign-ins from outside that domain. (Enforced by Google during the OAuth flow.)
+4. **Seed the first admin.** Set `BOOTSTRAP_ADMIN_EMAIL=you@your-domain.example` in `.env`. The first user to sign in matching that email is auto-promoted to Admin (active). Every subsequent user lands in `pending` and must be assigned a role by an existing Admin via the user-management UI. Once you've signed in once, you can clear `BOOTSTRAP_ADMIN_EMAIL`.
+
+Until that first Admin signs in, the app will accept Google sign-ins but every user (including you) will see the "account pending approval" page. After the seed, manage roles from `/admin/users` (admin-only).
+
+> **Dev/test backdoor:** when `APP_ENV=dev` or `APP_ENV=test`, the app exposes `POST /auth/_dev-login` (form-encoded `email`, `name`, optional `sub`) which signs the given user in without going through Google. This is how the Playwright suite logs in. It is hard-disabled when `APP_ENV=prod`.
 
 ---
 

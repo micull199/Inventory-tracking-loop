@@ -1,8 +1,21 @@
+"""End-to-end conftest: spawn a real uvicorn against an isolated test DB.
+
+A fresh sqlite file is created per session, ``alembic upgrade head`` runs
+against it, then uvicorn is started in a subprocess with the test env vars.
+We use ``APP_ENV=test`` so the dev-login backdoor route is mounted (Playwright
+uses it to sign in without going through Google).
+"""
+
+from __future__ import annotations
+
+import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -21,10 +34,44 @@ def _wait_for_port(host: str, port: int, timeout: float = 10.0) -> None:
 @pytest.fixture(scope="session")
 def app_server(unused_tcp_port_factory: object) -> Iterator[str]:
     """Boot a real uvicorn process for the test session and yield its base URL."""
-    # cast: pytest-asyncio types this loosely; we know it's callable.
     factory = unused_tcp_port_factory  # type: ignore[assignment]
     port: int = factory()  # type: ignore[operator]
     host = "127.0.0.1"
+
+    project_root = Path(__file__).resolve().parents[2]
+    tmp = tempfile.TemporaryDirectory()
+    db_path = Path(tmp.name) / "e2e.db"
+    db_url = f"sqlite:///{db_path}"
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "APP_ENV": "test",
+            "SECRET_KEY": "e2e-secret-key-for-tests-only",
+            "DATABASE_URL": db_url,
+            "APP_BASE_URL": f"http://{host}:{port}",
+            # Explicitly leave Google client creds blank; e2e uses /auth/_dev-login.
+            "GOOGLE_CLIENT_ID": "",
+            "GOOGLE_CLIENT_SECRET": "",
+            "BOOTSTRAP_ADMIN_EMAIL": "",
+        }
+    )
+
+    # Apply migrations against the test DB before starting the server.
+    migrate = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if migrate.returncode != 0:
+        tmp.cleanup()
+        raise RuntimeError(
+            f"alembic upgrade head failed (rc={migrate.returncode}):\n"
+            f"stdout:\n{migrate.stdout}\nstderr:\n{migrate.stderr}"
+        )
 
     proc = subprocess.Popen(  # noqa: S603 -- args list, no shell
         [
@@ -39,6 +86,8 @@ def app_server(unused_tcp_port_factory: object) -> Iterator[str]:
             "--log-level",
             "warning",
         ],
+        cwd=project_root,
+        env=env,
     )
     try:
         _wait_for_port(host, port)
@@ -50,3 +99,4 @@ def app_server(unused_tcp_port_factory: object) -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+        tmp.cleanup()

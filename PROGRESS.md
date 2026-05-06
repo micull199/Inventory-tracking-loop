@@ -27,19 +27,19 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current state
 
-**Iteration:** 1 (complete)
-**Last commit:** 884cd46 — slice: F1 — Project skeleton and verification harness
+**Iteration:** 2 (complete)
+**Last commit:** _will be set after this commit; see Completed log_
 **Branch:** main
-**Tests:** harness established. `make check` green: ruff ✓, mypy ✓, pytest (2 unit + 1 e2e) ✓.
-**Definition-of-Done items ticked:** 0 / 12 (#10 and #11 partially advanced; not ticked — no auth, no real features yet)
+**Tests:** `make check` green: ruff ✓, mypy ✓, pytest 27 unit+integration ✓, Playwright 3 e2e ✓.
+**Definition-of-Done items ticked:** 0 / 12 (DoD #1 and #9 advanced — sign-in + pending state + server-side role enforcement all work; not ticked because the admin "assign role" UI doesn't exist yet, so the full DoD #1 happy path is not end-to-end demoable yet).
 
 **Repo health:**
-- ruff: clean
-- mypy: clean (strict on `app/`)
-- pytest unit + integration: 2 passing (1 real, 1 placeholder)
-- Playwright e2e: 1 passing (chromium)
+- ruff: clean (`app tests`)
+- mypy: clean (strict on `app/`, 6 source files)
+- pytest unit + integration: 27 passing
+- Playwright e2e: 3 passing (chromium)
 
-**What's running:** FastAPI app with `/health` endpoint. SQLAlchemy + Alembic wired. SQLite dev DB.
+**What's running:** FastAPI app with sessions + Google SSO (Authlib) + dev-login backdoor (test/dev only). Index page that branches anonymous / pending / welcome. Admin-only `/admin/users` JSON listing. SQLAlchemy `User` + `Role`/`UserStatus` enums backed by an Alembic-managed `users` table.
 
 **Known broken:** none.
 
@@ -47,22 +47,20 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current slice
 
-*(none — slice F1 just shipped, see Completed log)*
+*(none — slice F2 just shipped, see Completed log)*
 
 ---
 
 ## Next slice
 
-**Slice name:** F2 — Google SSO login + pending-state user model + role enum
-**Targets DoD item(s):** 1, 9
-**Why this next:** Every other Manager/Office/Workshop-gated slice depends on roles existing and being enforceable. SSO + the `users` table + the `Role` enum + a `require_role` dependency unlock all of them.
+**Slice name:** F2.1 — Admin user-management UI: assign role, activate/disable users
+**Targets DoD item(s):** 1 (will tick once this lands and the round-trip is e2e demoable)
+**Why this next:** F2 created pending users but there's no way for an admin to approve them, so DoD #1 isn't fully closed. This slice is the smallest follow-on that closes it.
 **Sketch:**
-- `users` model: id, google_sub, email, name, role (enum: admin/manager/office/workshop), status (pending/active/disabled), timestamps.
-- First Alembic migration creates `users`.
-- Authlib OAuth flow: `/auth/google/login` → redirect → `/auth/google/callback` → upsert user (pending unless email matches `BOOTSTRAP_ADMIN_EMAIL`).
-- Session middleware (itsdangerous, signed cookies).
-- `current_user` dependency + `require_role(*roles)` factory. Pending users get a holding page, not 403.
-- Tests: unit for the role-check helper; integration for OAuth callback (mock the Google response); Playwright for the login → pending-page flow.
+- HTML page at `/admin/users` (replace JSON-only response, or add an HTML variant gated on `Accept`).
+- POST endpoints: assign-role + toggle-status. Server-side role check stays.
+- Audit log isn't built yet (F3) — for now we trust the existing `request.state` actor; F3 will hook this in retroactively without changing the route shape.
+- Tests: integration (admin can promote pending → active manager; non-admin POST gets 403; admin can't disable themselves — guardrail). Playwright: admin signs in via dev-login → opens admin users → assigns Workshop to a pending user → that user reloads and sees the welcome page.
 
 ---
 
@@ -162,6 +160,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
+| 2 | F2 — Google SSO login + pending-state user model + role enum | _pending — see commit_ | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
 | 1 | F1 — Project skeleton and verification harness | `884cd46` | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
 
 ---
@@ -170,10 +169,12 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 *(Carry forward weaknesses noted during iteration self-critiques but not yet addressed. Clear an entry when it gets fixed in a later slice. Don't let this get longer than ~10 items — if it does, something has gone off the rails.)*
 
-- **F1 / config**: `secret_key` has a dev default `"change-me"` with a `noqa: S105`. Acceptable for local-only F1 but must be required (no default → pydantic raises) before the auth slice (F2) ships. Loosely enforced in prod by env override; tighten when SECRET_KEY actually does something.
-- **F1 / e2e fixture**: `tests/e2e/conftest.py` boots uvicorn with `sys.executable -m uvicorn`. Works because pytest itself runs in the venv, but the fixture has no readiness probe beyond TCP-port-open — an early-startup crash that still binds the port would make us hang. Revisit if e2e flakes appear.
-- **F1 / no CSRF middleware yet**: MISSION §4 mandates CSRF on mutating routes. Health is GET-only so this slice is fine, but the dependency must land in F2/F3 alongside session middleware before any POST route exists.
-- **F1 / no template/static infra**: Jinja2/HTMX scaffolding deferred to slice F4 ("base layout"). Health is JSON-only, so deferral is intentional, not an oversight.
+- **F2 / no CSRF on POSTs.** `POST /auth/logout` and (in dev/test) `POST /auth/_dev-login` are not CSRF-protected. The session cookie uses `SameSite=Lax`, which mitigates most cross-origin POSTs, but is not a substitute. Must land a CSRF middleware (likely a per-session token rendered into forms via Jinja) before the first user-facing form-post slice ships (S1/S2/F4). Reason this isn't blocking now: logout is a no-op for an attacker, and `/_dev-login` is gated on non-prod environments.
+- **F2 / dev-login backdoor exists in `dev` too, not just `test`.** Useful for local hacking, but it is a real backdoor: anyone who can reach the dev server can sign in as anyone. Document this in the README (done) and consider tightening to `test`-only (or requiring an env-var token) once we have a real dev workflow.
+- **F2 / migration's CHECK constraint duplicates the enum members.** `migrations/versions/0001_create_users.py` hard-codes `('admin','manager','office','workshop')` and `('pending','active','disabled')`. Adding a new `Role` member without a migration update would silently make the model accept values the DB rejects. Tests would catch it (any insert with the new value would fail), but consider dropping the CHECK in favour of just trusting the SAEnum, or generating the constraint from the enum at migration time.
+- **F2 / no audit on user creation/promotion.** Slice F3 (audit log infrastructure) will retroactively wire this in. Acceptable — DoD #8 says audit works for "every state change", which is verified by F3's tests, not F2's.
+- **F2 / templates lack accessibility polish.** No skip-link, no focus styles, no aria-current on nav. Slice F4 (base layout pass) is the home for this. The pages are keyboard-navigable as-is (one link per page) so usability is acceptable.
+- **F1 / e2e fixture readiness probe (carried).** `tests/e2e/conftest.py` still uses TCP-port-open as readiness. Hasn't flaked in F2; revisit only if it does.
 
 ---
 
@@ -200,4 +201,9 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 - **Alembic env.py reads `DATABASE_URL` from `app.config.settings`**, not from `alembic.ini`. Single source of truth across dev/prod, and means `alembic` invocations honour `.env` automatically.
 - **`render_as_batch=True` on SQLite** in `migrations/env.py` so future ALTER TABLE migrations work on SQLite (which doesn't support most ALTER ops natively). Postgres ignores the flag.
 - **e2e fixture spawns a real uvicorn subprocess** rather than using ASGI in-process. Trades startup cost (~2s) for fidelity to the production transport. Acceptable while the e2e suite is small.
-- **`tests/integration/test_placeholder.py`** exists only to keep `pytest tests/unit tests/integration` from exiting non-zero (no-tests-collected). Delete once the first real integration test lands in F2.
+- **e2e suite uses an isolated temp SQLite file + runs `alembic upgrade head` before booting uvicorn** (rather than `Base.metadata.create_all`), so e2e exercises the actual migration path. This is what caught the enum-name-vs-value mismatch in F2.
+- **Enum columns store enum values, not names** — `SAEnum(..., values_callable=lambda cls: [e.value for e in cls])`. Without this, SAEnum stores the Python member name (e.g. `"PENDING"`) which doesn't match our migration's lowercase CHECK constraints. Apply the same `values_callable` to every future enum column.
+- **Users use a separate `status` enum (pending/active/disabled) and a *nullable* `role`**, rather than overloading role with a `pending` value. Reason: status is orthogonal to role — a Manager can be temporarily disabled without losing their assigned role. This costs one column and keeps the role enum honest.
+- **Bootstrap admin promotion is one-shot.** Once any admin exists, `BOOTSTRAP_ADMIN_EMAIL` matches no longer auto-promote. Without this, leaving the env var set in prod would silently grant admin to anyone matching it on first sign-in.
+- **`require_role` blocks pending and disabled users even if their role would otherwise match.** Status overrides role for access decisions. Tested explicitly so future refactors don't quietly weaken this.
+- **Dev-login backdoor `POST /auth/_dev-login`** is mounted in `dev` and `test` only, gated by `settings.app_env`. Used by the Playwright suite (and local dev) to sign in without a real Google round-trip. Hard-disabled in prod by the env check at module import + a redundant runtime check inside the handler.
