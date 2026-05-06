@@ -319,3 +319,138 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     mgr_page.close()
     if mgr_context is not context:
         mgr_context.close()
+
+
+def test_admin_creates_qty_then_unique_item_end_to_end(
+    context: BrowserContext, app_server: str
+) -> None:
+    """DoD #2: Admin creates an item end-to-end (qty → flip to unique → unit).
+
+    Companion to ``test_manager_creates_views_archives_and_unarchives_an_item``.
+    The manager walk already covers I2 (custom fields) + I3 (multi-unit). This
+    walk's narrow job is to prove an *Admin* (not Manager) can drive one full
+    create + manage + archive cycle through the UI — the manual-sanity-check
+    that backs DoD #2 alongside the Admin integration coverage in
+    ``tests/integration/test_items_routes.py::TestRoleEnforcement`` and
+    ``::test_item_units_routes.py::TestUnitsRoleEnforcement``.
+    """
+    # Step 1: Admin signs in. Bootstrap promotion is one-shot per session DB
+    # (safe to invoke even if an earlier e2e file already fired it).
+    admin_context = context.browser.new_context() if context.browser else context
+    admin_page = admin_context.new_page()
+    _dev_login(
+        admin_page,
+        app_server,
+        email="admin@uc.test",
+        sub="g-e2e-admin",
+        name="Seed Admin",
+    )
+    expect(admin_page.get_by_test_id("welcome")).to_be_visible()
+
+    # Step 2: Admin creates a category named distinctly from the manager walk's
+    # "Items E2E Cat" so the shared session DB doesn't collide.
+    admin_page.goto(f"{app_server}/admin/taxonomy")
+    admin_page.get_by_test_id("new-taxonomy").click()
+    admin_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
+    admin_page.get_by_test_id("taxonomy-name-input").fill("Admin Items E2E Cat")
+    admin_page.get_by_test_id("taxonomy-submit").click()
+    admin_page.wait_for_url(f"{app_server}/admin/taxonomy")
+
+    # Step 3: Click into Items via the nav. List is empty at this point because
+    # the manager walk's cleanup archives its row.
+    admin_page.get_by_test_id("nav-items").click()
+    admin_page.wait_for_url(lambda u: u.startswith(f"{app_server}/admin/items"))
+    expect(admin_page.get_by_test_id("items-empty")).to_be_visible()
+
+    # Step 4: Open the new-item form *without* a ?node_id= deep-link — admin
+    # picks the category from the select. This exercises the unfiltered path
+    # that the manager walk skips. The category has no field defs, so no
+    # custom-field block renders and no required-field 400 fires.
+    admin_page.get_by_test_id("new-item").click()
+    admin_page.wait_for_url(f"{app_server}/admin/items/new")
+    admin_page.get_by_test_id("item-sku-input").fill("AD-E2E-001")
+    admin_page.get_by_test_id("item-name-input").fill("Admin item (e2e)")
+    admin_page.get_by_test_id("item-category-input").select_option(
+        label="Admin Items E2E Cat"
+    )
+    admin_page.get_by_test_id("item-unit-input").fill("ea")
+    admin_page.get_by_test_id("item-submit").click()
+    admin_page.wait_for_url(f"{app_server}/admin/items")
+
+    expect(admin_page.get_by_test_id("flash")).to_contain_text("Admin item")
+    item_row = admin_page.locator(
+        '[data-testid="item-row"]', has_text="AD-E2E-001"
+    )
+    expect(item_row).to_be_visible()
+    expect(item_row.get_by_test_id("item-category")).to_have_text(
+        "Admin Items E2E Cat"
+    )
+
+    # Step 5: Re-open the item, flip to unique tracking, then add one unit via
+    # the Manage units link.
+    item_row.get_by_test_id("edit-item").click()
+    admin_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    admin_page.get_by_test_id("item-tracking-mode-input").select_option("unique")
+    admin_page.get_by_test_id("item-submit").click()
+    admin_page.wait_for_url(f"{app_server}/admin/items")
+
+    item_row_after = admin_page.locator(
+        '[data-testid="item-row"]', has_text="AD-E2E-001"
+    )
+    item_row_after.get_by_test_id("edit-item").click()
+    admin_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    admin_page.get_by_test_id("manage-units").click()
+    admin_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    expect(admin_page.get_by_test_id("item-units-empty")).to_be_visible()
+
+    admin_page.get_by_test_id("new-item-unit").click()
+    admin_page.wait_for_url(
+        lambda u: "/units/new" in u
+        and u.startswith(f"{app_server}/admin/items/")
+    )
+    admin_page.get_by_test_id("item-unit-serial-input").fill("AD-SN-001")
+    admin_page.get_by_test_id("item-unit-submit").click()
+    admin_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    expect(
+        admin_page.locator(
+            '[data-testid="item-unit-row"]', has_text="AD-SN-001"
+        )
+    ).to_be_visible()
+
+    # Step 6: Cleanup — archive the unit, archive the item, archive the
+    # category. Leaves the active taxonomy + items lists empty for downstream
+    # tests, matching the manager walk's cleanup convention.
+    sn_row = admin_page.locator(
+        '[data-testid="item-unit-row"]', has_text="AD-SN-001"
+    )
+    sn_row.get_by_test_id("archive-item-unit").click()
+    admin_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/units")
+    )
+    admin_page.goto(f"{app_server}/admin/items")
+    admin_page.locator(
+        '[data-testid="item-row"]', has_text="AD-E2E-001"
+    ).get_by_test_id("archive-item").click()
+    admin_page.wait_for_url(f"{app_server}/admin/items")
+    admin_page.goto(f"{app_server}/admin/taxonomy")
+    admin_page.locator(
+        '[data-testid="taxonomy-row"]', has_text="Admin Items E2E Cat"
+    ).get_by_test_id("archive-taxonomy").click()
+    admin_page.wait_for_url(f"{app_server}/admin/taxonomy")
+
+    admin_page.close()
+    if admin_context is not context:
+        admin_context.close()
