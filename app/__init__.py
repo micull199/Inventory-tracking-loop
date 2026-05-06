@@ -1,0 +1,1 @@
+"""UC Inventory application package."""
