@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Location, Role, User
 from app.template_env import templates
@@ -96,13 +97,34 @@ def _flash(request: Request, message: str) -> None:
 _LIST_ORDER = case((Location.archived_at.is_(None), 0), else_=1)
 
 
-@router.get("", response_class=HTMLResponse)
+_LOCATIONS_CSV_HEADERS: list[str] = [
+    "id",
+    "name",
+    "notes",
+]
+
+
+def _csv_rows_for_locations(rows: list[Location]) -> list[list[Any]]:
+    """Map ``Location`` rows to CSV cell values.
+
+    The cells mirror the HTML table one-for-one. ``id`` is added at the front
+    so a downstream consumer can join (the HTML carries it as
+    ``data-location-id`` rather than a cell). Blank notes render as empty
+    cells (``None`` → ``""`` via ``csv_response``'s coercion), matching the
+    HTML's ``l.notes or ""`` rendering. The ``archived_at`` column is not
+    exposed — the active partition is encoded in the filename.
+    """
+    return [[loc.id, loc.name, loc.notes] for loc in rows]
+
+
+@router.get("")
 def list_locations(
     request: Request,
     show: str = "active",
+    format: str = "",
     _user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     if show not in {"active", "archived"}:
         show = "active"
 
@@ -114,6 +136,17 @@ def list_locations(
     stmt = stmt.order_by(_LIST_ORDER, Location.name)
 
     rows = list(db.execute(stmt).scalars().all())
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=f"locations_{show}.csv",
+            headers=_LOCATIONS_CSV_HEADERS,
+            rows=_csv_rows_for_locations(rows),
+        )
+    ) is not None:
+        return resp
+
     return templates.TemplateResponse(
         request,
         "locations_list.html",

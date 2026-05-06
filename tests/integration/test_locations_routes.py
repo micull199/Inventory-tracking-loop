@@ -653,3 +653,241 @@ class TestLocationArchive:
             follow_redirects=False,
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# R5f — CSV export on the locations list
+# ---------------------------------------------------------------------------
+
+
+class TestLocationsListCsvRoleEnforcement:
+    """``?format=csv`` inherits the same Manager-only gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 403
+
+    def test_office_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Locations are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+
+
+class TestLocationsListCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="locations_active.csv"' in cd
+
+    def test_content_disposition_archived_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv&show=archived")
+        cd = resp.headers["content-disposition"]
+        assert 'filename="locations_archived.csv"' in cd
+
+
+class TestLocationsListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == "id,name,notes\r\n"
+
+    def test_one_location_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        loc = Location(name="Workshop Bench", notes="Filer's bay")
+        db_session.add(loc)
+        db_session.commit()
+        db_session.refresh(loc)
+        _login_as(client, mgr)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(loc.id)
+        assert cells[1] == "Workshop Bench"
+        assert cells[2] == "Filer's bay"
+
+    def test_show_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        active = Location(name="Workshop Bench")
+        archived = Location(
+            name="Old Bench",
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add_all([active, archived])
+        db_session.commit()
+        _login_as(client, mgr)
+
+        # Default (active) → only the active row.
+        resp = client.get("/admin/locations?format=csv")
+        body = resp.text
+        assert "Workshop Bench" in body
+        assert "Old Bench" not in body
+
+        # show=archived → only the archived row.
+        resp = client.get("/admin/locations?format=csv&show=archived")
+        body = resp.text
+        assert "Old Bench" in body
+        assert "Workshop Bench" not in body
+
+    def test_blank_notes_renders_as_empty_cell(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        loc = Location(name="Minimal")  # notes defaults to None
+        db_session.add(loc)
+        db_session.commit()
+        db_session.refresh(loc)
+        _login_as(client, mgr)
+        resp = client.get("/admin/locations?format=csv")
+        body = resp.text
+        # The data row should be: id,Minimal,\r\n  (one trailing empty).
+        data_line = body.split("\r\n")[1]
+        cells = data_line.split(",")
+        assert cells[1] == "Minimal"
+        assert cells[2] == ""
+
+    def test_alphabetical_ordering_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Insert deliberately out-of-order; the route orders by name within
+        # the bucket.
+        db_session.add_all(
+            [Location(name="Zebra Cabinet"), Location(name="Acme Bench")]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/locations?format=csv")
+        body = resp.text
+        acme_pos = body.index("Acme Bench")
+        zebra_pos = body.index("Zebra Cabinet")
+        assert acme_pos < zebra_pos
+
+
+class TestLocationsListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="locations-tabs"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestLocationsListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        db_session.add(Location(name="Workshop"))
+        db_session.commit()
+        before = len(_audit_rows(db_session))
+        _login_as(client, mgr)
+        resp = client.get("/admin/locations?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestLocationsListCsvLink:
+    def test_html_renders_csv_link_with_active_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="locations-list-csv-link"' in body
+        assert "format=csv" in body
+        assert "show=active" in body
+
+    def test_html_renders_csv_link_with_archived_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/locations?show=archived")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="locations-list-csv-link"' in body
+        assert "show=archived" in body
