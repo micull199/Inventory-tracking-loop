@@ -1,23 +1,34 @@
-"""Manager-owned item CRUD against a taxonomy *leaf* node (I1a).
+"""Item CRUD against a taxonomy *leaf* node (I1a + I1b).
 
 Items are the unblocking primitive for everything in MISSION §3 from "Stock
-movements" onward. This slice ships the core fields: SKU, name, leaf-node,
-unit, tracking mode, requires-checkout flag, reorder thresholds, optional
-supplier/location/QR/notes. ``current_qty`` is read-only at 0; only stock
-movements (M1+) move it. Custom fields per the leaf's schema (S5 → I2),
-unique-tracked per-unit rows (I3), QR label generation (I4), and movements
-(M1+) are deferred.
+movements" onward. The shipped fields: SKU, name, leaf-node, unit, tracking
+mode, requires-checkout flag, reorder thresholds, optional supplier/location/
+QR/notes. ``current_qty`` is read-only at 0; only stock movements (M1+) move
+it. Custom fields per the leaf's schema (S5 → I2), unique-tracked per-unit
+rows (I3), QR label generation (I4), and movements (M1+) are deferred.
 
-Access: ``Manager`` and ``Admin`` (admins always pass ``require_role``).
-Workshop and Office both 403 — Office *eventually* gets read+edit per
-MISSION §3 ("Office: items, movements, POs … cannot change reorder
-thresholds"), but that's a separate access shape (some fields editable, some
-not), so it's deferred to I1b. Workshop is read-only per §3 ("view items"),
-also deferred.
+Access (I1b refines I1a):
+- **Manager / Admin**: full access — list, create, edit (every field),
+  archive, unarchive.
+- **Office**: list + edit only. Cannot create. Cannot archive. Cannot change
+  ``reorder_threshold`` / ``reorder_qty`` (MISSION §3: "cannot change reorder
+  thresholds"). Threshold inputs are hidden from the form and the route
+  silently overrides any inbound values with the existing row's values
+  before validation, so Office submissions can't even *fail* on those
+  fields — they're inert.
+- **Workshop**: 403 across the board for now. Read-only access per §3
+  ("view items") is deferred to a follow-up slice.
 
 URL shape mirrors ``app/suppliers.py`` / ``app/locations.py`` — flat-by-id —
 because items don't have a parent in the URL the way sub-cats do; the leaf
 node is just one of the form fields.
+
+Archived-FK preservation: when an item references a now-archived supplier,
+location, or leaf node, the form keeps that row in the dropdown with an
+"(archived)" suffix and the validators accept it *unchanged*. Switching to
+a *different* archived FK is still rejected. Clearing an optional FK
+(``supplier_id``/``location_id`` blank) is allowed even if the existing one
+is archived — that's an explicit user action, not silent data loss.
 """
 
 from __future__ import annotations
@@ -125,8 +136,20 @@ def _is_leaf(db: Session, node: TaxonomyNode) -> bool:
     return not _has_active_children(db, node.id)
 
 
-def _resolve_leaf_node(db: Session, raw_node_id: str) -> TaxonomyNode:
-    """Load a taxonomy node by id and verify it's a non-archived leaf."""
+def _resolve_leaf_node(
+    db: Session, raw_node_id: str, *, current_id: int | None = None
+) -> TaxonomyNode:
+    """Load a taxonomy node by id and verify it's a non-archived leaf.
+
+    ``current_id`` is the item's existing ``taxonomy_node_id`` on edit (None
+    on create). If the user submits the same id and that node is archived,
+    accept the unchanged assignment so editing other fields doesn't force a
+    category change. Switching to any *different* archived id still 400s.
+    The leaf-rule check applies regardless: an archived top-level node with
+    active children would still 400 even if it's the current value, but
+    that's a degenerate state we can't construct (active children require
+    an active parent in the route layer).
+    """
     text = (raw_node_id or "").strip()
     if text == "":
         raise HTTPException(
@@ -146,10 +169,10 @@ def _resolve_leaf_node(db: Session, raw_node_id: str) -> TaxonomyNode:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="category not found",
         )
-    if node.archived_at is not None:
+    if node.archived_at is not None and node.id != current_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="cannot create items under an archived category",
+            detail="cannot move items to an archived category",
         )
     if not _is_leaf(db, node):
         raise HTTPException(
@@ -162,7 +185,15 @@ def _resolve_leaf_node(db: Session, raw_node_id: str) -> TaxonomyNode:
     return node
 
 
-def _resolve_optional_supplier(db: Session, raw: str) -> int | None:
+def _resolve_optional_supplier(
+    db: Session, raw: str, *, current_id: int | None = None
+) -> int | None:
+    """Parse a supplier id; allow keeping an existing archived supplier unchanged.
+
+    Blank → None (clears the link, even if the previous value was archived —
+    that's an explicit user choice). Otherwise the supplier must exist; if
+    it's archived, ``current_id`` must match (preserving the link), else 400.
+    """
     text = (raw or "").strip()
     if text == "":
         return None
@@ -179,7 +210,7 @@ def _resolve_optional_supplier(db: Session, raw: str) -> int | None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="supplier not found",
         )
-    if supplier.archived_at is not None:
+    if supplier.archived_at is not None and supplier.id != current_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="supplier is archived",
@@ -187,7 +218,13 @@ def _resolve_optional_supplier(db: Session, raw: str) -> int | None:
     return supplier.id
 
 
-def _resolve_optional_location(db: Session, raw: str) -> int | None:
+def _resolve_optional_location(
+    db: Session, raw: str, *, current_id: int | None = None
+) -> int | None:
+    """Parse a location id; allow keeping an existing archived location unchanged.
+
+    Same contract as ``_resolve_optional_supplier``.
+    """
     text = (raw or "").strip()
     if text == "":
         return None
@@ -204,7 +241,7 @@ def _resolve_optional_location(db: Session, raw: str) -> int | None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="location not found",
         )
-    if location.archived_at is not None:
+    if location.archived_at is not None and location.id != current_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="location is archived",
@@ -227,12 +264,19 @@ def _normalise(
     location_id: str,
     qr_code: str,
     notes: str,
+    current_node_id: int | None = None,
+    current_supplier_id: int | None = None,
+    current_location_id: int | None = None,
 ) -> dict[str, Any]:
     """Strip / parse / validate every form field. Returns the value-shape stored on the row.
 
     Raises ``HTTPException(400)`` on any validation error. Uniqueness checks
     against the DB (sku / qr_code) live in their own callers because they need
     the per-route ``exclude_id``.
+
+    The ``current_*`` ids are the existing item's FK values on edit (all
+    ``None`` on create). Used by the FK resolvers to keep an unchanged
+    archived FK assignment without 400ing.
     """
     clean_sku = (sku or "").strip()
     if not clean_sku:
@@ -251,14 +295,18 @@ def _normalise(
             detail="unit is required",
         )
 
-    node = _resolve_leaf_node(db, taxonomy_node_id)
+    node = _resolve_leaf_node(db, taxonomy_node_id, current_id=current_node_id)
     mode = _coerce_tracking_mode(tracking_mode)
 
     threshold = _parse_decimal(reorder_threshold, field_name="reorder threshold")
     qty = _parse_decimal(reorder_qty, field_name="reorder quantity")
 
-    sup_id = _resolve_optional_supplier(db, supplier_id)
-    loc_id = _resolve_optional_location(db, location_id)
+    sup_id = _resolve_optional_supplier(
+        db, supplier_id, current_id=current_supplier_id
+    )
+    loc_id = _resolve_optional_location(
+        db, location_id, current_id=current_location_id
+    )
 
     clean_qr = (qr_code or "").strip() or None
     clean_notes = (notes or "").strip() or None
@@ -360,13 +408,19 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
     }
 
 
-def _leaf_options(db: Session) -> list[dict[str, Any]]:
+def _leaf_options(
+    db: Session, *, current_id: int | None = None
+) -> list[dict[str, Any]]:
     """Active leaf-node options for the form's category <select>.
 
     Top-level nodes appear only when they have no active children (i.e. they
     *are* the leaf). Sub-cats appear under their parent. Output is shaped for
-    the template — list of ``{id, label, parent_id, sort_order}`` rows
-    pre-sorted: parent block first, then its children indented.
+    the template — list of ``{id, label, is_group}`` dicts.
+
+    If ``current_id`` references an archived node (or one not present in the
+    active set), it's appended as a selectable option with an "(archived)"
+    suffix and ``is_group=False`` so the user can keep the existing
+    assignment without seeing a missing dropdown value.
     """
     rows = list(
         db.execute(
@@ -387,6 +441,7 @@ def _leaf_options(db: Session) -> list[dict[str, Any]]:
             children.setdefault(n.parent_id, []).append(n)
 
     options: list[dict[str, Any]] = []
+    rendered_ids: set[int] = set()
     for top in tops:
         kids = children.get(top.id, [])
         if kids:
@@ -408,15 +463,33 @@ def _leaf_options(db: Session) -> list[dict[str, Any]]:
                         "is_group": False,
                     }
                 )
+                rendered_ids.add(kid.id)
         else:
             options.append(
                 {"id": top.id, "label": top.name, "is_group": False}
             )
+            rendered_ids.add(top.id)
+
+    if current_id is not None and current_id not in rendered_ids:
+        cur = db.get(TaxonomyNode, current_id)
+        if cur is not None:
+            if cur.parent_id is None:
+                label = f"{cur.name} (archived)"
+            else:
+                parent = db.get(TaxonomyNode, cur.parent_id)
+                parent_name = parent.name if parent is not None else "?"
+                label = f"{parent_name} / {cur.name} (archived)"
+            options.append(
+                {"id": cur.id, "label": label, "is_group": False}
+            )
     return options
 
 
-def _supplier_options(db: Session) -> list[Supplier]:
-    return list(
+def _supplier_options(
+    db: Session, *, current_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Active suppliers + the assigned archived row (with "(archived)" suffix) if any."""
+    rows = list(
         db.execute(
             select(Supplier)
             .where(Supplier.archived_at.is_(None))
@@ -425,10 +498,23 @@ def _supplier_options(db: Session) -> list[Supplier]:
         .scalars()
         .all()
     )
+    options: list[dict[str, Any]] = [
+        {"id": s.id, "label": s.name} for s in rows
+    ]
+    if current_id is not None and not any(
+        opt["id"] == current_id for opt in options
+    ):
+        cur = db.get(Supplier, current_id)
+        if cur is not None:
+            options.append({"id": cur.id, "label": f"{cur.name} (archived)"})
+    return options
 
 
-def _location_options(db: Session) -> list[Location]:
-    return list(
+def _location_options(
+    db: Session, *, current_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Active locations + the assigned archived row (with "(archived)" suffix) if any."""
+    rows = list(
         db.execute(
             select(Location)
             .where(Location.archived_at.is_(None))
@@ -437,6 +523,26 @@ def _location_options(db: Session) -> list[Location]:
         .scalars()
         .all()
     )
+    options: list[dict[str, Any]] = [
+        {"id": loc.id, "label": loc.name} for loc in rows
+    ]
+    if current_id is not None and not any(
+        opt["id"] == current_id for opt in options
+    ):
+        cur = db.get(Location, current_id)
+        if cur is not None:
+            options.append({"id": cur.id, "label": f"{cur.name} (archived)"})
+    return options
+
+
+def _can_edit_thresholds(user: User) -> bool:
+    """MISSION §3: Office cannot change reorder thresholds. Manager + Admin can.
+
+    ``Admin`` always passes ``require_role`` regardless of the allowed list,
+    so we have to check role explicitly here rather than relying on the
+    dependency to gate a sub-set of fields.
+    """
+    return user.role in (Role.MANAGER, Role.ADMIN)
 
 
 def _category_label(item: Item, db: Session) -> str:
@@ -467,7 +573,7 @@ def list_items(
     request: Request,
     show: str = "active",
     node_id: int | None = None,
-    _user: User = Depends(require_role(Role.MANAGER)),
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     if show not in {"active", "archived"}:
@@ -498,6 +604,8 @@ def list_items(
             "rows": rows,
             "show": show,
             "node_id": node_id,
+            "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
+            "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
         },
     )
 
@@ -533,6 +641,7 @@ def new_item_form(
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
+            "can_edit_thresholds": True,
         },
     )
 
@@ -616,7 +725,7 @@ def create_item(
 def edit_item_form(
     request: Request,
     item_id: int,
-    _user: User = Depends(require_role(Role.MANAGER)),
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = db.get(Item, item_id)
@@ -633,10 +742,15 @@ def edit_item_form(
             "form": _form_for_item(item),
             "title": f"Edit {item.name}",
             "action": f"/admin/items/{item.id}",
-            "leaf_options": _leaf_options(db),
-            "supplier_options": _supplier_options(db),
-            "location_options": _location_options(db),
+            "leaf_options": _leaf_options(db, current_id=item.taxonomy_node_id),
+            "supplier_options": _supplier_options(
+                db, current_id=item.supplier_id
+            ),
+            "location_options": _location_options(
+                db, current_id=item.location_id
+            ),
             "tracking_modes": [m.value for m in TrackingMode],
+            "can_edit_thresholds": _can_edit_thresholds(_user),
         },
     )
 
@@ -657,7 +771,7 @@ def update_item(
     location_id: str = Form(""),
     qr_code: str = Form(""),
     notes: str = Form(""),
-    user: User = Depends(require_role(Role.MANAGER)),
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = db.get(Item, item_id)
@@ -665,6 +779,13 @@ def update_item(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
         )
+
+    # MISSION §3: Office cannot change reorder thresholds. Silently override
+    # any inbound values with the existing row's values *before* validation,
+    # so an Office user (or a tampered form) can't even fail on those fields.
+    if not _can_edit_thresholds(user):
+        reorder_threshold = str(item.reorder_threshold)
+        reorder_qty = str(item.reorder_qty)
 
     fields = _normalise(
         db,
@@ -680,6 +801,9 @@ def update_item(
         location_id=location_id,
         qr_code=qr_code,
         notes=notes,
+        current_node_id=item.taxonomy_node_id,
+        current_supplier_id=item.supplier_id,
+        current_location_id=item.location_id,
     )
     _check_sku_unique(db, fields["sku"], exclude_id=item.id)
     _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)

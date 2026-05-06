@@ -114,6 +114,8 @@
                             Taxonomy
                         </a>
                     </li>
+                {% endif %}
+                {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
                     <li>
                         <a href="/admin/items"
                            data-testid="nav-items"

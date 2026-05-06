@@ -70,19 +70,32 @@
             </label>
         </p>
 
-        <p>
-            <label for="reorder_threshold">Reorder threshold</label><br>
-            <input type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
-                   value="{{ form.reorder_threshold }}"
-                   data-testid="item-reorder-threshold-input">
-        </p>
+        {% if can_edit_thresholds %}
+            <p>
+                <label for="reorder_threshold">Reorder threshold</label><br>
+                <input type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
+                       value="{{ form.reorder_threshold }}"
+                       data-testid="item-reorder-threshold-input">
+            </p>
 
-        <p>
-            <label for="reorder_qty">Reorder quantity</label><br>
-            <input type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
-                   value="{{ form.reorder_qty }}"
-                   data-testid="item-reorder-qty-input">
-        </p>
+            <p>
+                <label for="reorder_qty">Reorder quantity</label><br>
+                <input type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
+                       value="{{ form.reorder_qty }}"
+                       data-testid="item-reorder-qty-input">
+            </p>
+        {% else %}
+            <p>
+                <strong>Reorder threshold:</strong>
+                <span data-testid="item-reorder-threshold-readonly">{{ form.reorder_threshold }}</span>
+                <em>(Manager-only)</em>
+            </p>
+            <p>
+                <strong>Reorder quantity:</strong>
+                <span data-testid="item-reorder-qty-readonly">{{ form.reorder_qty }}</span>
+                <em>(Manager-only)</em>
+            </p>
+        {% endif %}
 
         <p>
             <label for="supplier_id">Supplier</label><br>
@@ -91,7 +104,7 @@
                 {% for s in supplier_options %}
                     <option value="{{ s.id }}"
                             {% if form.supplier_id == (s.id | string) %}selected{% endif %}>
-                        {{ s.name }}
+                        {{ s.label }}
                     </option>
                 {% endfor %}
             </select>
@@ -104,7 +117,7 @@
                 {% for l in location_options %}
                     <option value="{{ l.id }}"
                             {% if form.location_id == (l.id | string) %}selected{% endif %}>
-                        {{ l.name }}
+                        {{ l.label }}
                     </option>
                 {% endfor %}
             </select>

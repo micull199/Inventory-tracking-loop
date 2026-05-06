@@ -4,9 +4,11 @@
     <h1>Items</h1>
     <p>The things UC tracks. Each item belongs to a leaf category. Quantities change via stock movements (coming soon); use this page to add new items and edit their fields.</p>
 
-    <p>
-        <a class="button" href="/admin/items/new" data-testid="new-item">New item</a>
-    </p>
+    {% if can_create %}
+        <p>
+            <a class="button" href="/admin/items/new" data-testid="new-item">New item</a>
+        </p>
+    {% endif %}
 
     <nav aria-label="Filter items" data-testid="items-tabs" style="margin-bottom: 1rem;">
         <a href="/admin/items?show=active"
@@ -45,16 +47,18 @@
                         <td>{{ i.reorder_threshold }}</td>
                         <td>
                             <a href="/admin/items/{{ i.id }}/edit" data-testid="edit-item">Edit</a>
-                            {% if i.archived_at is none %}
-                                <form method="post" action="/admin/items/{{ i.id }}/archive" style="display:inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" data-testid="archive-item">Archive</button>
-                                </form>
-                            {% else %}
-                                <form method="post" action="/admin/items/{{ i.id }}/unarchive" style="display:inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" data-testid="unarchive-item">Unarchive</button>
-                                </form>
+                            {% if can_archive %}
+                                {% if i.archived_at is none %}
+                                    <form method="post" action="/admin/items/{{ i.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-item">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/items/{{ i.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-item">Unarchive</button>
+                                    </form>
+                                {% endif %}
                             {% endif %}
                         </td>
                     </tr>

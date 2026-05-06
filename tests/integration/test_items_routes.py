@@ -159,14 +159,88 @@ class TestRoleEnforcement:
         resp = client.get("/admin/items")
         assert resp.status_code == 403
 
-    def test_office_get_list_is_403(
+    def test_office_get_list_is_200(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """I1a is Manager-owned; Office access lands in I1b (read+edit, restricted fields)."""
+        """I1b: Office can list items (MISSION §3)."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/admin/items")
+        assert resp.status_code == 200
+
+    def test_office_get_new_form_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """I1b: Office cannot create items — only read + edit existing rows."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/admin/items/new")
         assert resp.status_code == 403
+
+    def test_office_create_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        _login_as(client, office)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        assert db_session.execute(select(Item)).first() is None
+
+    def test_office_archive_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        db_session.refresh(item)
+        assert item.archived_at is None
+
+    def test_office_unarchive_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="X",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}/unarchive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        db_session.refresh(item)
+        assert item.archived_at is not None
 
     def test_manager_get_list_is_200(
         self, client: TestClient, db_session: Session
@@ -1246,3 +1320,630 @@ class TestItemArchive:
             follow_redirects=False,
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# I1b: Office can edit but not change reorder thresholds (MISSION §3)
+# ---------------------------------------------------------------------------
+
+
+class TestOfficeEdit:
+    """I1b: Office gets read+edit; reorder thresholds remain Manager-only.
+
+    Office submitting threshold changes is silently ignored (the route
+    overrides the inbound values with the existing row's values *before*
+    validation), so the audit row never records a threshold change for an
+    Office actor. That's deliberate per MISSION §3: "cannot change reorder
+    thresholds." A 400 would leak the field shape; silent override matches
+    the way ``current_qty`` is already handled.
+    """
+
+    def test_office_get_edit_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+
+    def test_office_form_hides_threshold_inputs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            reorder_threshold=Decimal("100"),
+            reorder_qty=Decimal("500"),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        # No editable input — the inputs are hidden behind ``can_edit_thresholds``.
+        assert 'data-testid="item-reorder-threshold-input"' not in resp.text
+        assert 'data-testid="item-reorder-qty-input"' not in resp.text
+        # Read-only display values are present and show the existing values.
+        assert 'data-testid="item-reorder-threshold-readonly"' in resp.text
+        assert 'data-testid="item-reorder-qty-readonly"' in resp.text
+        assert "100" in resp.text
+        assert "500" in resp.text
+
+    def test_manager_form_shows_threshold_inputs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Sanity: I1b's Office hide didn't accidentally hide for Manager too."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="item-reorder-threshold-input"' in resp.text
+        assert 'data-testid="item-reorder-qty-input"' in resp.text
+
+    def test_office_can_edit_non_threshold_fields(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Silver wire",  # Office can change the name
+                unit="g",
+                tracking_mode="qty",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.name == "Silver wire"
+
+    def test_office_threshold_change_silently_ignored(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Office submits new thresholds → row keeps the old values, no audit diff for them."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            reorder_threshold=Decimal("100"),
+            reorder_qty=Decimal("500"),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Wire",
+                unit="g",
+                tracking_mode="qty",
+                reorder_threshold="999",  # would-be change
+                reorder_qty="888",  # would-be change
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        # Form is a no-op — nothing actually changed because the thresholds
+        # were silently overridden and no other field moved. 303 still fires.
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.reorder_threshold == Decimal("100")
+        assert item.reorder_qty == Decimal("500")
+        # No update audit row because the diff was empty.
+        assert _audit_rows(db_session, action="item.updated") == []
+
+    def test_office_threshold_change_along_with_real_change(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Office mixes a name change with a (silently ignored) threshold change.
+
+        Audit diff records ONLY the name; thresholds are inert.
+        """
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            reorder_threshold=Decimal("100"),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, office)
+        client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Silver wire",
+                unit="g",
+                tracking_mode="qty",
+                reorder_threshold="999",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="item.updated")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.before_json is not None
+        assert row.after_json is not None
+        assert "reorder_threshold" not in row.before_json
+        assert "reorder_threshold" not in row.after_json
+        assert "name" in row.after_json
+
+    def test_office_list_hides_new_and_archive_buttons(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        db_session.add(
+            Item(
+                sku="X",
+                name="X",
+                taxonomy_node_id=leaf.id,
+                unit="g",
+                tracking_mode=TrackingMode.QTY,
+            )
+        )
+        db_session.commit()
+        _login_as(client, office)
+        resp = client.get("/admin/items")
+        assert 'data-testid="new-item"' not in resp.text
+        assert 'data-testid="archive-item"' not in resp.text
+        # Edit link is still there — it's the action they're allowed to take.
+        assert 'data-testid="edit-item"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# I1b: Archived-FK preservation on item edit
+# ---------------------------------------------------------------------------
+
+
+class TestArchivedFKPreservation:
+    """Editing an item that references a now-archived FK must not silently drop it.
+
+    Pre-I1b: the dropdown only listed active rows, so the archived row was
+    missing. The blank option submitted on save → the FK silently went to
+    None. Now: the assigned archived row is rendered with an "(archived)"
+    suffix and the resolver accepts it *unchanged* (but still rejects any
+    *change* to a different archived row).
+    """
+
+    def test_edit_form_lists_archived_supplier_with_suffix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        supplier = Supplier(
+            name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(supplier)
+        db_session.commit()
+        db_session.refresh(supplier)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            supplier_id=supplier.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert "Old Co (archived)" in resp.text
+
+    def test_edit_form_lists_archived_location_with_suffix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        loc = Location(
+            name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(loc)
+        db_session.commit()
+        db_session.refresh(loc)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert "Old Bench (archived)" in resp.text
+
+    def test_edit_form_lists_archived_leaf_with_suffix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Old Cat")
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        # Archive the leaf after item creation.
+        leaf.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert "Old Cat (archived)" in resp.text
+
+    def test_edit_form_lists_archived_subcat_leaf_with_parent_path(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Archived sub-cat leaf should render as ``Parent / Sub (archived)``."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _top, child = _make_top_with_child(
+            db_session, top_name="Raw Materials", child_name="Silver"
+        )
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=child.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        # Archive the child leaf.
+        child.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert "Raw Materials / Silver (archived)" in resp.text
+
+    def test_edit_keeps_unchanged_archived_supplier(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Submit the same archived supplier id → 303, supplier unchanged, no diff for that field."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        supplier = Supplier(
+            name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(supplier)
+        db_session.commit()
+        db_session.refresh(supplier)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            supplier_id=supplier.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Silver wire",  # only this changes
+                unit="g",
+                tracking_mode="qty",
+                supplier_id=str(supplier.id),  # unchanged archived FK
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.supplier_id == supplier.id
+        rows = _audit_rows(db_session, action="item.updated")
+        assert len(rows) == 1
+        assert rows[0].after_json is not None
+        assert "supplier_id" not in rows[0].after_json
+        assert "name" in rows[0].after_json
+
+    def test_edit_keeps_unchanged_archived_location(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        loc = Location(
+            name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(loc)
+        db_session.commit()
+        db_session.refresh(loc)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Silver wire",
+                unit="g",
+                tracking_mode="qty",
+                location_id=str(loc.id),
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.location_id == loc.id
+
+    def test_edit_keeps_unchanged_archived_leaf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Old Cat")
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        leaf.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Silver wire",
+                unit="g",
+                tracking_mode="qty",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.taxonomy_node_id == leaf.id
+
+    def test_edit_rejects_switch_to_different_archived_supplier(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        a = Supplier(name="A", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+        b = Supplier(name="B", archived_at=datetime(2026, 1, 2, tzinfo=UTC))
+        db_session.add_all([a, b])
+        db_session.commit()
+        db_session.refresh(a)
+        db_session.refresh(b)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            supplier_id=a.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Wire",
+                unit="g",
+                tracking_mode="qty",
+                supplier_id=str(b.id),  # different archived supplier
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_edit_rejects_switch_to_different_archived_leaf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        cur = _make_leaf(db_session, "Cur")
+        other = _make_leaf(db_session, "Other")
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=cur.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        cur.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        other.archived_at = datetime(2026, 1, 2, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=other.id,  # different archived leaf
+                sku="X",
+                name="Wire",
+                unit="g",
+                tracking_mode="qty",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_edit_clearing_archived_supplier_is_explicit_clear(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Submit blank supplier_id → link is cleared, audit records the clear.
+
+        Clearing is an explicit user action, not the silent data loss the
+        pre-I1b code was guilty of (which silently cleared because the
+        archived row was missing from the dropdown).
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        s = Supplier(name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+        db_session.add(s)
+        db_session.commit()
+        db_session.refresh(s)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            supplier_id=s.id,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="X",
+                name="Wire",
+                unit="g",
+                tracking_mode="qty",
+                supplier_id="",  # explicit blank
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.supplier_id is None
+        rows = _audit_rows(db_session, action="item.updated")
+        assert len(rows) == 1
+        assert rows[0].after_json is not None
+        assert rows[0].after_json.get("supplier_id") is None
+
+    def test_edit_form_does_not_list_archived_supplier_when_not_assigned(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Archived rows that aren't the *current* assignment must not appear.
+
+        Otherwise the dropdown becomes a graveyard. Only the row the item is
+        actually pinned to gets the carve-out.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        s = Supplier(name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+        db_session.add(s)
+        db_session.commit()
+        db_session.refresh(s)
+        item = Item(
+            sku="X",
+            name="Wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            # no supplier_id
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert "Old Co" not in resp.text
+
+    def test_create_does_not_list_archived_FKs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The new-item form has no current assignment so no archived rows."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _make_leaf(db_session)
+        s = Supplier(name="Archived Sup", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+        loc = Location(name="Archived Loc", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+        db_session.add_all([s, loc])
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/new")
+        assert "Archived Sup" not in resp.text
+        assert "Archived Loc" not in resp.text
+

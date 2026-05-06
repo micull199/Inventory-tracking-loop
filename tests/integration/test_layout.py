@@ -281,14 +281,15 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-items"' not in resp.text
 
-    def test_office_nav_excludes_items_link(
+    def test_office_nav_includes_items_link(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """Items are Manager-owned in I1a; I1b will surface them to Office."""
+        """I1b: Office gets read+edit access to items (MISSION §3)."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/")
-        assert 'data-testid="nav-items"' not in resp.text
+        assert 'data-testid="nav-items"' in resp.text
+        assert 'href="/admin/items"' in resp.text
 
     def test_aria_current_on_items_page(
         self, client: TestClient, db_session: Session
