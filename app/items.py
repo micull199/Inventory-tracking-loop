@@ -930,6 +930,7 @@ def list_items(
     request: Request,
     show: str = "active",
     node_id: int | None = None,
+    requires_checkout: str = "",
     _user: User = Depends(
         require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
     ),
@@ -937,6 +938,10 @@ def list_items(
 ) -> HTMLResponse:
     if show not in {"active", "archived"}:
         show = "active"
+    # Filter is on/off only — "yes" turns it on; anything else (including
+    # blank, "no", "all", a tampered value) is treated as no filter. Same
+    # silent-coerce posture as ``show`` above.
+    requires_checkout_filter = requires_checkout == "yes"
 
     stmt = select(Item)
     if show == "active":
@@ -945,6 +950,8 @@ def list_items(
         stmt = stmt.where(Item.archived_at.is_not(None))
     if node_id is not None:
         stmt = stmt.where(Item.taxonomy_node_id == node_id)
+    if requires_checkout_filter:
+        stmt = stmt.where(Item.requires_checkout.is_(True))
     stmt = stmt.order_by(_LIST_ORDER, Item.sku)
 
     items = list(db.execute(stmt).scalars().all())
@@ -963,6 +970,7 @@ def list_items(
             "rows": rows,
             "show": show,
             "node_id": node_id,
+            "requires_checkout_filter": requires_checkout_filter,
             "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_edit_item": _can_save_item(_user),

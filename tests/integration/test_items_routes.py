@@ -3025,3 +3025,199 @@ class TestWorkshopReadOnlyView:
         assert 'data-testid="item-submit"' in resp.text
         assert 'data-testid="item-form-readonly-note"' not in resp.text
 
+
+# ---------------------------------------------------------------------------
+# C1 — requires_checkout flag UI + filter
+# ---------------------------------------------------------------------------
+
+
+class TestRequiresCheckoutFlag:
+    """C1: items list shows the flag + filter; form shows explanatory help."""
+
+    def _seed_two(
+        self, db: Session
+    ) -> tuple[User, Item, Item]:
+        mgr = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db)
+        flagged = Item(
+            sku="TOOL-A",
+            name="Hammer",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+            requires_checkout=True,
+        )
+        plain = Item(
+            sku="MAT-A",
+            name="Silver wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            requires_checkout=False,
+        )
+        db.add_all([flagged, plain])
+        db.commit()
+        db.refresh(flagged)
+        db.refresh(plain)
+        return mgr, flagged, plain
+
+    def test_list_shows_yes_for_flagged_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        body = resp.text
+        # Both items render; we confirm the flagged one carries "Yes" in its
+        # checkout cell and the unflagged one carries "—".
+        assert "TOOL-A" in body
+        assert "MAT-A" in body
+        # The cell test-id appears once per row; assert both labels appear.
+        assert ">Yes<" in body
+        assert ">—<" in body
+
+    def test_list_shows_dash_when_no_items_flagged(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        db_session.add(
+            Item(
+                sku="MAT-A",
+                name="Silver wire",
+                taxonomy_node_id=leaf.id,
+                unit="g",
+                tracking_mode=TrackingMode.QTY,
+                requires_checkout=False,
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/items")
+        body = resp.text
+        assert 'data-testid="item-requires-checkout"' in body
+        assert ">Yes<" not in body
+
+    def test_list_filter_yes_shows_only_flagged(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items?requires_checkout=yes")
+        body = resp.text
+        assert "TOOL-A" in body
+        assert "MAT-A" not in body
+
+    def test_list_filter_blank_shows_all(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items")
+        body = resp.text
+        assert "TOOL-A" in body
+        assert "MAT-A" in body
+
+    def test_list_filter_unrecognised_value_does_not_filter(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Silent coerce: ?requires_checkout=foo behaves like no filter."""
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items?requires_checkout=foo")
+        body = resp.text
+        assert "TOOL-A" in body
+        assert "MAT-A" in body
+
+    def test_list_filter_no_does_not_filter(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """``requires_checkout=no`` doesn't mean 'show only non-flagged' — same as no filter."""
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items?requires_checkout=no")
+        body = resp.text
+        assert "TOOL-A" in body
+        assert "MAT-A" in body
+
+    def test_filter_nav_links_present_with_aria_current(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+
+        # All-items view: "All items" carries aria-current.
+        resp = client.get("/admin/items")
+        body = resp.text
+        assert 'data-testid="filter-all"' in body
+        assert 'data-testid="filter-requires-checkout"' in body
+        # Locate the all-filter tag and assert aria-current is on it.
+        all_tag_start = body.find('data-testid="filter-all"')
+        all_tag_close = body.find(">", all_tag_start)
+        all_tag = body[body.rfind("<", 0, all_tag_start) : all_tag_close]
+        assert 'aria-current="page"' in all_tag
+
+        # Filtered view: the requires-checkout link carries aria-current.
+        resp2 = client.get("/admin/items?requires_checkout=yes")
+        body2 = resp2.text
+        rc_tag_start = body2.find('data-testid="filter-requires-checkout"')
+        rc_tag_close = body2.find(">", rc_tag_start)
+        rc_tag = body2[body2.rfind("<", 0, rc_tag_start) : rc_tag_close]
+        assert 'aria-current="page"' in rc_tag
+
+    def test_filter_combines_with_show_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        archived_flagged = Item(
+            sku="TOOL-OLD",
+            name="Retired chisel",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+            requires_checkout=True,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        archived_plain = Item(
+            sku="MAT-OLD",
+            name="Old wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            requires_checkout=False,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add_all([archived_flagged, archived_plain])
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get("/admin/items?show=archived&requires_checkout=yes")
+        body = resp.text
+        assert "TOOL-OLD" in body
+        assert "MAT-OLD" not in body
+
+    def test_form_renders_help_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _make_leaf(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/new")
+        assert resp.status_code == 200
+        assert 'data-testid="item-requires-checkout-help"' in resp.text
+
+    def test_filter_link_preserves_show_param(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Switching between 'All items' and 'Requires checkout' preserves show=archived."""
+        mgr, _flagged, _plain = self._seed_two(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items?show=archived")
+        body = resp.text
+        # The filter link's href carries show=archived so the filter doesn't
+        # silently flip the user back to active.
+        assert "/admin/items?show=archived&amp;requires_checkout=yes" in body
+        assert 'href="/admin/items?show=archived"' in body
+

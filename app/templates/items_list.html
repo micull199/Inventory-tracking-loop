@@ -20,6 +20,16 @@
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
+    <nav aria-label="Filter by checkout flag" data-testid="items-checkout-filter" style="margin-bottom: 1rem;">
+        <a href="/admin/items?show={{ show }}"
+           data-testid="filter-all"
+           {% if not requires_checkout_filter %}aria-current="page"{% endif %}>All items</a>
+        |
+        <a href="/admin/items?show={{ show }}&amp;requires_checkout=yes"
+           data-testid="filter-requires-checkout"
+           {% if requires_checkout_filter %}aria-current="page"{% endif %}>Requires checkout</a>
+    </nav>
+
     {% if rows %}
         <table data-testid="items-table">
             <thead>
@@ -31,6 +41,7 @@
                     <th>Tracking</th>
                     <th>Qty</th>
                     <th>Threshold</th>
+                    <th>Checkout?</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -45,6 +56,7 @@
                         <td>{{ i.tracking_mode.value }}</td>
                         <td>{{ i.current_qty }}</td>
                         <td>{{ i.reorder_threshold }}</td>
+                        <td data-testid="item-requires-checkout">{% if i.requires_checkout %}Yes{% else %}—{% endif %}</td>
                         <td>
                             <a href="/admin/items/{{ i.id }}/detail" data-testid="detail-link">Details</a>
                             {% if can_edit_item %}

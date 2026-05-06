@@ -832,6 +832,84 @@ class CostLayerConsumption(Base):
         )
 
 
+class Checkout(Base):
+    """A single tool / mould checkout record (C-series).
+
+    A row is open when ``returned_at IS NULL`` and closed (returned) once it
+    has a non-null ``returned_at``. There is no status enum: the open/returned
+    state is derived from a single nullable column. Overdue is
+    ``returned_at IS NULL AND expected_return < now()``.
+
+    ``user_id`` is the assignee — the workshop user who has the item. It is
+    FK SET NULL so a user soft-delete (UserStatus.DISABLED is the v1 path;
+    hard delete is rare) doesn't cascade through historical checkouts.
+    ``item_id`` is RESTRICT — an item with checkout history cannot be
+    hard-deleted (soft-archive is the v1 path anyway). ``item_unit_id`` is
+    nullable: qty-tracked items check out the item-as-a-whole, while
+    unique-tracked items (I3) point at a specific physical unit.
+
+    No ``archived_at``: a checkout row is part of the audit trail. Corrections
+    are made by adding a new return record with a condition note explaining
+    the correction.
+
+    The route layer (C2 onward) enforces:
+    - Only items with ``requires_checkout=True`` may have checkout rows.
+    - At most one open checkout per item / item_unit at a time.
+    - For unique-tracked items, ``item_unit_id`` is required; for qty-tracked
+      items, it must be NULL.
+    """
+
+    __tablename__ = "checkouts"
+    __table_args__ = (
+        Index("ix_checkouts_item_id", "item_id"),
+        Index("ix_checkouts_item_unit_id", "item_unit_id"),
+        Index("ix_checkouts_user_id", "user_id"),
+        Index("ix_checkouts_returned_at", "returned_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    item_unit_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("item_units.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    checked_out_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    expected_return: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    returned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    condition_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<Checkout id={self.id} item_id={self.item_id} "
+            f"user_id={self.user_id} returned={self.returned_at is not None}>"
+        )
+
+
 class POStatus(enum.StrEnum):
     """Lifecycle of a purchase order (PO2+).
 
