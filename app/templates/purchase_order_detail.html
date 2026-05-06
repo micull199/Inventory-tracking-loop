@@ -146,6 +146,13 @@
     {% endif %}
 
     <p>
+        {% if po.status.value != "cancelled" %}
+            <a href="/admin/purchase-orders/{{ po.id }}/pdf"
+               target="_blank"
+               rel="noopener"
+               data-testid="po-pdf-link">Download PDF</a>
+            &middot;
+        {% endif %}
         <a href="/admin/purchase-orders" data-testid="po-back-to-list">← Back to all POs</a>
         &middot;
         <a href="/admin/reorder" data-testid="po-back-to-reorder">Reorder dashboard</a>

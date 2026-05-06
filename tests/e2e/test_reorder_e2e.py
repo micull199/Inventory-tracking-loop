@@ -226,6 +226,23 @@ def test_manager_reorder_dashboard_walk(
         "rush order"
     )
 
+    # Step 6b-pdf (PO3): Download the PDF for the draft PO via the link on
+    # the detail page. Use the page's request context so we ride the same
+    # session cookie + CSRF state as a click would, but avoid opening a new
+    # tab (Chromium's built-in PDF viewer makes load events non-deterministic).
+    pdf_link = mgr_page.get_by_test_id("po-pdf-link")
+    expect(pdf_link).to_be_visible()
+    pdf_href = pdf_link.get_attribute("href") or ""
+    assert pdf_href.endswith(f"/admin/purchase-orders/{po_id}/pdf")
+    pdf_resp = mgr_page.request.get(f"{app_server}{pdf_href}")
+    assert pdf_resp.status == 200
+    assert pdf_resp.headers["content-type"].startswith("application/pdf")
+    pdf_body = pdf_resp.body()
+    assert pdf_body[:4] == b"%PDF"
+    # Sanity-check the supplier + line are in the byte stream.
+    assert b"Reorder Bullion Co" in pdf_body
+    assert b"RD-LOW" in pdf_body
+
     # Visit the PO list to confirm the new PO is there.
     mgr_page.get_by_test_id("nav-pos").click()
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders")
@@ -246,6 +263,8 @@ def test_manager_reorder_dashboard_walk(
     expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("cancelled")
     expect(mgr_page.get_by_test_id("po-readonly-banner")).to_be_visible()
     expect(mgr_page.get_by_test_id("po-edit-form")).to_have_count(0)
+    # PO3: cancelled POs hide the PDF link (the route also 400s for them).
+    expect(mgr_page.get_by_test_id("po-pdf-link")).to_have_count(0)
 
     # Back to reorder dashboard via nav.
     mgr_page.get_by_test_id("nav-reorder").click()

@@ -85,6 +85,7 @@ from app.models import (
     Supplier,
     User,
 )
+from app.pdf import render_po_pdf
 from app.template_env import templates
 
 # Two routers in one module: the create endpoint lives under ``/admin/reorder``
@@ -673,4 +674,79 @@ def cancel_purchase_order(
     return RedirectResponse(
         url=f"/admin/purchase-orders/{po.id}",
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PO3 — Render a PO as a PDF
+# ---------------------------------------------------------------------------
+
+
+@list_router.get("/{po_id}/pdf")
+def purchase_order_pdf(
+    po_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Return a PDF rendering of the PO.
+
+    Manager + Office. 404 on unknown id; 400 if the PO is cancelled (nothing
+    to send). All other statuses render — drafts are a legit preview case.
+    Disposition is ``inline`` so browsers preview in a new tab; PO4 will
+    re-use the bytes as an email attachment.
+    """
+    po = db.get(PurchaseOrder, po_id)
+    if po is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
+        )
+    if po.status == POStatus.CANCELLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PO is cancelled; cannot generate PDF",
+        )
+
+    supplier = db.get(Supplier, po.supplier_id)
+    supplier_view: dict[str, Any] = {
+        "name": supplier.name if supplier is not None else "(unknown)",
+        "archived": (
+            supplier.archived_at is not None if supplier is not None else False
+        ),
+    }
+
+    line_stmt = (
+        select(PurchaseOrderLine, Item)
+        .join(Item, PurchaseOrderLine.item_id == Item.id)
+        .where(PurchaseOrderLine.po_id == po.id)
+        .order_by(Item.sku)
+    )
+    lines: list[dict[str, Any]] = []
+    for line, item in db.execute(line_stmt).all():
+        lines.append(
+            {
+                "sku": item.sku,
+                "name": item.name,
+                "unit": item.unit,
+                "qty_ordered": line.qty_ordered,
+                "expected_unit_cost": line.expected_unit_cost,
+            }
+        )
+
+    pdf_bytes = render_po_pdf(
+        po={
+            "id": po.id,
+            "status": po.status.value,
+            "created_at": po.created_at,
+            "expected_date": po.expected_date,
+            "notes": po.notes,
+        },
+        supplier=supplier_view,
+        lines=lines,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="po-{po.id}.pdf"',
+        },
     )

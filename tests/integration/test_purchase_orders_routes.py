@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -2006,3 +2007,307 @@ class TestPODetailRenderDelta:
         assert resp.status_code == 200
         # The qty input pre-fills with the line's qty_ordered (10 → "10.0000").
         assert 'value="10.0000"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# PO3 — PDF rendering
+# ---------------------------------------------------------------------------
+
+
+def _assert_is_pdf(resp: Any) -> None:
+    """The response is a well-formed PDF."""
+    assert resp.headers["content-type"].startswith("application/pdf")
+    assert resp.content[:4] == b"%PDF"
+
+
+class TestPOPdfRoleEnforcement:
+    def _make_po(
+        self, db: Session, *, po_status: POStatus = POStatus.DRAFT
+    ) -> PurchaseOrder:
+        actor = _make_user(db, email="creator@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=actor,
+            skus=["PDF-1"],
+            po_status=po_status,
+        )
+        return po
+
+    def test_anonymous_get_pdf_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 401
+
+    def test_pending_get_pdf_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 403
+
+    def test_workshop_get_pdf_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 403
+
+    def test_manager_get_pdf_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+    def test_office_get_pdf_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+    def test_admin_get_pdf_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+
+class TestPOPdfStatusGuard:
+    def _make(
+        self, db: Session, client: TestClient, *, po_status: POStatus
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["PDF-2"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_unknown_po_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders/9999/pdf")
+        assert resp.status_code == 404
+
+    def test_cancelled_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 400
+
+    def test_draft_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+    def test_sent_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.SENT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+    def test_received_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.RECEIVED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.status_code == 200
+        _assert_is_pdf(resp)
+
+
+class TestPOPdfContent:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        priced: bool = True,
+        supplier_archived: bool = False,
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(
+            db,
+            name="Pdf Bullion Co",
+            archived=supplier_archived,
+        )
+        leaf = _make_leaf(db)
+        cost: Decimal | None = Decimal("2.50") if priced else None
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["PDF-CONTENT-1"],
+            qty_ordered=Decimal("12"),
+            expected_unit_cost=cost,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_content_type_is_pdf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.headers["content-type"].startswith("application/pdf")
+
+    def test_inline_disposition_with_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        cd = resp.headers["content-disposition"]
+        assert cd.startswith("inline")
+        assert f'filename="po-{po.id}.pdf"' in cd
+
+    def test_bytes_start_with_pdf_magic(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert resp.content[:4] == b"%PDF"
+
+    def test_po_id_appears_in_pdf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        # PDF compression is disabled in the renderer for byte-search.
+        assert f"#{po.id}".encode() in resp.content
+
+    def test_supplier_name_appears_in_pdf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert b"Pdf Bullion Co" in resp.content
+
+    def test_archived_supplier_renders_suffix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, supplier_archived=True)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        # Parens are PDF-string delimiters; reportlab escapes them as \( \).
+        assert rb"\(archived\)" in resp.content
+
+    def test_line_sku_and_qty_in_pdf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        assert b"PDF-CONTENT-1" in resp.content
+        # qty_ordered=12 round-trips from Numeric(14,4) as "12.0000".
+        assert b"12.0000" in resp.content
+
+    def test_priced_line_shows_unit_cost_and_total(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, priced=True)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        # qty=12 + cost=2.50 round-trip from Numeric(14,4) as 12.0000 + 2.5000;
+        # Decimal multiplication adds scales → product is "30.00000000".
+        assert b"2.5000" in resp.content
+        assert b"Total: 30.00000000" in resp.content
+
+    def test_unpriced_line_shows_em_dash_for_total(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, priced=False)
+        resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
+        # No priced line → grand total is "—". Reportlab encodes the em-dash
+        # via WinAnsi (byte 0x97), then escapes it in the literal string as
+        # the octal sequence "\227" (4 ASCII bytes).
+        assert rb"Total: \227" in resp.content
+
+
+class TestPOPdfLink:
+    def _setup_po(
+        self,
+        db: Session,
+        client: TestClient,
+        po_status: POStatus,
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["PDF-LINK-1"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_draft_renders_pdf_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-pdf-link"' in resp.text
+        assert f"/admin/purchase-orders/{po.id}/pdf" in resp.text
+
+    def test_sent_renders_pdf_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.SENT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-pdf-link"' in resp.text
+
+    def test_received_renders_pdf_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.RECEIVED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-pdf-link"' in resp.text
+
+    def test_cancelled_does_not_render_pdf_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-pdf-link"' not in resp.text
