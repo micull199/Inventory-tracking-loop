@@ -28,7 +28,7 @@ If the same test or the same problem fails three iterations in a row without mea
 ## Current state
 
 **Iteration:** 3 (complete)
-**Last commit:** _pending — see Completed log below for the F2.1 commit hash_
+**Last commit:** e80feb6 — slice: F2.1 — Admin user-management UI
 **Branch:** main
 **Tests:** `make check` green: ruff ✓, mypy ✓, pytest 43 unit+integration ✓, Playwright 4 e2e ✓.
 **Definition-of-Done items ticked:** 0 / 12 (DoD #1 round-trip is now demoable end-to-end via Playwright — admin promotes a pending user, that user signs back in, sees the welcome page with their role. Still not ticked because "access the appropriate parts of the app" is hollow today: there are no role-gated app pages beyond `/admin/users` itself, so the Workshop user has nothing meaningful to access. DoD #9 also not ticked — there's no Manager-only URL yet, so the literal "Workshop hitting Manager URL → 403" scenario can't be exercised. Both will tick once a non-admin role gate ships, e.g. S1 Suppliers — Manager-only.)
@@ -170,7 +170,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
-| 3 | F2.1 — Admin user-management UI: assign role, activate/disable users | `_pending_` | `/admin/users` is now an HTML page with per-user role + status forms (POST → 303 redirect, no HTMX yet). New routes `POST /admin/users/{id}/role` + `/status` with server-side guards: admin can't demote themselves, can't disable themselves, can't activate a user with no role. Pending users sort to the top of the list. e2e covers the full round-trip: pending user signs in → admin promotes them → user signs back in and sees the welcome page. 43 unit/integration + 4 e2e passing. |
+| 3 | F2.1 — Admin user-management UI: assign role, activate/disable users | `e80feb6` | `/admin/users` is now an HTML page with per-user role + status forms (POST → 303 redirect, no HTMX yet). New routes `POST /admin/users/{id}/role` + `/status` with server-side guards: admin can't demote themselves, can't disable themselves, can't activate a user with no role. Pending users sort to the top of the list. e2e covers the full round-trip: pending user signs in → admin promotes them → user signs back in and sees the welcome page. 43 unit/integration + 4 e2e passing. |
 | 2 | F2 — Google SSO login + pending-state user model + role enum | `b46ee57` | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
 | 1 | F1 — Project skeleton and verification harness | `884cd46` | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
 
