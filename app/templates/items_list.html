@@ -30,6 +30,13 @@
            {% if requires_checkout_filter %}aria-current="page"{% endif %}>Requires checkout</a>
     </nav>
 
+    {% if can_csv %}
+        <p>
+            <a href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}"
+               data-testid="items-list-csv-link">Download CSV</a>
+        </p>
+    {% endif %}
+
     {% if rows %}
         <table data-testid="items-table">
             <thead>

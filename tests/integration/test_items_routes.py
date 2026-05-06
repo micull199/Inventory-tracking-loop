@@ -3221,3 +3221,385 @@ class TestRequiresCheckoutFlag:
         assert "/admin/items?show=archived&amp;requires_checkout=yes" in body
         assert 'href="/admin/items?show=archived"' in body
 
+
+# ---------------------------------------------------------------------------
+# R5b — CSV export on the items list
+# ---------------------------------------------------------------------------
+
+
+class TestItemsListCsvRoleEnforcement:
+    """The CSV branch is gated tighter than the HTML branch.
+
+    HTML list is Manager + Office + Workshop (Workshop has read-only access
+    per I1c). CSV branch is Manager + Office only — Workshop is rejected
+    with 403 because MISSION §3 says Workshop "cannot see aggregated cost
+    data or reports". A snapshot CSV is a shareable artefact, not a live
+    list.
+    """
+
+    def test_anon_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session, email="p@x.test", role=None, status=UserStatus.PENDING
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+
+
+class TestItemsListCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="items_active.csv"' in cd
+
+    def test_content_disposition_archived_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv&show=archived")
+        cd = resp.headers["content-disposition"]
+        assert 'filename="items_archived.csv"' in cd
+
+
+class TestItemsListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == (
+            "id,sku,name,category,unit,tracking_mode,current_qty,"
+            "reorder_threshold,reorder_qty,requires_checkout\r\n"
+        )
+
+    def test_one_item_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, name="Raw Materials")
+        item = Item(
+            sku="MAT-A",
+            name="Silver wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            requires_checkout=False,
+            current_qty=Decimal("10"),
+            reorder_threshold=Decimal("5"),
+            reorder_qty=Decimal("20"),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(item.id)
+        assert cells[1] == "MAT-A"
+        assert cells[2] == "Silver wire"
+        assert cells[3] == "Raw Materials"
+        assert cells[4] == "g"
+        assert cells[5] == "qty"
+        # current_qty / reorder_threshold / reorder_qty round-trip via the
+        # column at scale 4 — Decimal("10.0000") str()s to "10.0000".
+        assert Decimal(cells[6]) == Decimal("10")
+        assert Decimal(cells[7]) == Decimal("5")
+        assert Decimal(cells[8]) == Decimal("20")
+        assert cells[9] == "no"
+
+    def test_flagged_item_renders_yes(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, name="Tools")
+        item = Item(
+            sku="TOOL-A",
+            name="Hammer",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+            requires_checkout=True,
+        )
+        db_session.add(item)
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        # The requires_checkout cell carries the literal string "yes" (not
+        # "True"). Two-cell match avoids accidental hit on a substring "yes"
+        # elsewhere — preceded by tracking_mode=unique and zero qty/threshold/
+        # reorder; ends with a CRLF.
+        assert ",unique,0.0000,0.0000,0.0000,yes\r\n" in resp.text
+
+    def test_show_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        active = Item(
+            sku="MAT-A",
+            name="Active wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        archived = Item(
+            sku="MAT-OLD",
+            name="Old wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add_all([active, archived])
+        db_session.commit()
+        _login_as(client, u)
+
+        # Default show=active: only the active item appears.
+        resp_active = client.get("/admin/items?format=csv")
+        assert "MAT-A" in resp_active.text
+        assert "MAT-OLD" not in resp_active.text
+
+        # show=archived: only the archived item appears.
+        resp_archived = client.get("/admin/items?format=csv&show=archived")
+        assert "MAT-A" not in resp_archived.text
+        assert "MAT-OLD" in resp_archived.text
+
+    def test_requires_checkout_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        flagged = Item(
+            sku="TOOL-A",
+            name="Hammer",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+            requires_checkout=True,
+        )
+        plain = Item(
+            sku="MAT-A",
+            name="Silver wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            requires_checkout=False,
+        )
+        db_session.add_all([flagged, plain])
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv&requires_checkout=yes")
+        assert resp.status_code == 200
+        assert "TOOL-A" in resp.text
+        assert "MAT-A" not in resp.text
+
+    def test_sku_ordering_preserved_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        # Insert in non-alphabetical order to verify the route's _LIST_ORDER
+        # sorts by sku ascending across active rows.
+        z_item = Item(
+            sku="Z-1",
+            name="Zinc",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        a_item = Item(
+            sku="A-1",
+            name="Alpha",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add_all([z_item, a_item])
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        body = resp.text
+        # A-1 row appears before Z-1 row in the CSV body.
+        a_pos = body.index(",A-1,")
+        z_pos = body.index(",Z-1,")
+        assert a_pos < z_pos
+
+    def test_category_with_parent_renders_parent_slash_leaf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Sub-cat under a top: category cell is 'Top / Leaf'."""
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _top, child = _make_top_with_child(
+            db_session, top_name="Tools", child_name="Hand"
+        )
+        item = Item(
+            sku="HAM-1",
+            name="Hammer",
+            taxonomy_node_id=child.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        # The CSV writer quotes cells that contain the slash separator only
+        # if the dialect requires; the default QUOTE_MINIMAL doesn't quote
+        # ``/`` (no comma, quote, or CR/LF in the cell). The cell appears
+        # literally as ``Tools / Hand``.
+        assert ",Tools / Hand," in resp.text
+
+
+class TestItemsListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="items-table"' in resp.text or (
+            'data-testid="items-empty"' in resp.text
+        )
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestItemsListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="MAT-A",
+            name="Silver wire",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        before = len(
+            list(db_session.execute(select(AuditLog)).scalars().all())
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        after = len(
+            list(db_session.execute(select(AuditLog)).scalars().all())
+        )
+        assert after == before
+
+
+class TestItemsListCsvLink:
+    def test_html_renders_csv_link_for_manager(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        assert 'data-testid="items-list-csv-link"' in resp.text
+        assert "format=csv" in resp.text
+
+    def test_html_renders_csv_link_for_office(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        assert 'data-testid="items-list-csv-link"' in resp.text
+
+    def test_html_hides_csv_link_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        # Workshop sees the items list (HTML branch) but not the CSV link.
+        assert 'data-testid="items-list-csv-link"' not in resp.text
+
+    def test_csv_link_preserves_show_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?show=archived")
+        # The link's href carries show=archived so a user looking at archived
+        # gets a CSV of archived.
+        assert "show=archived" in resp.text
+        assert "format=csv&amp;show=archived" in resp.text
+
+    def test_csv_link_preserves_requires_checkout_filter(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items?requires_checkout=yes")
+        # The link's href carries requires_checkout=yes when the filter is on.
+        assert "format=csv&amp;show=active&amp;requires_checkout=yes" in (
+            resp.text
+        )
+

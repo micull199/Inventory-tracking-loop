@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
+from app.csv_export import csv_response
 from app.db import get_session
 from app.models import (
     FieldType,
@@ -925,23 +926,74 @@ def _category_label(item: Item, db: Session) -> str:
 _LIST_ORDER = case((Item.archived_at.is_(None), 0), else_=1)
 
 
-@router.get("", response_class=HTMLResponse)
+_ITEMS_CSV_HEADERS: list[str] = [
+    "id",
+    "sku",
+    "name",
+    "category",
+    "unit",
+    "tracking_mode",
+    "current_qty",
+    "reorder_threshold",
+    "reorder_qty",
+    "requires_checkout",
+]
+
+
+def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """Map view-shaped item rows to CSV cell values.
+
+    The ``requires_checkout`` cell renders as the literal string ``"yes"`` /
+    ``"no"`` rather than ``"True"`` / ``"False"`` — same posture as the PO
+    list's ``supplier_archived`` cell. Spreadsheet receivers find yes/no
+    easier to filter on.
+    """
+    return [
+        [
+            r["item"].id,
+            r["item"].sku,
+            r["item"].name,
+            r["category_label"],
+            r["item"].unit,
+            r["item"].tracking_mode.value,
+            r["item"].current_qty,
+            r["item"].reorder_threshold,
+            r["item"].reorder_qty,
+            "yes" if r["item"].requires_checkout else "no",
+        ]
+        for r in rows
+    ]
+
+
+@router.get("")
 def list_items(
     request: Request,
     show: str = "active",
     node_id: int | None = None,
     requires_checkout: str = "",
+    format: str = "",
     _user: User = Depends(
         require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
     ),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     if show not in {"active", "archived"}:
         show = "active"
     # Filter is on/off only — "yes" turns it on; anything else (including
     # blank, "no", "all", a tampered value) is treated as no filter. Same
     # silent-coerce posture as ``show`` above.
     requires_checkout_filter = requires_checkout == "yes"
+
+    # CSV export is gated tighter than the HTML branch: Workshop reads the
+    # HTML list (per I1c) but cannot pull a snapshot artefact. MISSION §3:
+    # Workshop "cannot see aggregated cost data or reports". Same posture as
+    # the variance-trend + PO list CSV surfaces (Manager + Office only).
+    is_csv = format == "csv"
+    if is_csv and _user.role not in (Role.MANAGER, Role.OFFICE, Role.ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="forbidden",
+        )
 
     stmt = select(Item)
     if show == "active":
@@ -962,6 +1014,14 @@ def list_items(
         }
         for item in items
     ]
+
+    if is_csv:
+        return csv_response(
+            filename=f"items_{show}.csv",
+            headers=_ITEMS_CSV_HEADERS,
+            rows=_csv_rows_for_items(rows),
+        )
+
     return templates.TemplateResponse(
         request,
         "items_list.html",
@@ -974,6 +1034,7 @@ def list_items(
             "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_edit_item": _can_save_item(_user),
+            "can_csv": _user.role in (Role.MANAGER, Role.OFFICE, Role.ADMIN),
         },
     )
 
