@@ -55,6 +55,8 @@
                           action="/admin/items/{{ resolved_item.id }}/out">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
+                        <input type="hidden" name="next"
+                               value="/scan/item/{{ resolved_item.id }}">
                         <p>
                             <label for="scan-out-qty">Quantity</label>
                             <input type="text" id="scan-out-qty" name="qty"
@@ -80,6 +82,8 @@
                           action="/admin/items/{{ resolved_item.id }}/in">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
+                        <input type="hidden" name="next"
+                               value="/scan/item/{{ resolved_item.id }}">
                         <p>
                             <label for="scan-in-qty">Quantity</label>
                             <input type="text" id="scan-in-qty" name="qty"
@@ -115,6 +119,8 @@
                           action="/admin/items/{{ resolved_item.id }}/adjust">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
+                        <input type="hidden" name="next"
+                               value="/scan/item/{{ resolved_item.id }}">
                         <p>
                             <label for="scan-adjust-direction">Direction</label>
                             <select id="scan-adjust-direction" name="direction"

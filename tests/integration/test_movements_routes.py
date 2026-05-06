@@ -800,6 +800,101 @@ class TestStockInLinkOnEditForm:
         assert 'data-testid="stock-in-link"' not in resp.text
 
 
+# ---------------------------------------------------------------------------
+# SC1d — `next=` redirect param on stock-in
+# ---------------------------------------------------------------------------
+
+
+class TestStockInNextRedirect:
+    """SC1d: optional `next` form param sends a successful stock-in back into
+    scan flow (`/scan` or `/scan/item/{id}`) instead of the per-action form,
+    when the value passes the whitelist. Off by default; falls back to the
+    existing per-action redirect when `next` is missing or not whitelisted."""
+
+    def test_no_next_falls_back_to_per_action_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data=_payload(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/in"
+
+    def test_next_to_scan_item_redirects_to_scan_flow(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload(csrf=_csrf(client))
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
+
+    def test_next_to_scan_landing_redirects_to_scan_flow(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload(csrf=_csrf(client))
+        payload["next"] = "/scan"
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/scan"
+
+    def test_next_outside_whitelist_falls_back(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload(csrf=_csrf(client))
+        payload["next"] = f"/admin/items/{item.id}/edit"
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/in"
+
+    def test_next_open_redirect_attempt_falls_back(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload(csrf=_csrf(client))
+        payload["next"] = "//evil.com/x"
+        resp = client.post(
+            f"/admin/items/{item.id}/in",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/in"
+
+
 # ===========================================================================
 # Stock-out (M3)
 # ===========================================================================
@@ -1585,6 +1680,107 @@ class TestStockOutLinkOnEditForm:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="stock-out-link"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SC1d — `next=` redirect param on stock-out
+# ---------------------------------------------------------------------------
+
+
+class TestStockOutNextRedirect:
+    """SC1d: optional `next` form param sends a successful stock-out back into
+    scan flow when the value passes the whitelist. Falls back to the per-action
+    redirect when missing/non-whitelisted. The insufficient-stock error path
+    drops `next` (re-renders the per-action form, per Q3 design decision)."""
+
+    def test_no_next_falls_back_to_per_action_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=_payload_out(qty="3", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/out"
+
+    def test_next_to_scan_item_redirects_to_scan_flow(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_out(qty="3", csrf=_csrf(client))
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
+
+    def test_next_to_scan_landing_redirects_to_scan_flow(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_out(qty="3", csrf=_csrf(client))
+        payload["next"] = "/scan"
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/scan"
+
+    def test_next_open_redirect_attempt_falls_back(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_out(qty="3", csrf=_csrf(client))
+        payload["next"] = "//evil.com/x"
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/out"
+
+    def test_insufficient_stock_drops_next_and_re_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="2", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_out(qty="5", csrf=_csrf(client))
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/out",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert "Not enough stock" in resp.text
+        assert 'name="next"' not in resp.text
 
 
 # =============================================================================
@@ -2502,6 +2698,108 @@ class TestStockAdjustLinkOnEditForm:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="stock-adjust-link"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SC1d — `next=` redirect param on stock-adjust
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustNextRedirect:
+    """SC1d: optional `next` form param sends a successful adjustment back into
+    scan flow when the value passes the whitelist (both increase + decrease
+    happy paths). Insufficient-stock on decrease drops `next` and re-renders
+    the per-action form (Q3 design decision)."""
+
+    def test_no_next_falls_back_to_per_action_form_increase(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(direction="increase", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/adjust"
+
+    def test_next_to_scan_item_redirects_to_scan_flow_increase(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload_adjust(direction="increase", csrf=_csrf(client))
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
+
+    def test_next_to_scan_item_redirects_to_scan_flow_decrease(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_adjust(
+            qty="3", direction="decrease", csrf=_csrf(client)
+        )
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
+
+    def test_next_open_redirect_attempt_falls_back(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        payload = _payload_adjust(direction="increase", csrf=_csrf(client))
+        payload["next"] = "//evil.com/x"
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/adjust"
+
+    def test_insufficient_stock_decrease_drops_next_and_re_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="2", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        payload = _payload_adjust(
+            qty="5", direction="decrease", csrf=_csrf(client)
+        )
+        payload["next"] = f"/scan/item/{item.id}"
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=payload,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert "Not enough stock" in resp.text
+        assert 'name="next"' not in resp.text
 
 
 # ---------------------------------------------------------------------------

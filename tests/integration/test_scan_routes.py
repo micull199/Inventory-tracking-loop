@@ -961,6 +961,39 @@ class TestScanItemPageInlineFormFields:
         tag = resp.text[tag_start : tag_end + 1]
         assert "required" in tag
 
+    def test_each_inline_form_carries_hidden_next_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC1d: each of the three inline forms includes a hidden
+        `<input name="next" value="/scan/item/{id}">` so a successful submit
+        redirects back into scan flow instead of landing on the per-action
+        form. The qty inputs and submit buttons stay unchanged."""
+        item = _make_item(db_session, sku="NEXT-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        out_marker = resp.text.find('data-testid="scan-out-form"')
+        in_marker = resp.text.find('data-testid="scan-in-form"')
+        adj_marker = resp.text.find('data-testid="scan-adjust-form"')
+        assert out_marker >= 0
+        assert in_marker > out_marker
+        assert adj_marker > in_marker
+        out_block = resp.text[out_marker:in_marker]
+        in_block = resp.text[in_marker:adj_marker]
+        adj_block = resp.text[adj_marker:]
+        expected_value = f'value="/scan/item/{item.id}"'
+        for block_name, block in (
+            ("out", out_block),
+            ("in", in_block),
+            ("adjust", adj_block),
+        ):
+            assert 'name="next"' in block, (
+                f"{block_name} form missing hidden next input"
+            )
+            assert expected_value in block, (
+                f"{block_name} form's next value is wrong"
+            )
+
 
 # ---------------------------------------------------------------------------
 # SC1c: inline action forms — end-to-end submission goes through to the

@@ -198,6 +198,21 @@ def _parse_direction(raw: str) -> str:
     return text
 
 
+def _safe_scan_next(raw: str) -> str | None:
+    """Return ``raw`` (trimmed) if it points back into scan flow, else ``None``.
+
+    Whitelist: exact ``/scan`` or anything starting with ``/scan/``. Rejects
+    `//evil.com/x` (open-redirect attempt — doesn't match either pattern),
+    `/scanner/...` (close prefix but not a scan-flow URL), and every other
+    path. Used by the in/out/adjust POST routes to honour an optional
+    ``next=`` form param coming from ``scan.html``'s inline forms.
+    """
+    text = (raw or "").strip()
+    if text == "/scan" or text.startswith("/scan/"):
+        return text
+    return None
+
+
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.get(Item, item_id)
     if item is None:
@@ -305,6 +320,7 @@ def record_stock_in(
     unit_cost: str = Form(""),
     reason: str = Form(""),
     note: str = Form(""),
+    next_: str = Form("", alias="next"),
     user: User = Depends(
         require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
     ),
@@ -368,8 +384,9 @@ def record_stock_in(
         request,
         f"Stock-in recorded: +{qty_decimal} {item.unit} of “{item.name}”.",
     )
+    target_url = _safe_scan_next(next_) or f"/admin/items/{item.id}/in"
     return RedirectResponse(
-        url=f"/admin/items/{item.id}/in",
+        url=target_url,
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -436,6 +453,7 @@ def record_stock_out(
     qty: str = Form(""),
     reason: str = Form(""),
     note: str = Form(""),
+    next_: str = Form("", alias="next"),
     user: User = Depends(
         require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
     ),
@@ -511,8 +529,9 @@ def record_stock_out(
         request,
         f"Stock-out recorded: -{qty_decimal} {item.unit} of “{item.name}”.",
     )
+    target_url = _safe_scan_next(next_) or f"/admin/items/{item.id}/out"
     return RedirectResponse(
-        url=f"/admin/items/{item.id}/out",
+        url=target_url,
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -588,6 +607,7 @@ def record_stock_adjustment(
     unit_cost: str = Form(""),
     reason: str = Form(""),
     note: str = Form(""),
+    next_: str = Form("", alias="next"),
     user: User = Depends(
         require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
     ),
@@ -705,8 +725,9 @@ def record_stock_adjustment(
     db.commit()
 
     _flash(request, flash_message)
+    target_url = _safe_scan_next(next_) or f"/admin/items/{item.id}/adjust"
     return RedirectResponse(
-        url=f"/admin/items/{item.id}/adjust",
+        url=target_url,
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
