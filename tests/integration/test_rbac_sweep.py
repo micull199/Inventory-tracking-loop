@@ -144,6 +144,8 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/taxonomy/fields/99999", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/archive", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/unarchive", MANAGER),
+    # --- Manager-only: audit log read view ---
+    ("GET", "/admin/audit", MANAGER),
     # --- Manager-only: items create / archive / unarchive ---
     ("GET", "/admin/items/new", MANAGER),
     ("POST", "/admin/items", MANAGER),

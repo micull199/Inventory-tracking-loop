@@ -172,6 +172,15 @@
                         </a>
                     </li>
                 {% endif %}
+                {% if current_user.role and current_user.role.value in ("admin", "manager") %}
+                    <li>
+                        <a href="/admin/audit"
+                           data-testid="nav-audit"
+                           {% if request.url.path.startswith("/admin/audit") %}aria-current="page"{% endif %}>
+                            Audit
+                        </a>
+                    </li>
+                {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>
                         <a href="/admin/users"

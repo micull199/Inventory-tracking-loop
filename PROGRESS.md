@@ -963,7 +963,35 @@ No `archived_at` on any of the three. The engine maintains six invariants (docum
 
 ## Current slice
 
-*(none — RBAC1 just shipped. **DoD #9 ticked this iteration.** See Completed log row I54 + the rolling self-critique notes for RBAC1 weaknesses queued as future polish.)*
+**A1 — Manager+Admin audit log read view (DoD #8 step 1; MISSION §3 "Audit and history"):** the smallest end-to-end slice that moves DoD #8 closer to ticked. The `audit_log` table is populated by every state-changing route via `app/audit.py::record_audit` and locked at the DB layer by `apply_immutability_triggers` (verified by `test_audit_immutability.py` — 6 tests covering UPDATE + DELETE + ORM + Core paths), but there's no UI surface yet so a Manager/Admin can't actually inspect what's happened. A1 lays down a new `GET /admin/audit` route gated to Manager+Admin, a paginated newest-first list view, and a nav link. **No filters in this slice** (queued for follow-up): A1's purpose is to surface the data; filtering is a separate slice.
+
+- **DoD #8 not ticked yet.** DoD #8 wording: "Every state change in audit log with actor + timestamp. Audit log not editable." The "not editable" half is verified by `test_audit_immutability.py`. The "every state change" half is verified by per-route audit tests across ~25 sibling test files (each per-domain test file pins the audit shape for its own routes). A1 doesn't add the cross-cutting coverage sweep that would be the equivalent of RBAC1 for audit — that's queued as a separate slice (A2 in the candidates list). A1 is the *user-facing* leg of DoD #8: even if the data is captured, it's only useful when a human can see it.
+
+- **New module** (`app/audit_routes.py` — ~50 LoC): single `GET /admin/audit` route gated via `require_role(Role.MANAGER)` (Admin always passes through `require_role`). Paginated SELECT against `AuditLog` LEFT JOIN `User` (so we can render actor email; null actor = "(system)"). Page size 50. `?page=N` form param (1-indexed; default 1; clamps below to 1; allowed-role hits to a too-high page render an empty table — no 404, since the route's job is to display whatever's there).
+
+- **Why a new module rather than `main.py` or `app/audit.py`**: `app/audit.py` is the *writer* (record_audit + immutability triggers); mixing read routes there blurs the writer/reader boundary. `main.py` already hosts admin user management; the audit view fits the per-domain router pattern used by every other domain (suppliers, locations, taxonomy, etc.). +1 source file in mypy strict (29 from 28).
+
+- **Page size 50**: round number that fits on a screen without scrolling for the typical case. Pagination via LIMIT + OFFSET. For the v1 audit volumes (a few hundred to thousands of rows after a year), OFFSET-based pagination is fine; cursor-based pagination is a future-polish item if performance becomes a concern.
+
+- **Newest-first** (`ORDER BY created_at DESC, id DESC`): the user's question is almost always "what just happened"; secondary `id DESC` makes ordering deterministic for rows that share a microsecond.
+
+- **Template** (`app/templates/admin_audit.html` — ~40 LoC): h1 "Audit log" + a summary line "Showing N–M of T" + a table with columns Time / Actor / Action / Entity / Before / After + prev/next pagination links at the bottom. Time renders as `created_at.isoformat()` (sortable, machine-readable, timezone-aware via `DateTime(timezone=True)` on the model). Actor is the user's email or "(system)" for `actor_id IS NULL`. Entity is `f"{entity_type}:{entity_id}"`, with `:` omitted when `entity_id is None`. Before/After cells render the JSON dicts as compact `{{ ... | tojson }}`; null shows as "—". No row-detail click-through in this slice (the table cells contain everything).
+
+- **Manual sanity check** (no human required): the integration tests pin route render + pagination + sort order. A manager visiting `/admin/audit` sees the rows we seeded, in newest-first order, paginated.
+
+- **Tests** (target ~14 new in `tests/integration/test_audit_view_routes.py`):
+  - `TestAuditViewRoleEnforcement` (6): anon → 401; pending → 403; workshop → 403; office → 403; manager → 200; admin → 200.
+  - `TestAuditViewRender` (5): renders `data-testid="admin-audit-table"`; renders a seeded row's action + actor email; entity column renders `f"{type}:{id}"`; system-action row (actor_id=null) renders "(system)"; before/after columns render compact JSON.
+  - `TestAuditViewSort` (1): two seeded rows (older + newer) → newer appears first in the rendered table.
+  - `TestAuditViewPagination` (3): default `?page=` (no param) shows latest 50 of 60 seeded; `?page=2` shows the remaining 10; `?page=99` (too high) returns 200 with an empty body row + the "no audit entries on this page" placeholder.
+
+- **`base.html` nav link** (Manager+Admin only): `<a href="/admin/audit" data-testid="nav-audit">Audit</a>` placed after the Stock takes link in the Manager+Admin nav block. Tests in `test_layout.py` pin: manager sees nav-audit; admin sees nav-audit; office does NOT; workshop does NOT; aria-current set on the audit page.
+
+- **`tests/integration/test_rbac_sweep.py` ROUTES update**: add `("GET", "/admin/audit", MANAGER)` under "Manager-only" (the boundary check would fail otherwise). Sweep total: 90 → 91 routes; total cells: 540 → 546.
+
+- **Total test delta target**: ~14 new (audit view) + 5 new (layout) + 6 sweep cells (1 route × 6 roles) = ~25 new. Total pytest: 2243 → ~2268.
+
+- **No e2e walk added in A1.** The integration tests pin the view's render shape end-to-end; an e2e walk would re-test what the integration suite covers. An e2e walk lands when the audit view gets filters / detail clickthrough and a multi-step user flow exists worth pinning. Documented; queued.
 
 <!-- SC2c plan (now shipped) — kept commented for audit-trail context only.
 

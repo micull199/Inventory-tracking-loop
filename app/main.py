@@ -8,6 +8,7 @@ from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import audit_routes as audit_routes_module
 from app import checkouts as checkouts_module
 from app import checkouts_admin as checkouts_admin_module
 from app import dashboard as dashboard_module
@@ -65,6 +66,7 @@ app.include_router(dashboard_module.router)
 app.include_router(stock_takes_module.router)
 app.include_router(reports_module.router)
 app.include_router(scan_module.router)
+app.include_router(audit_routes_module.router)
 
 
 @app.get("/health")
