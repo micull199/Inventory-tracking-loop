@@ -118,10 +118,10 @@ class TestAdminUsersRoleEnforcement:
         )
         resp = client.get("/admin/users")
         assert resp.status_code == 200
-        body = resp.json()
-        emails = {row["email"] for row in body}
-        assert "admin@example.com" in emails
-        assert "other@example.com" in emails
+        # HTML page renders both users in the table.
+        assert "admin@example.com" in resp.text
+        assert "other@example.com" in resp.text
+        assert 'data-testid="admin-users-table"' in resp.text
 
     def test_pending_user_with_admin_role_blocked(
         self, client: TestClient, db_session: Session

@@ -27,19 +27,19 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current state
 
-**Iteration:** 2 (complete)
-**Last commit:** b46ee57 — slice: F2 — Google SSO + users + roles
+**Iteration:** 3 (complete)
+**Last commit:** _pending — see Completed log below for the F2.1 commit hash_
 **Branch:** main
-**Tests:** `make check` green: ruff ✓, mypy ✓, pytest 27 unit+integration ✓, Playwright 3 e2e ✓.
-**Definition-of-Done items ticked:** 0 / 12 (DoD #1 and #9 advanced — sign-in + pending state + server-side role enforcement all work; not ticked because the admin "assign role" UI doesn't exist yet, so the full DoD #1 happy path is not end-to-end demoable yet).
+**Tests:** `make check` green: ruff ✓, mypy ✓, pytest 43 unit+integration ✓, Playwright 4 e2e ✓.
+**Definition-of-Done items ticked:** 0 / 12 (DoD #1 round-trip is now demoable end-to-end via Playwright — admin promotes a pending user, that user signs back in, sees the welcome page with their role. Still not ticked because "access the appropriate parts of the app" is hollow today: there are no role-gated app pages beyond `/admin/users` itself, so the Workshop user has nothing meaningful to access. DoD #9 also not ticked — there's no Manager-only URL yet, so the literal "Workshop hitting Manager URL → 403" scenario can't be exercised. Both will tick once a non-admin role gate ships, e.g. S1 Suppliers — Manager-only.)
 
 **Repo health:**
 - ruff: clean (`app tests`)
 - mypy: clean (strict on `app/`, 6 source files)
-- pytest unit + integration: 27 passing
-- Playwright e2e: 3 passing (chromium)
+- pytest unit + integration: 43 passing
+- Playwright e2e: 4 passing (chromium)
 
-**What's running:** FastAPI app with sessions + Google SSO (Authlib) + dev-login backdoor (test/dev only). Index page that branches anonymous / pending / welcome. Admin-only `/admin/users` JSON listing. SQLAlchemy `User` + `Role`/`UserStatus` enums backed by an Alembic-managed `users` table.
+**What's running:** FastAPI app with sessions + Google SSO (Authlib) + dev-login backdoor (test/dev only). Index page that branches anonymous / pending / disabled / welcome. Admin-only `/admin/users` HTML page with per-user role + status assignment forms (POST + 303 redirect). Self-mutation guards (admin can't demote/disable themselves). SQLAlchemy `User` + `Role`/`UserStatus` enums backed by an Alembic-managed `users` table.
 
 **Known broken:** none.
 
@@ -47,20 +47,30 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current slice
 
-*(none — slice F2 just shipped, see Completed log)*
+*(none — slice F2.1 just shipped, see Completed log)*
 
 ---
 
 ## Next slice
 
-**Slice name:** F2.1 — Admin user-management UI: assign role, activate/disable users
-**Targets DoD item(s):** 1 (will tick once this lands and the round-trip is e2e demoable)
-**Why this next:** F2 created pending users but there's no way for an admin to approve them, so DoD #1 isn't fully closed. This slice is the smallest follow-on that closes it.
+**Slice name:** F3 — Audit log infrastructure (append-only)
+**Targets DoD item(s):** 8
+**Why this next:** Two slices' worth of mutating actions (user creation in F2, role/status changes in F2.1) are happening with no audit trail. F3 lays down the table + a thin `record_audit()` helper, retroactively wires the existing mutations into it, and locks down append-only behaviour at the DB layer. After F3, every future state change can hook into the same path with one line.
 **Sketch:**
-- HTML page at `/admin/users` (replace JSON-only response, or add an HTML variant gated on `Accept`).
-- POST endpoints: assign-role + toggle-status. Server-side role check stays.
-- Audit log isn't built yet (F3) — for now we trust the existing `request.state` actor; F3 will hook this in retroactively without changing the route shape.
-- Tests: integration (admin can promote pending → active manager; non-admin POST gets 403; admin can't disable themselves — guardrail). Playwright: admin signs in via dev-login → opens admin users → assigns Workshop to a pending user → that user reloads and sees the welcome page.
+- New table `audit_log(id, actor_id?, action, entity_type, entity_id, before_json, after_json, created_at)` per MISSION §6. Migration generated via `alembic revision --autogenerate`.
+- `actor_id` nullable so system actions (e.g. background jobs in v1) can write entries.
+- `before_json`/`after_json` as JSON columns (SQLAlchemy `JSON` type — works on SQLite + Postgres without dialect-specific code).
+- `record_audit(db, *, actor, action, entity_type, entity_id, before, after)` helper in `app/audit.py`. Tests directly.
+- Wire into existing mutations:
+  - First sign-in (user create) → action=`user.created`
+  - Bootstrap admin promotion → action=`user.bootstrap_admin_granted`
+  - Admin role assignment → action=`user.role_assigned`
+  - Admin status change → action=`user.status_changed`
+- DB-level immutability: a SQLite trigger + a Postgres-equivalent rule that raises on UPDATE/DELETE of `audit_log`. Belt-and-braces on top of "no application code path mutates it." This is what makes "audit log not editable" a real claim.
+- Tests:
+  - Unit: helper writes the row with the right shape; serialization of enums + None.
+  - Integration: a role-assign POST writes exactly one audit entry with the expected before/after.
+  - DB-level: attempting to UPDATE or DELETE an audit_log row raises (sqlite trigger fires).
 
 ---
 
@@ -160,6 +170,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
+| 3 | F2.1 — Admin user-management UI: assign role, activate/disable users | `_pending_` | `/admin/users` is now an HTML page with per-user role + status forms (POST → 303 redirect, no HTMX yet). New routes `POST /admin/users/{id}/role` + `/status` with server-side guards: admin can't demote themselves, can't disable themselves, can't activate a user with no role. Pending users sort to the top of the list. e2e covers the full round-trip: pending user signs in → admin promotes them → user signs back in and sees the welcome page. 43 unit/integration + 4 e2e passing. |
 | 2 | F2 — Google SSO login + pending-state user model + role enum | `b46ee57` | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
 | 1 | F1 — Project skeleton and verification harness | `884cd46` | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
 
@@ -169,7 +180,10 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 *(Carry forward weaknesses noted during iteration self-critiques but not yet addressed. Clear an entry when it gets fixed in a later slice. Don't let this get longer than ~10 items — if it does, something has gone off the rails.)*
 
-- **F2 / no CSRF on POSTs.** `POST /auth/logout` and (in dev/test) `POST /auth/_dev-login` are not CSRF-protected. The session cookie uses `SameSite=Lax`, which mitigates most cross-origin POSTs, but is not a substitute. Must land a CSRF middleware (likely a per-session token rendered into forms via Jinja) before the first user-facing form-post slice ships (S1/S2/F4). Reason this isn't blocking now: logout is a no-op for an attacker, and `/_dev-login` is gated on non-prod environments.
+- **F2.1 / still no CSRF on POSTs, and now there are real ones.** F2.1 added `POST /admin/users/{id}/role` and `POST /admin/users/{id}/status` — non-trivial mutating routes. `SameSite=Lax` blocks the obvious cross-site-form-POST CSRF, but a clever attacker with a CSRF on a same-site origin (e.g. another route on this app, or a cross-subdomain in prod) is unprotected. Pressure to land a CSRF middleware is now real. Block S1+ (or any slice that exposes mutating UI to non-admin actors) on this. Why not now: F2.1 is admin-only, admin-curated, low-traffic; S1 will hit office/manager users.
+- **F2.1 / no last-admin guard.** Server prevents an admin from demoting/disabling *themselves*, but not from demoting/disabling another admin — including the only other admin. Sequence to lock everyone out: A and B are admins; A demotes B to manager (allowed), then disables themselves... no, that's blocked. But: A demotes B *and* disables themselves... still blocked on self-disable. Genuine lock-out path: A demotes themselves (blocked), so really just: A disables B → A leaves → no one can manage. Recovery requires direct DB access or wiping admins so the bootstrap path re-fires. Not blocking, but worth a 30-line slice ("cannot remove the last active admin") soon.
+- **F2.1 / `/auth/me` doesn't enforce status.** A `disabled` user with a still-valid session cookie can hit `/auth/me` and see their JSON. Pre-existing in F2; surfaced here because F2.1 made disabling more reachable. Fix: replace `require_user` with a `require_active_user` for any route that should reflect current account state. Belongs in F4 alongside the nav refresh.
+- **F2 / no CSRF on POSTs.** `POST /auth/logout` and (in dev/test) `POST /auth/_dev-login` are not CSRF-protected. The session cookie uses `SameSite=Lax`, which mitigates most cross-origin POSTs, but is not a substitute. Must land a CSRF middleware (likely a per-session token rendered into forms via Jinja) before the first user-facing form-post slice ships (S1/S2/F4). Reason this isn't blocking now: logout is a no-op for an attacker, and `/_dev-login` is gated on non-prod environments. *(Carried + escalated; see F2.1 entry above.)*
 - **F2 / dev-login backdoor exists in `dev` too, not just `test`.** Useful for local hacking, but it is a real backdoor: anyone who can reach the dev server can sign in as anyone. Document this in the README (done) and consider tightening to `test`-only (or requiring an env-var token) once we have a real dev workflow.
 - **F2 / migration's CHECK constraint duplicates the enum members.** `migrations/versions/0001_create_users.py` hard-codes `('admin','manager','office','workshop')` and `('pending','active','disabled')`. Adding a new `Role` member without a migration update would silently make the model accept values the DB rejects. Tests would catch it (any insert with the new value would fail), but consider dropping the CHECK in favour of just trusting the SAEnum, or generating the constraint from the enum at migration time.
 - **F2 / no audit on user creation/promotion.** Slice F3 (audit log infrastructure) will retroactively wire this in. Acceptable — DoD #8 says audit works for "every state change", which is verified by F3's tests, not F2's.

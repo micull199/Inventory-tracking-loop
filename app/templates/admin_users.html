@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Manage users — UC Inventory{% endblock %}
+{% block content %}
+    <h1>Manage users</h1>
+    <p>Assign roles and activate or disable accounts. Pending users appear at the top.</p>
+
+    <table data-testid="admin-users-table">
+        <thead>
+            <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+                <tr data-testid="user-row" data-user-id="{{ u.id }}" data-user-status="{{ u.status.value }}">
+                    <td data-testid="user-email">{{ u.email }}</td>
+                    <td>{{ u.name }}</td>
+                    <td>
+                        <form method="post" action="/admin/users/{{ u.id }}/role" style="display:inline">
+                            <select name="role" data-testid="role-select" {% if u.id == current_user.id %}disabled{% endif %}>
+                                <option value="" {% if u.role is none %}selected{% endif %}>— (no role)</option>
+                                {% for r in roles %}
+                                    <option value="{{ r.value }}" {% if u.role == r %}selected{% endif %}>{{ r.value }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if u.id != current_user.id %}
+                                <button type="submit" data-testid="role-submit">Save role</button>
+                            {% endif %}
+                        </form>
+                    </td>
+                    <td>
+                        <form method="post" action="/admin/users/{{ u.id }}/status" style="display:inline">
+                            <select name="status" data-testid="status-select" {% if u.id == current_user.id %}disabled{% endif %}>
+                                {% for s in statuses %}
+                                    <option value="{{ s.value }}" {% if u.status == s %}selected{% endif %}>{{ s.value }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if u.id != current_user.id %}
+                                <button type="submit" data-testid="status-submit">Save status</button>
+                            {% endif %}
+                        </form>
+                    </td>
+                    <td>{{ u.created_at.strftime("%Y-%m-%d") }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

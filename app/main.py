@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -15,7 +15,7 @@ from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
 from app.db import get_session
-from app.models import Role, User
+from app.models import Role, User, UserStatus
 
 app = FastAPI(title="UC Inventory")
 
@@ -45,22 +45,113 @@ def index(
     )
 
 
-@app.get("/admin/users")
+# ---------------------------------------------------------------------------
+# Admin user management
+# ---------------------------------------------------------------------------
+#
+# Role/status mutations are POST-only so that SameSite=Lax + the eventual CSRF
+# token (queued for F4) can protect them. GETs never mutate state.
+
+# Order: pending users first (admin needs to act on these), then active, then
+# disabled — within each bucket, newest first.
+_USER_LIST_ORDER = case(
+    (User.status == UserStatus.PENDING, 0),
+    (User.status == UserStatus.ACTIVE, 1),
+    else_=2,
+)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
 def admin_list_users(
-    _admin: User = Depends(require_role(Role.ADMIN)),
+    request: Request,
+    admin: User = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_session),
-) -> JSONResponse:
-    """List all users. Admin-only — used by the admin user-management UI (next slice)."""
-    rows = db.execute(select(User).order_by(User.created_at.desc())).scalars().all()
-    return JSONResponse(
-        [
-            {
-                "id": u.id,
-                "email": u.email,
-                "name": u.name,
-                "role": u.role.value if u.role else None,
-                "status": u.status.value,
-            }
-            for u in rows
-        ]
+) -> HTMLResponse:
+    rows = (
+        db.execute(select(User).order_by(_USER_LIST_ORDER, User.created_at.desc()))
+        .scalars()
+        .all()
     )
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "current_user": admin,
+            "users": rows,
+            "roles": list(Role),
+            "statuses": list(UserStatus),
+        },
+    )
+
+
+@app.post("/admin/users/{user_id}/role")
+def admin_set_user_role(
+    user_id: int,
+    role: str = Form(""),
+    admin: User = Depends(require_role(Role.ADMIN)),
+    db: Session = Depends(get_session),
+) -> Response:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+    new_role: Role | None
+    if role == "":
+        new_role = None
+    else:
+        try:
+            new_role = Role(role)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="invalid role"
+            ) from exc
+
+    # Self-demotion guard: an admin cannot remove their own admin role. Without
+    # this, the only admin could lock everyone out by accident.
+    if user.id == admin.id and new_role is not Role.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot change your own role",
+        )
+
+    user.role = new_role
+    db.commit()
+    return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/users/{user_id}/status")
+def admin_set_user_status(
+    user_id: int,
+    status_value: str = Form(..., alias="status"),
+    admin: User = Depends(require_role(Role.ADMIN)),
+    db: Session = Depends(get_session),
+) -> Response:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+    try:
+        new_status = UserStatus(status_value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid status"
+        ) from exc
+
+    # Self-status guard: same reasoning as the role guard.
+    if user.id == admin.id and new_status is not UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot change your own status",
+        )
+
+    # Activating a user with no role would land them on the welcome page with no
+    # permissions — a UX trap. Force the admin to assign a role first.
+    if new_status is UserStatus.ACTIVE and user.role is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot activate a user with no role assigned",
+        )
+
+    user.status = new_status
+    db.commit()
+    return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)

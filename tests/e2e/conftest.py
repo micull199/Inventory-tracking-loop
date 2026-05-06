@@ -53,7 +53,11 @@ def app_server(unused_tcp_port_factory: object) -> Iterator[str]:
             # Explicitly leave Google client creds blank; e2e uses /auth/_dev-login.
             "GOOGLE_CLIENT_ID": "",
             "GOOGLE_CLIENT_SECRET": "",
-            "BOOTSTRAP_ADMIN_EMAIL": "",
+            # Set so the first sign-in with this email becomes the seed admin.
+            # The bootstrap rule is one-shot (won't fire once an admin exists),
+            # so this is safe across the session — only the very first sign-in
+            # as admin@uc.test gets the auto-promotion.
+            "BOOTSTRAP_ADMIN_EMAIL": "admin@uc.test",
         }
     )
 
