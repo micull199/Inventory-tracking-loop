@@ -131,6 +131,46 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     )
     expect(restored_row).to_be_visible()
 
+    # Step 11: Click into the category's sub-categories.
+    restored_row.get_by_test_id("open-children").click()
+    mgr_page.wait_for_url(lambda u: "/children" in u)
+    expect(mgr_page.get_by_test_id("sub-empty")).to_be_visible()
+
+    # Step 12: Create a "Silver" sub-category.
+    mgr_page.get_by_test_id("new-sub-category").click()
+    mgr_page.wait_for_url(lambda u: "/children/new" in u)
+    mgr_page.get_by_test_id("taxonomy-name-input").fill("Silver")
+    mgr_page.get_by_test_id("taxonomy-submit").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/children"))
+    expect(mgr_page.get_by_test_id("flash")).to_contain_text("Silver")
+    silver_row = mgr_page.locator(
+        '[data-testid="sub-row"]', has_text="Silver"
+    )
+    expect(silver_row).to_be_visible()
+
+    # Step 13: Archive the sub-category.
+    silver_row.get_by_test_id("archive-sub").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/children"))
+    expect(
+        mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
+    ).to_have_count(0)
+
+    # Step 14: Switch to the archived sub-cat tab — Silver is there.
+    mgr_page.get_by_test_id("sub-tab-archived").click()
+    mgr_page.wait_for_url(lambda u: "show=archived" in u)
+    archived_silver = mgr_page.locator(
+        '[data-testid="sub-row"]', has_text="Silver"
+    )
+    expect(archived_silver).to_be_visible()
+
+    # Step 15: Unarchive — back to active.
+    archived_silver.get_by_test_id("unarchive-sub").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/children"))
+    restored_silver = mgr_page.locator(
+        '[data-testid="sub-row"]', has_text="Silver"
+    )
+    expect(restored_silver).to_be_visible()
+
     mgr_page.close()
     if mgr_context is not context:
         mgr_context.close()

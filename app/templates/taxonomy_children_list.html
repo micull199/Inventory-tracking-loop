@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ parent.name }} — Sub-categories — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/taxonomy" data-testid="taxonomy-back">&larr; Back to categories</a></p>
+    <h1>Sub-categories of {{ parent.name }}</h1>
+
+    {% if parent.archived_at %}
+        <p data-testid="parent-archived-note">
+            <em>This category is archived. Existing sub-categories remain editable, but new ones cannot be added.</em>
+        </p>
+    {% else %}
+        <p>
+            <a class="button" href="/admin/taxonomy/{{ parent.id }}/children/new" data-testid="new-sub-category">New sub-category</a>
+        </p>
+    {% endif %}
+
+    <nav aria-label="Filter sub-categories" data-testid="sub-tabs" style="margin-bottom: 1rem;">
+        <a href="/admin/taxonomy/{{ parent.id }}/children?show=active"
+           data-testid="sub-tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        |
+        <a href="/admin/taxonomy/{{ parent.id }}/children?show=archived"
+           data-testid="sub-tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if nodes %}
+        <table data-testid="sub-table">
+            <thead>
+                <tr>
+                    <th>Order</th>
+                    <th>Name</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for n in nodes %}
+                    <tr data-testid="sub-row" data-node-id="{{ n.id }}">
+                        <td data-testid="sub-sort-order">{{ n.sort_order }}</td>
+                        <td data-testid="sub-name">{{ n.name }}</td>
+                        <td>
+                            <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-sub">Edit</a>
+                            {% if n.archived_at is none %}
+                                <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-sub">Archive</button>
+                                </form>
+                            {% else %}
+                                <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/unarchive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="unarchive-sub">Unarchive</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="sub-empty">
+            {% if show == "archived" %}No archived sub-categories.{% else %}No sub-categories yet.{% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

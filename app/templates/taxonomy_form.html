@@ -1,8 +1,15 @@
 {% extends "base.html" %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="/admin/taxonomy">&larr; Back to taxonomy</a></p>
+    <p><a href="{{ back_url|default('/admin/taxonomy') }}" data-testid="taxonomy-back">&larr; Back</a></p>
     <h1>{{ title }}</h1>
+
+    {% if parent %}
+        <p data-testid="taxonomy-parent-context">
+            Parent category:
+            <strong>{{ parent.name }}</strong>
+        </p>
+    {% endif %}
 
     <form method="post" action="{{ action }}" data-testid="taxonomy-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -22,12 +29,12 @@
                    data-testid="taxonomy-sort-order-input"
                    step="1">
             <br>
-            <small>Optional. Lower numbers appear first. Leave blank on a new category to append it to the end (steps of 10).</small>
+            <small>Optional. Lower numbers appear first. Leave blank on a new entry to append it to the end (steps of 10).</small>
         </p>
 
         <p>
             <button type="submit" class="button" data-testid="taxonomy-submit">
-                {% if node %}Save changes{% else %}Create category{% endif %}
+                {% if node %}Save changes{% else %}{% if parent %}Create sub-category{% else %}Create category{% endif %}{% endif %}
             </button>
         </p>
     </form>

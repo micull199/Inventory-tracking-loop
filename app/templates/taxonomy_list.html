@@ -2,7 +2,7 @@
 {% block title %}Taxonomy — UC Inventory{% endblock %}
 {% block content %}
     <h1>Taxonomy</h1>
-    <p>Categories used to classify items. Sub-categories and per-leaf custom fields land in later iterations. Archive a category when it's no longer in use — historical items keep working.</p>
+    <p>Categories used to classify items. Click into a category to manage its sub-categories. Archive a category when it's no longer in use — historical items keep working.</p>
 
     <p>
         <a class="button" href="/admin/taxonomy/new" data-testid="new-taxonomy">New category</a>
@@ -24,6 +24,7 @@
                 <tr>
                     <th>Order</th>
                     <th>Name</th>
+                    <th>Sub-categories</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -32,6 +33,9 @@
                     <tr data-testid="taxonomy-row" data-node-id="{{ n.id }}">
                         <td data-testid="taxonomy-sort-order">{{ n.sort_order }}</td>
                         <td data-testid="taxonomy-name">{{ n.name }}</td>
+                        <td>
+                            <a href="/admin/taxonomy/{{ n.id }}/children" data-testid="open-children">Manage</a>
+                        </td>
                         <td>
                             <a href="/admin/taxonomy/{{ n.id }}/edit" data-testid="edit-taxonomy">Edit</a>
                             {% if n.archived_at is none %}

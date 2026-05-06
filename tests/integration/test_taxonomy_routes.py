@@ -858,3 +858,890 @@ class TestTaxonomyArchive:
             follow_redirects=False,
         )
         assert resp.status_code == 404
+
+
+# ===========================================================================
+# Sub-category routes (S4)
+# ===========================================================================
+
+
+def _make_parent(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
+    parent = TaxonomyNode(name=name)
+    db.add(parent)
+    db.commit()
+    db.refresh(parent)
+    return parent
+
+
+class TestSubCategoryRoleEnforcement:
+    def test_anonymous_get_children_list_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 401
+
+    def test_workshop_get_children_list_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 403
+
+    def test_office_get_children_list_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 403
+
+    def test_manager_get_children_list_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 200
+
+    def test_workshop_create_sub_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "Sneaky", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        # No row was created.
+        assert (
+            db_session.execute(
+                select(TaxonomyNode).where(TaxonomyNode.parent_id.is_not(None))
+            ).first()
+            is None
+        )
+
+
+class TestSubCategoryList:
+    def test_list_unknown_parent_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy/9999/children")
+        assert resp.status_code == 404
+
+    def test_list_when_parent_is_actually_a_sub_category_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Listing children of a sub-cat would imply a third level. 400."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{sub.id}/children")
+        assert resp.status_code == 400
+
+    def test_list_shows_active_children_by_default(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=10),
+                TaxonomyNode(
+                    name="Old Silver",
+                    parent_id=parent.id,
+                    sort_order=20,
+                    archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 200
+        assert "Silver" in resp.text
+        assert "Old Silver" not in resp.text
+
+    def test_list_show_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Silver", parent_id=parent.id),
+                TaxonomyNode(
+                    name="Old Silver",
+                    parent_id=parent.id,
+                    archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?show=archived")
+        assert resp.status_code == 200
+        assert "Old Silver" in resp.text
+        assert "Silver" not in resp.text or "Old Silver" in resp.text  # active hidden
+
+    def test_list_excludes_other_parents_children(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Sub-cats under a different parent must not leak into the list."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent_a = _make_parent(db_session, "Raw Materials")
+        parent_b = _make_parent(db_session, "Tools")
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Silver", parent_id=parent_a.id),
+                TaxonomyNode(name="Hammer", parent_id=parent_b.id),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{parent_a.id}/children")
+        assert "Silver" in resp.text
+        assert "Hammer" not in resp.text
+
+    def test_list_orders_by_sort_order_then_name(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Zulu", parent_id=parent.id, sort_order=10),
+                TaxonomyNode(name="Alpha", parent_id=parent.id, sort_order=20),
+                TaxonomyNode(name="Bravo", parent_id=parent.id, sort_order=10),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        body = resp.text
+        idx_bravo = body.find("Bravo")
+        idx_zulu = body.find("Zulu")
+        idx_alpha = body.find("Alpha")
+        assert 0 < idx_bravo < idx_zulu < idx_alpha
+
+
+class TestSubCategoryCreate:
+    def test_get_new_form_renders_with_parent_context(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children/new")
+        assert resp.status_code == 200
+        assert "Raw Materials" in resp.text
+        assert 'name="name"' in resp.text
+        assert 'name="csrf_token"' in resp.text
+
+    def test_get_new_form_unknown_parent_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy/9999/children/new")
+        assert resp.status_code == 404
+
+    def test_get_new_form_under_archived_parent_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(
+            name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(parent)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children/new")
+        assert resp.status_code == 400
+
+    def test_create_happy_path(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={
+                "name": "Silver",
+                "sort_order": "5",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/taxonomy/{parent.id}/children"
+
+        sub = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+        ).scalar_one()
+        assert sub.name == "Silver"
+        assert sub.sort_order == 5
+        assert sub.archived_at is None
+
+    def test_create_strips_whitespace(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "  Silver  ", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        sub = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+        ).scalar_one()
+        assert sub.name == "Silver"
+
+    def test_create_blank_sort_order_steps_by_10(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add_all(
+            [
+                TaxonomyNode(name="A", parent_id=parent.id, sort_order=10),
+                TaxonomyNode(name="B", parent_id=parent.id, sort_order=30),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "C", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        c = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.name == "C")
+        ).scalar_one()
+        assert c.sort_order == 40
+
+    def test_create_blank_sort_order_zero_when_no_siblings(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "First", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        sub = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+        ).scalar_one()
+        assert sub.sort_order == 0
+
+    def test_create_rejects_empty_name(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_create_rejects_duplicate_sibling_name(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add(TaxonomyNode(name="Silver", parent_id=parent.id))
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        rows = list(
+            db_session.execute(
+                select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 1
+
+    def test_create_rejects_duplicate_archived_sibling_name(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Archiving a sub-cat does not free its name within the same parent."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        db_session.add(
+            TaxonomyNode(
+                name="Silver",
+                parent_id=parent.id,
+                archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_create_allows_same_name_under_different_parent(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        a = _make_parent(db_session, "Raw Materials")
+        b = _make_parent(db_session, "Tools")
+        db_session.add(TaxonomyNode(name="Silver", parent_id=a.id))
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{b.id}/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_create_allows_same_name_as_top_level_category(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A top-level "Silver" and a sub-cat "Silver" don't share a namespace."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        db_session.add(TaxonomyNode(name="Silver"))  # top-level
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_create_unknown_parent_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy/9999/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_create_under_sub_category_parent_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Depth-limit guard: parent must itself be top-level."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{sub.id}/children",
+            data={"name": "Hallmark", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_create_under_archived_parent_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(
+            name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(parent)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_create_writes_audit_row_with_parent_id(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{parent.id}/children",
+            data={
+                "name": "Silver",
+                "sort_order": "5",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        sub = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+        ).scalar_one()
+        rows = _audit_rows(db_session, action="taxonomy_node.created")
+        # parent + sub-cat audit rows; pick the one targeting the sub-cat.
+        sub_row = next(r for r in rows if r.entity_id == sub.id)
+        assert sub_row.actor_id == mgr.id
+        assert sub_row.before_json is None
+        assert sub_row.after_json == {
+            "name": "Silver",
+            "sort_order": 5,
+            "parent_id": parent.id,
+        }
+
+
+class TestSubCategoryEdit:
+    def test_get_edit_form_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=20)
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.get(f"/admin/taxonomy/sub/{sub.id}/edit")
+        assert resp.status_code == 200
+        assert "Silver" in resp.text
+        assert 'value="20"' in resp.text
+        assert "Raw Materials" in resp.text  # parent context
+
+    def test_get_edit_unknown_id_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy/sub/9999/edit")
+        assert resp.status_code == 404
+
+    def test_get_edit_top_level_via_sub_route_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The sub-cat edit URL only matches sub-cats. Top-level ids 404 here."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/sub/{parent.id}/edit")
+        assert resp.status_code == 404
+
+    def test_post_update_happy_path(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=10)
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub.id}",
+            data={
+                "name": "Silver Sheet",
+                "sort_order": "15",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/taxonomy/{parent.id}/children"
+
+        db_session.expire_all()
+        refreshed = db_session.get(TaxonomyNode, sub.id)
+        assert refreshed is not None
+        assert refreshed.name == "Silver Sheet"
+        assert refreshed.sort_order == 15
+        assert refreshed.parent_id == parent.id
+
+    def test_post_update_top_level_via_sub_route_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/sub/{parent.id}",
+            data={"name": "Renamed", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_post_update_rejects_sibling_name_clash(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        a = TaxonomyNode(name="Silver", parent_id=parent.id)
+        b = TaxonomyNode(name="Gold", parent_id=parent.id)
+        db_session.add_all([a, b])
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{b.id}",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        db_session.expire_all()
+        b_after = db_session.get(TaxonomyNode, b.id)
+        assert b_after is not None
+        assert b_after.name == "Gold"
+
+    def test_post_update_allows_same_name_in_different_parent(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Renaming a sub-cat to a name that exists under a different parent is fine."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent_a = _make_parent(db_session, "Raw Materials")
+        parent_b = _make_parent(db_session, "Tools")
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Silver", parent_id=parent_a.id),
+                TaxonomyNode(name="Hammer", parent_id=parent_b.id),
+            ]
+        )
+        db_session.commit()
+        hammer = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.name == "Hammer")
+        ).scalar_one()
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{hammer.id}",
+            data={"name": "Silver", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        hammer_after = db_session.get(TaxonomyNode, hammer.id)
+        assert hammer_after is not None
+        assert hammer_after.name == "Silver"
+        assert hammer_after.parent_id == parent_b.id
+
+    def test_post_update_blank_sort_order_keeps_existing(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=42)
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub.id}",
+            data={
+                "name": "Silver",
+                "sort_order": "",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        sub_after = db_session.get(TaxonomyNode, sub.id)
+        assert sub_after is not None
+        assert sub_after.sort_order == 42
+
+    def test_post_update_writes_audit_diff(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=10)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}",
+            data={
+                "name": "Silver",
+                "sort_order": "20",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        rows = [
+            r
+            for r in _audit_rows(db_session, action="taxonomy_node.updated")
+            if r.entity_id == sub_id
+        ]
+        assert len(rows) == 1
+        assert rows[0].before_json == {"sort_order": 10}
+        assert rows[0].after_json == {"sort_order": 20}
+
+    def test_post_update_no_op_writes_no_audit_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id, sort_order=10)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}",
+            data={
+                "name": "Silver",
+                "sort_order": "10",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        rows = [
+            r
+            for r in _audit_rows(db_session, action="taxonomy_node.updated")
+            if r.entity_id == sub_id
+        ]
+        assert rows == []
+
+
+class TestSubCategoryArchive:
+    def test_archive_sets_archived_at(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/taxonomy/{parent.id}/children"
+
+        db_session.expire_all()
+        refreshed = db_session.get(TaxonomyNode, sub_id)
+        assert refreshed is not None
+        assert refreshed.archived_at is not None
+
+    def test_archive_already_archived_is_noop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(
+            name="Silver",
+            parent_id=parent.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        rows = [
+            r
+            for r in _audit_rows(db_session, action="taxonomy_node.archived")
+            if r.entity_id == sub_id
+        ]
+        assert rows == []
+
+    def test_archive_unknown_id_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy/sub/9999/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_archive_top_level_via_sub_route_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/sub/{parent.id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_archive_writes_audit_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        rows = [
+            r
+            for r in _audit_rows(db_session, action="taxonomy_node.archived")
+            if r.entity_id == sub_id
+        ]
+        assert len(rows) == 1
+        assert rows[0].actor_id == mgr.id
+
+    def test_unarchive_clears_archived_at(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(
+            name="Silver",
+            parent_id=parent.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/unarchive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        refreshed = db_session.get(TaxonomyNode, sub_id)
+        assert refreshed is not None
+        assert refreshed.archived_at is None
+
+    def test_unarchive_already_active_is_noop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/unarchive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        rows = [
+            r
+            for r in _audit_rows(db_session, action="taxonomy_node.unarchived")
+            if r.entity_id == sub_id
+        ]
+        assert rows == []
+
+    def test_unarchive_top_level_via_sub_route_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(
+            name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(parent)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/sub/{parent.id}/unarchive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_archive_remains_allowed_under_archived_parent(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Archiving an existing sub-cat is allowed even when the parent is archived.
+
+        The "no new structure under archived" rule blocks creates, not cleanups.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(
+            name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+        db_session.add(parent)
+        db_session.commit()
+        db_session.refresh(parent)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        sub_id = sub.id
+        _login_as(client, mgr)
+
+        resp = client.post(
+            f"/admin/taxonomy/sub/{sub_id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        refreshed = db_session.get(TaxonomyNode, sub_id)
+        assert refreshed is not None
+        assert refreshed.archived_at is not None
