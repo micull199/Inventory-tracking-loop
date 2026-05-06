@@ -25,11 +25,11 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.cost_engine import record_receipt
@@ -1002,6 +1002,8 @@ class TestPODetailView:
     def test_lines_render_in_sku_order_with_correct_cells(
         self, client: TestClient, db_session: Session
     ) -> None:
+        # Non-draft status so the read-only render path is exercised; PO2b
+        # turns drafts into edit forms (input cells, not text cells).
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
@@ -1012,7 +1014,7 @@ class TestPODetailView:
             db_session, leaf=leaf, sku="A-1", supplier=sup, name="A item"
         )
         po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
         )
         db_session.add(po)
         db_session.flush()
@@ -1057,12 +1059,14 @@ class TestPODetailView:
     def test_null_expected_cost_shows_empty_marker(
         self, client: TestClient, db_session: Session
     ) -> None:
+        # Non-draft status — the empty-cost marker only appears on the
+        # read-only render path. Drafts render an empty input instead.
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="N-1", supplier=sup)
         po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
         )
         db_session.add(po)
         db_session.flush()
@@ -1082,3 +1086,923 @@ class TestPODetailView:
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
         assert 'data-testid="po-line-cost-empty"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# PO2b — edit + cancel a draft PO
+# ---------------------------------------------------------------------------
+
+
+def _make_draft_po(
+    db: Session,
+    *,
+    supplier: Supplier,
+    leaf: TaxonomyNode,
+    actor: User,
+    skus: list[str] | None = None,
+    qty_ordered: Decimal = Decimal("10"),
+    expected_unit_cost: Decimal | None = None,
+    po_status: POStatus = POStatus.DRAFT,
+) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
+    """Create a PO + one line per SKU directly (skipping the create route)."""
+    skus = skus or ["EDIT-1"]
+    po = PurchaseOrder(
+        supplier_id=supplier.id, status=po_status, created_by=actor.id
+    )
+    db.add(po)
+    db.flush()
+    lines: list[PurchaseOrderLine] = []
+    for sku in skus:
+        item = _make_item(db, leaf=leaf, sku=sku, supplier=supplier)
+        line = PurchaseOrderLine(
+            po_id=po.id,
+            item_id=item.id,
+            qty_ordered=qty_ordered,
+            qty_received=Decimal("0"),
+            expected_unit_cost=expected_unit_cost,
+        )
+        db.add(line)
+        lines.append(line)
+    db.commit()
+    db.refresh(po)
+    for line in lines:
+        db.refresh(line)
+    return po, lines
+
+
+def _form_data_for_po(
+    *,
+    po: PurchaseOrder,
+    lines: list[PurchaseOrderLine],
+    csrf: str,
+    expected_date: str | None = None,
+    notes: str | None = None,
+    qty_overrides: dict[int, str] | None = None,
+    cost_overrides: dict[int, str] | None = None,
+) -> dict[str, str]:
+    """Build the form-encoded payload for the edit route.
+
+    Defaults preserve current values (no-op submit). Overrides keyed by line
+    id replace the per-line fields.
+    """
+    qty_overrides = qty_overrides or {}
+    cost_overrides = cost_overrides or {}
+    data: dict[str, str] = {"csrf_token": csrf}
+    data["expected_date"] = (
+        expected_date
+        if expected_date is not None
+        else (po.expected_date.isoformat() if po.expected_date else "")
+    )
+    data["notes"] = notes if notes is not None else (po.notes or "")
+    for line in lines:
+        qty_key = f"qty_ordered_{line.id}"
+        cost_key = f"expected_unit_cost_{line.id}"
+        data[qty_key] = (
+            qty_overrides[line.id]
+            if line.id in qty_overrides
+            else str(line.qty_ordered)
+        )
+        data[cost_key] = (
+            cost_overrides[line.id]
+            if line.id in cost_overrides
+            else (
+                str(line.expected_unit_cost)
+                if line.expected_unit_cost is not None
+                else ""
+            )
+        )
+    return data
+
+
+class TestPOEditRoleEnforcement:
+    def test_anonymous_post_update_is_401(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post(
+            "/admin/purchase-orders/1",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_anonymous_post_cancel_is_401(
+        self, client: TestClient
+    ) -> None:
+        resp = client.post(
+            "/admin/purchase-orders/1/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_pending_post_update_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.post(
+            "/admin/purchase-orders/1",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_pending_post_cancel_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.post(
+            "/admin/purchase-orders/1/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_workshop_post_update_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            "/admin/purchase-orders/1",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_workshop_post_cancel_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            "/admin/purchase-orders/1/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+
+    def test_manager_post_update_succeeds(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        leaf = _make_leaf(db_session)
+        po, lines = _make_draft_po(
+            db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-1"]
+        )
+        _login_as(client, u)
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po, lines=lines, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_office_post_update_succeeds(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        creator = _make_user(db_session, email="c@x.test", role=Role.MANAGER)
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        sup = _make_supplier(db_session, name="ACME")
+        leaf = _make_leaf(db_session)
+        po, lines = _make_draft_po(
+            db_session, supplier=sup, leaf=leaf, actor=creator, skus=["E-2"]
+        )
+        _login_as(client, u)
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po, lines=lines, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_post_cancel_succeeds(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        leaf = _make_leaf(db_session)
+        po, _lines = _make_draft_po(
+            db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-3"]
+        )
+        _login_as(client, u)
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+class TestPOEditStatusGuard:
+    def _setup_po(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        po_status: POStatus,
+    ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["G-1"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po, lines
+
+    def test_edit_sent_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup_po(
+            db_session, client, po_status=POStatus.SENT
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po, lines=lines, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_edit_received_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, lines = self._setup_po(
+            db_session, client, po_status=POStatus.RECEIVED
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po, lines=lines, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_cancel_sent_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _lines = self._setup_po(
+            db_session, client, po_status=POStatus.SENT
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_cancel_already_cancelled_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po, _lines = self._setup_po(
+            db_session, client, po_status=POStatus.CANCELLED
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_edit_unknown_po_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.post(
+            "/admin/purchase-orders/9999",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_cancel_unknown_po_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.post(
+            "/admin/purchase-orders/9999/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+
+class TestPOEditValidation:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+    ) -> tuple[User, PurchaseOrder, list[PurchaseOrderLine]]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, lines = _make_draft_po(
+            db, supplier=sup, leaf=leaf, actor=u, skus=["V-1"]
+        )
+        _login_as(client, u)
+        return u, po, lines
+
+    def test_bad_expected_date_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            expected_date="not-a-date",
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_notes_over_limit_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po, lines=lines, csrf=_csrf(client), notes="x" * 2001
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_qty_blank_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            qty_overrides={lines[0].id: ""},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_qty_zero_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            qty_overrides={lines[0].id: "0"},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_qty_negative_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            qty_overrides={lines[0].id: "-5"},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_qty_non_numeric_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            qty_overrides={lines[0].id: "abc"},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_cost_negative_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            cost_overrides={lines[0].id: "-1"},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_cost_non_numeric_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po,
+            lines=lines,
+            csrf=_csrf(client),
+            cost_overrides={lines[0].id: "abc"},
+        )
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_missing_line_qty_field_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po, lines=lines, csrf=_csrf(client)
+        )
+        del data[f"qty_ordered_{lines[0].id}"]
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_missing_line_cost_field_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        data = _form_data_for_po(
+            po=po, lines=lines, csrf=_csrf(client)
+        )
+        del data[f"expected_unit_cost_{lines[0].id}"]
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=data,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_validation_failure_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client)
+        original_qty = lines[0].qty_ordered
+        # Snapshot the current audit row count for this PO (one for create).
+        existing = len(_po_audit_rows(db_session))
+        client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                qty_overrides={lines[0].id: "0"},  # invalid
+            ),
+            follow_redirects=False,
+        )
+        db_session.expire_all()
+        # No new audit row.
+        assert len(_po_audit_rows(db_session)) == existing
+        # Line value unchanged.
+        line = db_session.get(PurchaseOrderLine, lines[0].id)
+        assert line is not None
+        assert line.qty_ordered == original_qty
+
+
+class TestPOEditHappyPath:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        skus: list[str] | None = None,
+        expected_unit_cost: Decimal | None = None,
+    ) -> tuple[User, PurchaseOrder, list[PurchaseOrderLine]]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=skus,
+            expected_unit_cost=expected_unit_cost,
+        )
+        _login_as(client, u)
+        return u, po, lines
+
+    def test_change_qty_writes_audit_with_diff(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["H-1"])
+        line_id = lines[0].id
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                qty_overrides={line_id: "42"},
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        line = db_session.get(PurchaseOrderLine, line_id)
+        assert line is not None
+        assert line.qty_ordered == Decimal("42")
+
+        rows = _po_audit_rows(db_session, action="purchase_order.updated")
+        assert len(rows) == 1
+        before = rows[0].before_json
+        after = rows[0].after_json
+        assert before is not None
+        assert after is not None
+        assert before["lines"] == [
+            {"line_id": line_id, "qty_ordered": "10.0000"}
+        ]
+        assert after["lines"] == [
+            {"line_id": line_id, "qty_ordered": "42"}
+        ]
+        # No top-level keys when only line changed.
+        assert "expected_date" not in before
+        assert "notes" not in before
+
+    def test_change_cost_from_null_to_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["H-2"])
+        line_id = lines[0].id
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                cost_overrides={line_id: "1.50"},
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        line = db_session.get(PurchaseOrderLine, line_id)
+        assert line is not None
+        assert line.expected_unit_cost == Decimal("1.50")
+
+        rows = _po_audit_rows(db_session, action="purchase_order.updated")
+        assert len(rows) == 1
+        assert rows[0].before_json is not None
+        assert rows[0].before_json["lines"] == [
+            {"line_id": line_id, "expected_unit_cost": None}
+        ]
+        assert rows[0].after_json is not None
+        assert rows[0].after_json["lines"] == [
+            {"line_id": line_id, "expected_unit_cost": "1.50"}
+        ]
+
+    def test_clear_cost_to_null(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(
+            db_session,
+            client,
+            skus=["H-3"],
+            expected_unit_cost=Decimal("2.50"),
+        )
+        line_id = lines[0].id
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                cost_overrides={line_id: ""},
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        line = db_session.get(PurchaseOrderLine, line_id)
+        assert line is not None
+        assert line.expected_unit_cost is None
+
+    def test_change_top_level_notes(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["H-4"])
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                notes="please rush",
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.notes == "please rush"
+
+        rows = _po_audit_rows(db_session, action="purchase_order.updated")
+        assert len(rows) == 1
+        assert rows[0].before_json is not None
+        assert rows[0].before_json.get("notes") is None
+        assert rows[0].after_json is not None
+        assert rows[0].after_json.get("notes") == "please rush"
+
+    def test_change_top_level_expected_date(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["H-5"])
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                expected_date="2026-12-25",
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.expected_date == date(2026, 12, 25)
+
+        rows = _po_audit_rows(db_session, action="purchase_order.updated")
+        assert len(rows) == 1
+        assert rows[0].after_json is not None
+        assert rows[0].after_json.get("expected_date") == "2026-12-25"
+
+    def test_multi_line_only_changed_lines_in_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(
+            db_session, client, skus=["M-A", "M-B", "M-C"]
+        )
+        # Change only line[1].
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                qty_overrides={lines[1].id: "55"},
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        rows = _po_audit_rows(db_session, action="purchase_order.updated")
+        assert len(rows) == 1
+        before_lines = rows[0].before_json["lines"]
+        assert len(before_lines) == 1
+        assert before_lines[0]["line_id"] == lines[1].id
+
+    def test_no_op_submit_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["N-1"])
+        existing = len(_po_audit_rows(db_session))
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po, lines=lines, csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        # No new audit row.
+        assert len(_po_audit_rows(db_session)) == existing
+
+    def test_flash_includes_saved(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po, lines = self._setup(db_session, client, skus=["F-1"])
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}",
+            data=_form_data_for_po(
+                po=po,
+                lines=lines,
+                csrf=_csrf(client),
+                qty_overrides={lines[0].id: "20"},
+            ),
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert "saved" in resp.text.lower()
+
+
+class TestPOCancelHappyPath:
+    def _setup(
+        self, db: Session, client: TestClient
+    ) -> tuple[User, PurchaseOrder]:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db, supplier=sup, leaf=leaf, actor=u, skus=["C-1"]
+        )
+        _login_as(client, u)
+        return u, po
+
+    def test_cancel_flips_status(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.CANCELLED
+
+    def test_cancel_writes_audit_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po = self._setup(db_session, client)
+        client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        rows = _po_audit_rows(
+            db_session, action="purchase_order.cancelled"
+        )
+        assert len(rows) == 1
+        assert rows[0].before_json == {"status": "draft"}
+        assert rows[0].after_json == {"status": "cancelled"}
+        assert rows[0].entity_id == po.id
+
+    def test_cancel_redirects_to_detail(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert (
+            resp.headers["location"]
+            == f"/admin/purchase-orders/{po.id}"
+        )
+
+    def test_cancel_preserves_lines_and_supplier(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _u, po = self._setup(db_session, client)
+        original_supplier_id = po.supplier_id
+        original_line_count = db_session.scalar(
+            select(func.count(PurchaseOrderLine.id)).where(
+                PurchaseOrderLine.po_id == po.id
+            )
+        )
+        client.post(
+            f"/admin/purchase-orders/{po.id}/cancel",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.supplier_id == original_supplier_id
+        new_line_count = db_session.scalar(
+            select(func.count(PurchaseOrderLine.id)).where(
+                PurchaseOrderLine.po_id == po.id
+            )
+        )
+        assert new_line_count == original_line_count
+
+
+class TestPODetailRenderDelta:
+    def _setup_po(
+        self,
+        db: Session,
+        client: TestClient,
+        po_status: POStatus,
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["RD-1"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_draft_renders_edit_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-edit-form"' in resp.text
+        assert 'data-testid="po-edit-submit"' in resp.text
+        assert 'data-testid="po-cancel-form"' in resp.text
+        assert 'data-testid="po-cancel-submit"' in resp.text
+        assert 'data-testid="po-edit-qty-input"' in resp.text
+        assert 'data-testid="po-edit-cost-input"' in resp.text
+        assert 'data-testid="po-edit-expected-date-input"' in resp.text
+        assert 'data-testid="po-edit-notes-input"' in resp.text
+        assert 'data-testid="po-readonly-banner"' not in resp.text
+
+    def test_sent_renders_readonly(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.SENT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-readonly-banner"' in resp.text
+        assert 'data-testid="po-edit-form"' not in resp.text
+        assert 'data-testid="po-edit-submit"' not in resp.text
+        assert 'data-testid="po-cancel-form"' not in resp.text
+
+    def test_received_renders_readonly(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.RECEIVED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-readonly-banner"' in resp.text
+        assert 'data-testid="po-edit-submit"' not in resp.text
+
+    def test_cancelled_renders_readonly(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-readonly-banner"' in resp.text
+        assert 'data-testid="po-edit-submit"' not in resp.text
+
+    def test_draft_input_values_pre_filled(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup_po(db_session, client, POStatus.DRAFT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        # The qty input pre-fills with the line's qty_ordered (10 → "10.0000").
+        assert 'value="10.0000"' in resp.text

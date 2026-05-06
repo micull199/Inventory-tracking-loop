@@ -13,48 +13,136 @@
         <dd data-testid="po-created-by">{{ created_by_email or "(deleted user)" }}</dd>
         <dt>Created</dt>
         <dd data-testid="po-created-at">{{ po.created_at.isoformat() }}</dd>
-        <dt>Expected date</dt>
-        <dd data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</dd>
-        <dt>Notes</dt>
-        <dd data-testid="po-notes">{{ po.notes or "—" }}</dd>
     </dl>
 
-    <h2>Lines</h2>
-    {% if lines %}
-        <table data-testid="po-lines-table">
-            <thead>
-                <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>Unit</th>
-                    <th>Qty ordered</th>
-                    <th>Qty received</th>
-                    <th>Expected unit cost</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for line in lines %}
-                    <tr data-testid="po-line-row"
-                        data-line-id="{{ line.id }}"
-                        data-item-id="{{ line.item_id }}">
-                        <td data-testid="po-line-sku">{{ line.item_sku }}</td>
-                        <td data-testid="po-line-name">{{ line.item_name }}</td>
-                        <td>{{ line.item_unit }}</td>
-                        <td data-testid="po-line-qty-ordered">{{ line.qty_ordered }}</td>
-                        <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
-                        <td data-testid="po-line-expected-unit-cost">
-                            {% if line.expected_unit_cost is not none %}
-                                {{ line.expected_unit_cost }}
-                            {% else %}
-                                <span data-testid="po-line-cost-empty">—</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    {% if is_draft %}
+        <form method="post" action="/admin/purchase-orders/{{ po.id }}"
+              data-testid="po-edit-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <p>
+                <label for="expected_date">Expected date</label><br>
+                <input type="date" id="expected_date" name="expected_date"
+                       value="{{ po.expected_date.isoformat() if po.expected_date else '' }}"
+                       data-testid="po-edit-expected-date-input">
+            </p>
+
+            <p>
+                <label for="notes">Notes</label><br>
+                <textarea id="notes" name="notes" rows="3" cols="60"
+                          maxlength="2000"
+                          data-testid="po-edit-notes-input">{{ po.notes or "" }}</textarea>
+            </p>
+
+            <h2>Lines</h2>
+            {% if lines %}
+                <table data-testid="po-lines-table">
+                    <thead>
+                        <tr>
+                            <th>SKU</th>
+                            <th>Name</th>
+                            <th>Unit</th>
+                            <th>Qty ordered</th>
+                            <th>Qty received</th>
+                            <th>Expected unit cost</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for line in lines %}
+                            <tr data-testid="po-line-row"
+                                data-line-id="{{ line.id }}"
+                                data-item-id="{{ line.item_id }}">
+                                <td data-testid="po-line-sku">{{ line.item_sku }}</td>
+                                <td data-testid="po-line-name">{{ line.item_name }}</td>
+                                <td>{{ line.item_unit }}</td>
+                                <td>
+                                    <input type="text" inputmode="decimal"
+                                           name="qty_ordered_{{ line.id }}"
+                                           value="{{ line.qty_ordered }}"
+                                           data-testid="po-edit-qty-input"
+                                           data-line-id="{{ line.id }}"
+                                           required>
+                                </td>
+                                <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
+                                <td>
+                                    <input type="text" inputmode="decimal"
+                                           name="expected_unit_cost_{{ line.id }}"
+                                           value="{{ line.expected_unit_cost if line.expected_unit_cost is not none else '' }}"
+                                           data-testid="po-edit-cost-input"
+                                           data-line-id="{{ line.id }}"
+                                           placeholder="(optional)">
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p data-testid="po-detail-no-lines">No lines on this PO.</p>
+            {% endif %}
+
+            <p>
+                <button type="submit" class="button" data-testid="po-edit-submit">
+                    Save changes
+                </button>
+            </p>
+        </form>
+
+        <form method="post" action="/admin/purchase-orders/{{ po.id }}/cancel"
+              data-testid="po-cancel-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" data-testid="po-cancel-submit">
+                Cancel this draft
+            </button>
+        </form>
     {% else %}
-        <p data-testid="po-detail-no-lines">No lines on this PO.</p>
+        <p data-testid="po-readonly-banner">
+            <em>This PO is {{ po.status.value.replace("_", " ") }}; it cannot be edited.</em>
+        </p>
+
+        <dl>
+            <dt>Expected date</dt>
+            <dd data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</dd>
+            <dt>Notes</dt>
+            <dd data-testid="po-notes">{{ po.notes or "—" }}</dd>
+        </dl>
+
+        <h2>Lines</h2>
+        {% if lines %}
+            <table data-testid="po-lines-table">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Name</th>
+                        <th>Unit</th>
+                        <th>Qty ordered</th>
+                        <th>Qty received</th>
+                        <th>Expected unit cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for line in lines %}
+                        <tr data-testid="po-line-row"
+                            data-line-id="{{ line.id }}"
+                            data-item-id="{{ line.item_id }}">
+                            <td data-testid="po-line-sku">{{ line.item_sku }}</td>
+                            <td data-testid="po-line-name">{{ line.item_name }}</td>
+                            <td>{{ line.item_unit }}</td>
+                            <td data-testid="po-line-qty-ordered">{{ line.qty_ordered }}</td>
+                            <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
+                            <td data-testid="po-line-expected-unit-cost">
+                                {% if line.expected_unit_cost is not none %}
+                                    {{ line.expected_unit_cost }}
+                                {% else %}
+                                    <span data-testid="po-line-cost-empty">—</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p data-testid="po-detail-no-lines">No lines on this PO.</p>
+        {% endif %}
     {% endif %}
 
     <p>

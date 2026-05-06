@@ -190,6 +190,9 @@ def test_manager_reorder_dashboard_walk(
     # The redirect target is /admin/purchase-orders/{po_id}; we don't know the
     # id yet, so wait on the heading.
     expect(mgr_page.get_by_test_id("po-detail-heading")).to_be_visible()
+    # Capture the PO id from the URL for later cancel-vs-detail assertions.
+    po_url = mgr_page.url
+    po_id = po_url.rsplit("/", 1)[-1]
     # One line — the RD-LOW item.
     expect(mgr_page.locator('[data-testid="po-line-row"]')).to_have_count(1)
     expect(mgr_page.get_by_test_id("po-supplier-name")).to_have_text(
@@ -197,11 +200,31 @@ def test_manager_reorder_dashboard_walk(
     )
     expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("draft")
     expect(mgr_page.get_by_test_id("po-line-sku")).to_have_text("RD-LOW")
-    expect(mgr_page.get_by_test_id("po-line-qty-ordered")).to_have_text(
+    # PO2b: drafts render the edit form. Inputs replace the text cells.
+    expect(mgr_page.get_by_test_id("po-edit-form")).to_be_visible()
+    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value(
         "100.0000"
     )
-    # RD-LOW had no prior cost layer when the PO was drafted → empty marker.
-    expect(mgr_page.get_by_test_id("po-line-cost-empty")).to_be_visible()
+    # RD-LOW had no prior cost layer when the PO was drafted → empty input.
+    expect(mgr_page.get_by_test_id("po-edit-cost-input")).to_have_value("")
+
+    # Step 6b (PO2b): Edit the line + add notes + save.
+    mgr_page.get_by_test_id("po-edit-qty-input").fill("120")
+    mgr_page.get_by_test_id("po-edit-cost-input").fill("1.50")
+    mgr_page.get_by_test_id("po-edit-notes-input").fill("rush order")
+    mgr_page.get_by_test_id("po-edit-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
+    # The redirect lands back on the same detail page (still draft) with the
+    # new values pre-filled.
+    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value(
+        "120.0000"
+    )
+    expect(mgr_page.get_by_test_id("po-edit-cost-input")).to_have_value(
+        "1.5000"
+    )
+    expect(mgr_page.get_by_test_id("po-edit-notes-input")).to_have_value(
+        "rush order"
+    )
 
     # Visit the PO list to confirm the new PO is there.
     mgr_page.get_by_test_id("nav-pos").click()
@@ -211,6 +234,18 @@ def test_manager_reorder_dashboard_walk(
         "Reorder Bullion Co"
     )
     expect(mgr_page.get_by_test_id("po-row-line-count")).to_have_text("1")
+
+    # Step 6c (PO2b): Click into the PO and cancel it.
+    mgr_page.get_by_test_id("po-row-detail-link").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
+    expect(mgr_page.get_by_test_id("po-cancel-submit")).to_be_visible()
+    mgr_page.get_by_test_id("po-cancel-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
+    # Status now reads "cancelled" + the edit form is gone + the read-only
+    # banner appears.
+    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("cancelled")
+    expect(mgr_page.get_by_test_id("po-readonly-banner")).to_be_visible()
+    expect(mgr_page.get_by_test_id("po-edit-form")).to_have_count(0)
 
     # Back to reorder dashboard via nav.
     mgr_page.get_by_test_id("nav-reorder").click()
