@@ -1,27 +1,32 @@
-"""Stock take scheduling and scope (ST1 — DoD #5).
+"""Stock take scheduling and counting (ST1 + ST2 — DoD #5).
 
 Manager + Office surface mounted at ``/admin/stock-takes``:
 
-- ``GET /admin/stock-takes[?show=open|completed]`` — list. ``open`` (default)
-  shows scheduled + in-progress (``completed_at IS NULL``); ``completed`` shows
-  rows with a non-null ``completed_at``. Unrecognised values silently coerce
-  to ``open``.
-- ``GET /admin/stock-takes/new`` — render the new-stock-take form.
-- ``POST /admin/stock-takes`` — validate + insert + audit + redirect.
+- ``GET /admin/stock-takes[?show=open|completed]`` — list (ST1).
+- ``GET /admin/stock-takes/new`` — render the scheduling form (ST1).
+- ``POST /admin/stock-takes`` — schedule a stock take (ST1).
+- ``GET /admin/stock-takes/{id}`` — detail page (ST2). Renders one of three
+  branches gated on the derived status: ``scheduled`` (start form + scope
+  preview), ``in_progress`` (count form), ``completed`` (read-only summary).
+- ``POST /admin/stock-takes/{id}/start`` — freeze in-scope items into
+  ``StockTakeLine`` rows + flip ``started_at`` (ST2).
+- ``POST /admin/stock-takes/{id}/counts`` — save per-line ``counted_qty`` +
+  derived ``variance`` (ST2). Sparse diff; no-op writes no audit.
 
-ST1 only writes the ``scheduled`` state. ST2 will add the start /
-in-progress / counting flow; ST3 will add the commit-variances-as-adjustments
-flow that flips the row to ``completed``.
+ST3 will add the commit-variances-as-adjustments flow that flips the row to
+``completed`` via the cost engine.
 
-Engine isolation: the only DB writes are the ``StockTake`` insert and the
-``stock_take.created`` audit row. No ``stock_movements``, no ``cost_layers``,
-no ``cost_layer_consumptions``, no ``StockTakeLine`` rows yet (those land in
-ST2 when the operator starts the count).
+Engine isolation: ST2 records counts but never actions them. No
+``StockMovement``, ``CostLayer``, or ``CostLayerConsumption`` writes; no
+``Item.current_qty`` mutations. Variance is *recorded* on the
+``StockTakeLine`` row but the item's stock and valuation don't change until
+ST3 commits.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -32,7 +37,15 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
-from app.models import Location, Role, StockTake, TaxonomyNode, User
+from app.models import (
+    Item,
+    Location,
+    Role,
+    StockTake,
+    StockTakeLine,
+    TaxonomyNode,
+    User,
+)
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/stock-takes", tags=["stock-takes"])
@@ -204,6 +217,185 @@ def _resolve_location(db: Session, raw: str) -> Location:
 def _flash(request: Request, message: str) -> None:
     """Stash a one-shot message in the session; rendered + cleared by base.html."""
     request.session["flash"] = message
+
+
+def _can_start(st: StockTake) -> bool:
+    """Only a strictly-scheduled (both timestamps null) row can be started."""
+    return st.started_at is None and st.completed_at is None
+
+
+def _can_count(st: StockTake) -> bool:
+    """Only an in-progress row (started_at set, completed_at null) accepts counts."""
+    return st.started_at is not None and st.completed_at is None
+
+
+def _resolve_scope_items(db: Session, st: StockTake) -> list[Item]:
+    """Return the list of active items in scope for this stock take, ordered by sku.
+
+    - Both scope ids null → all active items.
+    - ``scope_node_id`` set → items at that node OR at any of its direct
+      sub-categories (the v1 taxonomy is two levels deep, so the
+      "is-descendant-of" predicate reduces to a single ``parent_id`` lookup).
+    - ``scope_location_id`` set → items at that location.
+
+    Archived items are always excluded (a stock take counts what's currently
+    on the floor).
+    """
+    stmt = select(Item).where(Item.archived_at.is_(None))
+    if st.scope_node_id is not None:
+        child_ids = list(
+            db.execute(
+                select(TaxonomyNode.id).where(
+                    TaxonomyNode.parent_id == st.scope_node_id
+                )
+            ).scalars().all()
+        )
+        in_scope_node_ids = [st.scope_node_id, *child_ids]
+        stmt = stmt.where(Item.taxonomy_node_id.in_(in_scope_node_ids))
+    elif st.scope_location_id is not None:
+        stmt = stmt.where(Item.location_id == st.scope_location_id)
+    stmt = stmt.order_by(Item.sku)
+    return list(db.execute(stmt).scalars().all())
+
+
+def _compute_variance(counted: Decimal | None, system: Decimal) -> Decimal | None:
+    """``counted - system`` when counted is set; else ``None``."""
+    if counted is None:
+        return None
+    return counted - system
+
+
+def _format_variance(value: Decimal | None) -> str:
+    """Signed string (``"+1.5000"`` / ``"-2.0000"`` / ``"0.0000"``); empty when None."""
+    if value is None:
+        return ""
+    if value > 0:
+        return f"+{value}"
+    return str(value)
+
+
+def _variance_sign(value: Decimal | None) -> str:
+    """``"pos"`` / ``"neg"`` / ``"zero"`` for the count-cell data attribute; ``""`` when None."""
+    if value is None:
+        return ""
+    if value > 0:
+        return "pos"
+    if value < 0:
+        return "neg"
+    return "zero"
+
+
+def _parse_optional_count(raw: str, *, line_id: int) -> Decimal | None:
+    """Parse ``counted_<line_id>`` form field. Blank → None (uncount); negative → 400."""
+    text = (raw or "").strip()
+    if text == "":
+        return None
+    try:
+        value = Decimal(text)
+    except InvalidOperation as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"counted_qty for line {line_id} must be a number",
+        ) from exc
+    if value < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"counted_qty for line {line_id} cannot be negative",
+        )
+    return value
+
+
+def _lines_with_items(
+    db: Session, st_id: int
+) -> list[tuple[StockTakeLine, Item]]:
+    """Fetch lines joined to their item, ordered by ``Item.sku``."""
+    stmt = (
+        select(StockTakeLine, Item)
+        .join(Item, StockTakeLine.item_id == Item.id)
+        .where(StockTakeLine.stock_take_id == st_id)
+        .order_by(Item.sku)
+    )
+    return [(line, item) for line, item in db.execute(stmt).all()]
+
+
+def _count_progress(
+    rows: list[tuple[StockTakeLine, Item]],
+) -> dict[str, int]:
+    """Per-status counters for the progress summary."""
+    counted = sum(1 for line, _ in rows if line.counted_qty is not None)
+    uncounted = len(rows) - counted
+    with_variance = sum(
+        1
+        for line, _ in rows
+        if line.variance is not None and line.variance != 0
+    )
+    return {
+        "counted": counted,
+        "uncounted": uncounted,
+        "with_variance": with_variance,
+    }
+
+
+def _detail_context(
+    db: Session, st: StockTake, user: User
+) -> dict[str, Any]:
+    """Build the template context for the detail page.
+
+    Branches on the derived status (scheduled / in_progress / completed) and
+    surfaces the right shape: scope items + start form for scheduled; count
+    form for in-progress; read-only table for completed.
+    """
+    node = (
+        db.get(TaxonomyNode, st.scope_node_id)
+        if st.scope_node_id is not None
+        else None
+    )
+    location = (
+        db.get(Location, st.scope_location_id)
+        if st.scope_location_id is not None
+        else None
+    )
+    status_label = _status_label(st)
+    scope_label = _scope_label(st, node=node, location=location)
+    creator_email: str | None = None
+    if st.created_by is not None:
+        creator = db.get(User, st.created_by)
+        creator_email = creator.email if creator is not None else None
+
+    ctx: dict[str, Any] = {
+        "current_user": user,
+        "st": st,
+        "status": status_label,
+        "scope_label": scope_label,
+        "creator_email": creator_email,
+    }
+
+    if status_label == "scheduled":
+        scope_items = _resolve_scope_items(db, st)
+        ctx["scope_items"] = scope_items
+    else:
+        rows = _lines_with_items(db, st.id)
+        progress = _count_progress(rows)
+        line_views: list[dict[str, Any]] = []
+        for line, item in rows:
+            line_views.append(
+                {
+                    "line_id": line.id,
+                    "item_id": item.id,
+                    "item_sku": item.sku,
+                    "item_name": item.name,
+                    "item_unit": item.unit,
+                    "system_qty": line.system_qty,
+                    "counted_qty": line.counted_qty,
+                    "variance": line.variance,
+                    "variance_str": _format_variance(line.variance),
+                    "variance_sign": _variance_sign(line.variance),
+                    "is_counted": line.counted_qty is not None,
+                }
+            )
+        ctx["lines"] = line_views
+        ctx["progress"] = progress
+    return ctx
 
 
 def _list_rows(db: Session, *, show: str) -> list[dict[str, Any]]:
@@ -380,4 +572,215 @@ def create_stock_take(
     )
     return RedirectResponse(
         url="/admin/stock-takes", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+# ---------------------------------------------------------------------------
+# ST2: detail page + start + counts
+# ---------------------------------------------------------------------------
+
+
+def _get_stock_take_or_404(db: Session, st_id: int) -> StockTake:
+    st = db.get(StockTake, st_id)
+    if st is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="stock take not found"
+        )
+    return st
+
+
+@router.get("/{stock_take_id}", response_class=HTMLResponse)
+def stock_take_detail(
+    request: Request,
+    stock_take_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Detail page — three render branches gated on status.
+
+    ``scheduled``  → scope summary + items-in-scope table + Start counting form.
+    ``in_progress`` → count form with per-line inputs + progress summary.
+    ``completed``   → read-only summary (forward-looking; ST3 writes this state).
+    """
+    st = _get_stock_take_or_404(db, stock_take_id)
+    ctx = _detail_context(db, st, user)
+    return templates.TemplateResponse(request, "stock_take_detail.html", ctx)
+
+
+@router.post("/{stock_take_id}/start")
+def start_stock_take(
+    request: Request,
+    stock_take_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Freeze in-scope items into ``StockTakeLine`` rows + flip ``started_at``.
+
+    Validation order is atomic — every 400 lands *before* any DB write so a
+    failed start leaves no orphan lines and no audit trail.
+    """
+    st = _get_stock_take_or_404(db, stock_take_id)
+    if not _can_start(st):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "stock take is already started"
+                if st.started_at is not None and st.completed_at is None
+                else "stock take is already completed"
+            ),
+        )
+
+    items = _resolve_scope_items(db, st)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scope contains no items to count",
+        )
+
+    started_at = datetime.now(UTC)
+    st.started_at = started_at
+
+    line_snapshot: list[dict[str, Any]] = []
+    for item in items:
+        line = StockTakeLine(
+            stock_take_id=st.id,
+            item_id=item.id,
+            system_qty=item.current_qty,
+        )
+        db.add(line)
+        db.flush()
+        line_snapshot.append(
+            {
+                "line_id": line.id,
+                "item_id": item.id,
+                "system_qty": str(item.current_qty),
+            }
+        )
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_take.started",
+        entity_type="stock_take",
+        entity_id=st.id,
+        before={"started_at": None},
+        after={
+            "started_at": started_at.isoformat(),
+            "lines": line_snapshot,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Stock take started — {len(items)} item(s) to count.",
+    )
+    return RedirectResponse(
+        url=f"/admin/stock-takes/{st.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/{stock_take_id}/counts")
+async def update_stock_take_counts(
+    request: Request,
+    stock_take_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Save per-line ``counted_qty`` + derived ``variance``.
+
+    Per-line ``counted_<line_id>`` come in via ``request.form()`` because the
+    line ids aren't known at function-signature time. Same precedent as
+    PO2b's edit + PO5's receive routes. Lines whose key is *missing* from the
+    form are left unchanged — defends against stale tabs that hold removed
+    line ids.
+
+    Sparse diff: only lines whose ``counted_qty`` actually changed are
+    written + audited; a no-op submit writes no audit row + flashes "no
+    changes" (same posture as PO2b's no-op submit).
+    """
+    st = _get_stock_take_or_404(db, stock_take_id)
+    if not _can_count(st):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stock take is not in progress; start counting first",
+        )
+
+    form_data = await request.form()
+    rows = _lines_with_items(db, st.id)
+
+    # First pass: parse every present field so a single bad input rejects
+    # before any mutation.
+    parsed: list[tuple[StockTakeLine, Decimal | None, bool]] = []
+    for line, _item in rows:
+        key = f"counted_{line.id}"
+        if key not in form_data:
+            # Missing key → leave unchanged.
+            parsed.append((line, line.counted_qty, False))
+            continue
+        raw = str(form_data[key] or "")
+        new_counted = _parse_optional_count(raw, line_id=line.id)
+        parsed.append((line, new_counted, True))
+
+    # Second pass: build the sparse diff before any DB mutation. Decimal
+    # comparison is scale-aware (``Decimal("10") == Decimal("10.0000")``), so
+    # the diff correctly identifies a no-op submit.
+    line_before: list[dict[str, Any]] = []
+    line_after: list[dict[str, Any]] = []
+    changed: list[tuple[StockTakeLine, Decimal | None, Decimal | None]] = []
+    for line, new_counted, was_present in parsed:
+        if not was_present:
+            continue
+        if line.counted_qty == new_counted:
+            continue
+        new_variance = _compute_variance(new_counted, line.system_qty)
+        line_before.append(
+            {
+                "line_id": line.id,
+                "counted_qty": (
+                    str(line.counted_qty) if line.counted_qty is not None else None
+                ),
+            }
+        )
+        line_after.append(
+            {
+                "line_id": line.id,
+                "counted_qty": (
+                    str(new_counted) if new_counted is not None else None
+                ),
+                "variance": (
+                    str(new_variance) if new_variance is not None else None
+                ),
+            }
+        )
+        changed.append((line, new_counted, new_variance))
+
+    if not changed:
+        _flash(request, "No changes.")
+        return RedirectResponse(
+            url=f"/admin/stock-takes/{st.id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    for line, new_counted, new_variance in changed:
+        line.counted_qty = new_counted
+        line.variance = new_variance
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_take.counted",
+        entity_type="stock_take",
+        entity_id=st.id,
+        before={"lines": line_before},
+        after={"lines": line_after},
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Saved {len(changed)} count(s).",
+    )
+    return RedirectResponse(
+        url=f"/admin/stock-takes/{st.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )

@@ -24,7 +24,14 @@ from app.models import (
     TaxonomyNode,
     TrackingMode,
 )
-from app.stock_takes import _scope_label, _status_label
+from app.stock_takes import (
+    _compute_variance,
+    _format_variance,
+    _resolve_scope_items,
+    _scope_label,
+    _status_label,
+    _variance_sign,
+)
 
 # ---------------------------------------------------------------------------
 # Model round-trips
@@ -184,3 +191,166 @@ class TestScopeLabel:
         loc.id = 1
         st = StockTake(scheduled_for=date(2026, 6, 1), scope_location_id=1)
         assert _scope_label(st, node=None, location=loc) == "Location: Vault"
+
+
+# ---------------------------------------------------------------------------
+# Variance helpers
+# ---------------------------------------------------------------------------
+
+
+class TestComputeVariance:
+    def test_excess(self) -> None:
+        assert _compute_variance(Decimal("12"), Decimal("10")) == Decimal("2")
+
+    def test_shrinkage(self) -> None:
+        assert _compute_variance(Decimal("5"), Decimal("10")) == Decimal("-5")
+
+    def test_zero(self) -> None:
+        assert _compute_variance(Decimal("10"), Decimal("10")) == Decimal("0")
+
+    def test_uncounted(self) -> None:
+        assert _compute_variance(None, Decimal("10")) is None
+
+
+class TestFormatVariance:
+    def test_positive(self) -> None:
+        assert _format_variance(Decimal("2.5000")) == "+2.5000"
+
+    def test_negative(self) -> None:
+        assert _format_variance(Decimal("-2.0000")) == "-2.0000"
+
+    def test_zero(self) -> None:
+        assert _format_variance(Decimal("0.0000")) == "0.0000"
+
+    def test_none(self) -> None:
+        assert _format_variance(None) == ""
+
+
+class TestVarianceSign:
+    def test_positive(self) -> None:
+        assert _variance_sign(Decimal("2")) == "pos"
+
+    def test_negative(self) -> None:
+        assert _variance_sign(Decimal("-2")) == "neg"
+
+    def test_zero(self) -> None:
+        assert _variance_sign(Decimal("0")) == "zero"
+
+    def test_none(self) -> None:
+        assert _variance_sign(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# Scope item resolution (DB-backed)
+# ---------------------------------------------------------------------------
+
+
+def _make_archived_item(
+    db: Session, leaf: TaxonomyNode, sku: str = "ARCHIVED"
+) -> Item:
+    item = Item(
+        sku=sku,
+        name="Archived",
+        taxonomy_node_id=leaf.id,
+        unit="ea",
+        tracking_mode=TrackingMode.QTY,
+        archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+class TestResolveScopeItems:
+    def test_all_scope_returns_all_active_items(
+        self, db_session: Session
+    ) -> None:
+        leaf = _make_node(db_session)
+        a = _make_item(db_session, leaf, sku="A-1")
+        b = _make_item(db_session, leaf, sku="B-1")
+        st = StockTake(scheduled_for=date(2026, 6, 1))
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert {i.id for i in items} == {a.id, b.id}
+
+    def test_all_scope_excludes_archived(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        active = _make_item(db_session, leaf, sku="ACTIVE")
+        _make_archived_item(db_session, leaf, sku="ARCHIVED")
+        st = StockTake(scheduled_for=date(2026, 6, 1))
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert {i.id for i in items} == {active.id}
+
+    def test_node_scope_returns_node_items(self, db_session: Session) -> None:
+        leaf_a = _make_node(db_session, name="A")
+        leaf_b = _make_node(db_session, name="B")
+        in_a = _make_item(db_session, leaf_a, sku="IN-A")
+        _make_item(db_session, leaf_b, sku="IN-B")
+        st = StockTake(scheduled_for=date(2026, 6, 1), scope_node_id=leaf_a.id)
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert {i.id for i in items} == {in_a.id}
+
+    def test_node_scope_includes_descendant_items(
+        self, db_session: Session
+    ) -> None:
+        parent = _make_node(db_session, name="Parent")
+        child = TaxonomyNode(name="Child", parent_id=parent.id)
+        db_session.add(child)
+        db_session.commit()
+        db_session.refresh(child)
+        in_parent = _make_item(db_session, parent, sku="P-1")
+        in_child = _make_item(db_session, child, sku="C-1")
+        st = StockTake(scheduled_for=date(2026, 6, 1), scope_node_id=parent.id)
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert {i.id for i in items} == {in_parent.id, in_child.id}
+
+    def test_location_scope_returns_location_items(
+        self, db_session: Session
+    ) -> None:
+        leaf = _make_node(db_session)
+        loc_a = _make_location(db_session, name="A")
+        loc_b = _make_location(db_session, name="B")
+        item_a = Item(
+            sku="A-1",
+            name="A",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc_a.id,
+        )
+        item_b = Item(
+            sku="B-1",
+            name="B",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+            location_id=loc_b.id,
+        )
+        db_session.add_all([item_a, item_b])
+        db_session.commit()
+        st = StockTake(
+            scheduled_for=date(2026, 6, 1), scope_location_id=loc_a.id
+        )
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert {i.sku for i in items} == {"A-1"}
+
+    def test_ordering_by_sku(self, db_session: Session) -> None:
+        leaf = _make_node(db_session)
+        _make_item(db_session, leaf, sku="C-3")
+        _make_item(db_session, leaf, sku="A-1")
+        _make_item(db_session, leaf, sku="B-2")
+        st = StockTake(scheduled_for=date(2026, 6, 1))
+        db_session.add(st)
+        db_session.commit()
+        items = _resolve_scope_items(db_session, st)
+        assert [i.sku for i in items] == ["A-1", "B-2", "C-3"]

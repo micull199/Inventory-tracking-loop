@@ -1,13 +1,22 @@
-"""End-to-end walk for ST1: Office user schedules a stock take.
+"""End-to-end walk for ST1 + ST2: Office user schedules + counts a stock take.
 
-Pending office user signs in, gets promoted by admin, navigates the
+ST1 leg: a pending office user signs in, gets promoted by admin, navigates the
 ``nav-stock-takes`` link to the empty list, clicks "New stock take", picks
 a category scope + a date + a note, submits, and asserts the list now shows
 the row with the right scope label, scheduled date, and "scheduled" status
 badge.
 
-Cleanup archives the category created during the walk so subsequent walks
-see a clean active list.
+ST2 leg: the manager creates an item under the scoped category and seeds 50
+units via the stock-in form. Office clicks the row's detail link, lands on
+the scheduled detail page, sees the scope-preview row with the seeded item +
+its current_qty, clicks "Start counting", lands on the in-progress detail
+page with one count row pre-filled with system_qty=50.0000, fills counted=48,
+submits, and asserts the variance row renders ``-2.0000``. The item's
+``current_qty`` is unchanged after the count save (engine isolation — ST3
+will commit variances).
+
+Cleanup archives the item and the category so subsequent walks see a clean
+active list.
 """
 
 from __future__ import annotations
@@ -105,6 +114,33 @@ def test_office_schedules_a_stock_take(
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
+    # ST2 prep: manager creates an item under the new category and seeds 50
+    # units via the stock-in form so the scope=node count has something to
+    # count.
+    mgr_page.goto(f"{app_server}/admin/items/new")
+    mgr_page.get_by_test_id("item-sku-input").fill("ST2-E2E-001")
+    mgr_page.get_by_test_id("item-name-input").fill("Casting wax")
+    mgr_page.get_by_test_id("item-category-input").select_option(
+        label="ST1 Materials"
+    )
+    mgr_page.get_by_test_id("item-unit-input").fill("g")
+    mgr_page.get_by_test_id("item-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/items")
+    item_row = mgr_page.locator(
+        '[data-testid="item-row"]', has_text="ST2-E2E-001"
+    )
+    item_id = item_row.get_attribute("data-item-id")
+    assert item_id is not None
+    mgr_page.goto(f"{app_server}/admin/items/{item_id}/in")
+    mgr_page.get_by_test_id("stock-in-qty-input").fill("50")
+    mgr_page.get_by_test_id("stock-in-unit-cost-input").fill("2.50")
+    mgr_page.get_by_test_id("stock-in-reason-input").fill("Initial")
+    mgr_page.get_by_test_id("stock-in-submit").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/items/{item_id}/in")
+    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
+        "50.0000"
+    )
+
     # Step 4: office user signs in and navigates to the empty stock-takes list
     # via the role-aware nav link.
     office_context = (
@@ -166,12 +202,81 @@ def test_office_schedules_a_stock_take(
         "st-office@uc.test"
     )
 
+    # Step 7b (ST2): office clicks the detail link, lands on the scheduled
+    # detail page, sees the scope preview with the seeded item, and starts
+    # the count.
+    row.get_by_test_id("stock-takes-row-detail-link").click()
+    office_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/stock-takes/")
+        and not u.endswith("/new")
+    )
+    expect(
+        office_page.get_by_test_id("stock-take-detail-status-badge")
+    ).to_have_attribute("data-status", "scheduled")
+    scope_row = office_page.locator(
+        '[data-testid="stock-take-scope-row"]', has_text="ST2-E2E-001"
+    )
+    expect(scope_row).to_be_visible()
+    expect(
+        scope_row.get_by_test_id("stock-take-scope-row-current-qty")
+    ).to_contain_text("50.0000")
+
+    office_page.get_by_test_id("stock-take-start-submit").click()
+    office_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/stock-takes/")
+    )
+    expect(
+        office_page.get_by_test_id("stock-take-detail-status-badge")
+    ).to_have_attribute("data-status", "in_progress")
+    count_row = office_page.locator(
+        '[data-testid="stock-take-count-row"]', has_text="ST2-E2E-001"
+    )
+    expect(count_row).to_be_visible()
+    expect(
+        count_row.get_by_test_id("stock-take-count-system-qty")
+    ).to_contain_text("50.0000")
+
+    # Step 7c (ST2): office fills counted=48 and saves; the variance is -2.
+    count_row.get_by_test_id("stock-take-count-counted-input").fill("48")
+    office_page.get_by_test_id("stock-take-count-submit").click()
+    office_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/stock-takes/")
+    )
+    count_row = office_page.locator(
+        '[data-testid="stock-take-count-row"]', has_text="ST2-E2E-001"
+    )
+    expect(
+        count_row.get_by_test_id("stock-take-count-variance")
+    ).to_contain_text("-2")
+    expect(
+        office_page.get_by_test_id("stock-take-progress-counted")
+    ).to_contain_text("1")
+    expect(
+        office_page.get_by_test_id("stock-take-progress-with-variance")
+    ).to_contain_text("1")
+
     office_page.close()
     if office_context is not context:
         office_context.close()
 
-    # Step 8: cleanup — manager archives the category so downstream walks see
-    # a clean active list.
+    # Step 7d: engine isolation sanity — manager re-visits the items list and
+    # confirms the seeded item's current_qty is unchanged at 50.0000 (ST2
+    # records the count + variance but never touches the cost engine; ST3
+    # will commit).
+    mgr_page.goto(f"{app_server}/admin/items/{item_id}/in")
+    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
+        "50.0000"
+    )
+
+    # Step 8: cleanup — manager archives the seeded item then the category so
+    # downstream walks see a clean active list.
+    mgr_page.goto(f"{app_server}/admin/items")
+    item_row = mgr_page.locator(
+        '[data-testid="item-row"]', has_text="ST2-E2E-001"
+    )
+    item_row.get_by_test_id("archive-item").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/items")
+
     mgr_page.goto(f"{app_server}/admin/taxonomy")
     cat_row = mgr_page.locator(
         '[data-testid="taxonomy-row"]', has_text="ST1 Materials"
