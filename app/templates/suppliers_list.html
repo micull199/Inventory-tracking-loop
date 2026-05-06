@@ -18,6 +18,13 @@
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
+    <p>
+        <a href="/admin/suppliers?format=csv&show={{ show }}"
+           data-testid="suppliers-list-csv-link">
+            Download CSV
+        </a>
+    </p>
+
     {% if suppliers %}
         <table data-testid="suppliers-table">
             <thead>
