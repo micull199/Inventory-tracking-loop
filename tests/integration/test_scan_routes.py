@@ -1,19 +1,23 @@
-"""Integration tests for the Workshop-facing ``/scan`` routes (SC1a).
+"""Integration tests for the Workshop-facing ``/scan`` routes (SC1a + SC1b).
 
 Smallest end-to-end SC1 sub-slice: a focused-input scan landing page that
 resolves a code (qr_code or sku exact match) to an item and 303-redirects to
-the existing per-item edit page where in/out/adjust links live. Subsequent
-slices (SC1b/c, SC2) layer the action picker, qty/cost entry, and camera
-fallback on top.
+the in-flow action-picker page (``/scan/item/{id}``) where Stock-in /
+Stock-out / Adjust (and Check out for flagged items) links live. Subsequent
+slices (SC1c, SC2) layer qty/cost entry inline and a camera fallback on top.
 
 Coverage:
-- Role enforcement on both routes.
-- Render shape (heading, form action/method, autofocus input).
+- Role enforcement on all three routes.
+- Render shape on the scan landing page (heading, form action/method,
+  autofocus input).
 - Resolve by ``qr_code`` and by ``sku`` (qr_code wins on collision).
 - Whitespace-trim before lookup.
 - Empty code + no-match → 303 back to ``/scan`` with a flash.
-- Archived item still resolves (the destination page handles read-only state).
-- Read-only invariant: neither route writes an audit row.
+- Archived item still resolves; the action-picker surfaces an archived
+  badge + omits action buttons (since /in / /out / /adjust would 400).
+- Action picker renders the three core action links + the optional
+  Check out link for ``requires_checkout`` items.
+- Read-only invariant: no route writes an audit row.
 - Nav link visibility per role.
 """
 
@@ -257,7 +261,7 @@ class TestScanResolveRoleEnforcement:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
     def test_office_post_is_303(
         self, client: TestClient, db_session: Session
@@ -272,7 +276,7 @@ class TestScanResolveRoleEnforcement:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
     def test_manager_post_is_303(
         self, client: TestClient, db_session: Session
@@ -287,7 +291,7 @@ class TestScanResolveRoleEnforcement:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +313,7 @@ class TestScanResolveMatching:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
     def test_resolves_by_sku_when_no_qr_match(
         self, client: TestClient, db_session: Session
@@ -324,7 +328,7 @@ class TestScanResolveMatching:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
     def test_qr_code_wins_over_sku_on_collision(
         self, client: TestClient, db_session: Session
@@ -346,9 +350,7 @@ class TestScanResolveMatching:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert (
-            resp.headers["location"] == f"/admin/items/{item_by_qr.id}/edit"
-        )
+        assert resp.headers["location"] == f"/scan/item/{item_by_qr.id}"
 
     def test_resolves_after_trimming_whitespace(
         self, client: TestClient, db_session: Session
@@ -363,13 +365,13 @@ class TestScanResolveMatching:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
     def test_archived_item_still_resolves(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """A scanner doesn't know an item was archived; the destination edit
-        page already handles the read-only archived presentation."""
+        """A scanner doesn't know an item was archived; the action picker
+        page surfaces an archived badge + omits the action buttons."""
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         item = _make_item(
             db_session, sku="ARCH-1", qr_code="QR-ARCH", archived=True
@@ -382,7 +384,7 @@ class TestScanResolveMatching:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        assert resp.headers["location"] == f"/scan/item/{item.id}"
 
 
 # ---------------------------------------------------------------------------
@@ -541,3 +543,239 @@ class TestScanNav:
             resp.text.find('data-testid="nav-scan"') :
         ][:200]
         assert 'aria-current="page"' in snippet
+
+
+# ---------------------------------------------------------------------------
+# SC1b: GET /scan/item/{id} action picker — role enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageRoleEnforcement:
+    def test_anonymous_get_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="A-1", qr_code=None)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 401
+
+    def test_pending_get_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="P-1", qr_code=None)
+        u = _make_user(
+            db_session, email="p@x.test", status=UserStatus.PENDING
+        )
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 403
+
+    def test_workshop_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="W-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 200
+
+    def test_office_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="O-1", qr_code=None)
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 200
+
+    def test_manager_get_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="M-1", qr_code=None)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# SC1b: GET /scan/item/{id} action picker — render shape
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageRender:
+    def test_renders_resolved_item_block(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="REND-1", name="Rendered Item")
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-resolved-item"' in resp.text
+        assert f'data-item-id="{item.id}"' in resp.text
+        # Identity surfaces sku + name.
+        assert "REND-1" in resp.text
+        assert "Rendered Item" in resp.text
+
+    def test_renders_three_action_links_with_correct_hrefs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="LINK-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert f'href="/admin/items/{item.id}/in"' in resp.text
+        assert 'data-testid="scan-action-in"' in resp.text
+        assert f'href="/admin/items/{item.id}/out"' in resp.text
+        assert 'data-testid="scan-action-out"' in resp.text
+        assert f'href="/admin/items/{item.id}/adjust"' in resp.text
+        assert 'data-testid="scan-action-adjust"' in resp.text
+
+    def test_scan_input_still_rendered_so_next_scan_works(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The action-picker page keeps the scan input + autofocus so a
+        USB scanner can drive a fresh resolve without manual nav."""
+        item = _make_item(db_session, sku="NEXT-1", qr_code=None)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-form"' in resp.text
+        assert 'data-testid="scan-code-input"' in resp.text
+        marker = resp.text.find('data-testid="scan-code-input"')
+        tag_start = resp.text.rfind("<input", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        assert tag_start >= 0
+        assert tag_end > tag_start
+        tag = resp.text[tag_start : tag_end + 1]
+        assert "autofocus" in tag
+
+
+# ---------------------------------------------------------------------------
+# SC1b: requires_checkout flag drives the fourth action link
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageRequiresCheckout:
+    def test_flagged_item_shows_checkout_action(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Tools-RC")
+        item = Item(
+            sku="TOOL-1",
+            name="Drill",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+            requires_checkout=True,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-action-checkout"' in resp.text
+        assert f'href="/admin/items/{item.id}/checkout"' in resp.text
+
+    def test_non_flagged_item_omits_checkout_action(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="NOFLAG-1")
+        # _make_item does not set requires_checkout, so it stays False.
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-action-checkout"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SC1b: archived items render the badge + omit the action buttons
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageArchived:
+    def test_archived_item_shows_badge_and_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="AR-1", archived=True)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-resolved-archived-badge"' in resp.text
+        assert 'data-testid="scan-resolved-archived-note"' in resp.text
+
+    def test_archived_item_omits_action_buttons(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The /in /out /adjust routes _reject_archived with HTTP 400, so
+        linking from the action picker would be a dead-end. The page
+        omits those buttons and instead renders the archived note."""
+        item = _make_item(db_session, sku="AR-2", archived=True)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-action-in"' not in resp.text
+        assert 'data-testid="scan-action-out"' not in resp.text
+        assert 'data-testid="scan-action-adjust"' not in resp.text
+        assert 'data-testid="scan-action-checkout"' not in resp.text
+
+    def test_archived_item_still_renders_scan_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The user can still scan another item from the archived
+        action-picker page — the scan input is part of the page header."""
+        item = _make_item(db_session, sku="AR-3", archived=True)
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert 'data-testid="scan-form"' in resp.text
+        assert 'data-testid="scan-code-input"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# SC1b: 404 for unknown id, read-only invariant, full chain
+# ---------------------------------------------------------------------------
+
+
+class TestScanItemPageNotFound:
+    def test_unknown_item_id_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan/item/999999")
+        assert resp.status_code == 404
+
+
+class TestScanItemPageReadOnly:
+    def test_get_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="RO-1")
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        before = _audit_count(db_session)
+        client.get(f"/scan/item/{item.id}")
+        after = _audit_count(db_session)
+        assert before == after
+
+
+class TestScanItemPageResolveChain:
+    def test_post_resolve_then_follow_renders_action_picker(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """End-to-end POST /scan/resolve → 303 → GET /scan/item/{id}."""
+        item = _make_item(db_session, sku="CHAIN-1", qr_code="QR-CHAIN")
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        token = _csrf(client)
+        resp = client.post(
+            "/scan/resolve",
+            data={"code": "QR-CHAIN", "csrf_token": token},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert 'data-testid="scan-resolved-item"' in resp.text
+        assert f'data-item-id="{item.id}"' in resp.text
+        assert 'data-testid="scan-action-in"' in resp.text

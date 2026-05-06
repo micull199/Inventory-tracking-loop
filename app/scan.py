@@ -1,24 +1,25 @@
-"""Scan-mode landing page (SC1a).
+"""Scan-mode landing page and action picker (SC1a + SC1b).
 
 The smallest end-to-end SC1 sub-slice: a single focused-input page that
 USB-emulating barcode/QR scanners can drive directly. The scanner sends
 keystrokes followed by Enter; the form auto-submits to ``/scan/resolve``
-which looks up the scanned value as either a ``qr_code`` or ``sku`` and
-303-redirects to the matching item's existing edit page (which already
-exposes the in/out/adjust action links to Workshop per I1c).
+which looks up the scanned value as either a ``qr_code`` or ``sku``.
 
-This delivers a complete *three-interaction* end-to-end path (scan → click
-action → submit form). DoD #3 calls out "two interactions"; subsequent
-slices (SC1b/c) collapse the action-click into the scan-landing surface.
-Camera-based scanning lands in SC2.
+After SC1b, a successful resolve 303-redirects to ``/scan/item/{id}``
+which renders an action picker (Stock in / Stock out / Adjust, plus
+Check out for flagged items) inline with the scan input. The user's
+flow is then: scan → click action → submit form. SC1c will fold qty
+and unit-cost entry inline so the entire flow collapses to two
+interactions. Camera-based scanning lands in SC2.
 
-Both routes are read-only — neither writes an audit row. Resolution is a
-navigation, not a state change. The audit log only records mutations.
+All routes here are read-only — none writes an audit row. Resolution
+and presentation are navigation, not state changes. The audit log
+only records mutations.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -94,6 +95,34 @@ def resolve_scan(
         )
 
     return RedirectResponse(
-        url=f"/admin/items/{item.id}/edit",
+        url=f"/scan/item/{item.id}",
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/item/{item_id}", response_class=HTMLResponse)
+def scan_item_page(
+    request: Request,
+    item_id: int,
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Action picker for a resolved item.
+
+    Reached via the 303 redirect from ``POST /scan/resolve`` on a successful
+    code resolution. Renders ``scan.html`` with ``resolved_item`` set so the
+    template surfaces the item identity + Stock-in / Stock-out / Adjust
+    action links (and Check-out when ``requires_checkout`` is set). The
+    scan input is still rendered + autofocused on this page so a USB
+    scanner on the next item drives a fresh resolve without manual nav.
+    """
+    item = db.get(Item, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item not found")
+    return templates.TemplateResponse(
+        request,
+        "scan.html",
+        {"current_user": user, "resolved_item": item},
     )

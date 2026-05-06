@@ -23,4 +23,63 @@
             </button>
         </p>
     </form>
+
+    {% if resolved_item %}
+        <hr>
+        <section data-testid="scan-resolved-item"
+                 data-item-id="{{ resolved_item.id }}">
+            <h2 data-testid="scan-resolved-heading">
+                <strong>{{ resolved_item.sku }}</strong> —
+                {{ resolved_item.name }}
+                {% if resolved_item.archived_at %}
+                    <span data-testid="scan-resolved-archived-badge">archived</span>
+                {% endif %}
+            </h2>
+            <p>
+                <strong>Current quantity:</strong>
+                <span data-testid="scan-resolved-qty">{{ resolved_item.current_qty }}</span>
+                {{ resolved_item.unit }}
+            </p>
+
+            {% if resolved_item.archived_at %}
+                <p>
+                    <em data-testid="scan-resolved-archived-note">
+                        This item is archived; record movements via the
+                        items list instead.
+                    </em>
+                </p>
+            {% else %}
+                <p>
+                    <a href="/admin/items/{{ resolved_item.id }}/in"
+                       class="button"
+                       data-testid="scan-action-in">
+                        Stock in &rarr;
+                    </a>
+                </p>
+                <p>
+                    <a href="/admin/items/{{ resolved_item.id }}/out"
+                       class="button"
+                       data-testid="scan-action-out">
+                        Stock out &rarr;
+                    </a>
+                </p>
+                <p>
+                    <a href="/admin/items/{{ resolved_item.id }}/adjust"
+                       class="button"
+                       data-testid="scan-action-adjust">
+                        Adjust &rarr;
+                    </a>
+                </p>
+                {% if resolved_item.requires_checkout %}
+                    <p>
+                        <a href="/admin/items/{{ resolved_item.id }}/checkout"
+                           class="button"
+                           data-testid="scan-action-checkout">
+                            Check out &rarr;
+                        </a>
+                    </p>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
 {% endblock %}
