@@ -1,6 +1,6 @@
-"""End-to-end walk for manual stock-in (M2) and stock-out (M3).
+"""End-to-end walk for manual stock-in (M2), stock-out (M3), and adjust (M4).
 
-Workshop's first positive-write surface: M2 + M3 are the only places a
+Workshop's first positive-write surface: M2 + M3 + M4 are the only places a
 Workshop user can mutate the system today (Workshop still 403s on items list /
 edit per I3a's role table). The walk:
 
@@ -15,10 +15,16 @@ edit per I3a's role table). The walk:
    ``current_qty``, and the new movement in the recent-movements table.
 6. Workshop deep-links to ``/admin/items/{id}/out`` and consumes part of the
    layer; the form re-renders with the flash, the decremented ``current_qty``,
-   and the new OUT movement showing the FIFO-derived ``total_cost``.
-7. Cleanup: manager archives the item + the taxonomy category so downstream
-   e2e walks see empty active lists. (No attempt to "delete" the movement — the
-   audit log is append-only by mission.)
+   and the new OUT movement showing the FIFO-derived ``total_cost``. Then
+   tries to consume more than is open and asserts the in-form error block
+   plus preserved inputs.
+7. Workshop deep-links to ``/admin/items/{id}/adjust`` and submits two
+   adjustments: an increase (creates a new positive_adjustment cost layer +
+   bumps qty) and a decrease (consumes FIFO + decrements qty). Both legs
+   verify the flash + bumped ``current_qty`` + new movement row.
+8. Cleanup: manager archives the item + the taxonomy category so downstream
+   e2e walks see empty active lists. (No attempt to "delete" any movement —
+   the audit log is append-only by mission.)
 """
 
 from __future__ import annotations
@@ -249,6 +255,49 @@ def test_workshop_records_a_manual_stock_in(
     )
     # current_qty unchanged (still 70).
     expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
+
+    # Step 6c (M4): Workshop deep-links to the adjust form. Leg 1 is a positive
+    # adjustment (increase) which creates a new cost layer and bumps qty;
+    # leg 2 is a negative adjustment (decrease) which consumes FIFO.
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/adjust")
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
+
+    # Leg 1: increase by 20 at unit_cost 3.00 → current_qty 90, total_cost 60.
+    ws_page.get_by_test_id("stock-adjust-direction-input").select_option(
+        "increase"
+    )
+    ws_page.get_by_test_id("stock-adjust-qty-input").fill("20")
+    ws_page.get_by_test_id("stock-adjust-unit-cost-input").fill("3.00")
+    ws_page.get_by_test_id("stock-adjust-reason-input").fill("found extra")
+    ws_page.get_by_test_id("stock-adjust-submit").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/adjust")
+
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Casting alloy")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("+20")
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("90.0000")
+    inc_row = ws_page.locator('[data-testid="movement-row"]').first
+    expect(inc_row).to_contain_text("found extra")
+    expect(inc_row).to_contain_text("20")
+    expect(inc_row).to_contain_text("60")  # 20 * 3.00
+
+    # Leg 2: decrease by 15 → current_qty 75. FIFO consumes from the oldest
+    # layer (the original 100 @ 2.50, which had 70 left after the OUT step), so
+    # total_cost = 15 * 2.50 = 37.50.
+    ws_page.get_by_test_id("stock-adjust-direction-input").select_option(
+        "decrease"
+    )
+    ws_page.get_by_test_id("stock-adjust-qty-input").fill("15")
+    ws_page.get_by_test_id("stock-adjust-unit-cost-input").fill("")
+    ws_page.get_by_test_id("stock-adjust-reason-input").fill("damaged batch")
+    ws_page.get_by_test_id("stock-adjust-submit").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/adjust")
+
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("Casting alloy")
+    expect(ws_page.get_by_test_id("flash")).to_contain_text("-15")
+    expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
+    dec_row = ws_page.locator('[data-testid="movement-row"]').first
+    expect(dec_row).to_contain_text("damaged batch")
+    expect(dec_row).to_contain_text("15")
 
     ws_page.close()
     if ws_context is not context:

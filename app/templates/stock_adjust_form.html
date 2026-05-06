@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Adjust stock — {{ item.name }} — UC Inventory{% endblock %}
+{% block content %}
+    <p>
+        <a href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    </p>
+    <h1>Adjust stock: {{ item.name }}</h1>
+    <p>
+        <strong>SKU:</strong> {{ item.sku }} &middot;
+        <strong>Current quantity:</strong>
+        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+        {{ item.unit }} &middot;
+        <strong>Open value:</strong>
+        <span data-testid="item-open-value">{{ open_value }}</span>
+    </p>
+
+    {% if error %}
+        <p data-testid="stock-adjust-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/admin/items/{{ item.id }}/adjust" data-testid="stock-adjust-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="direction">Direction <span aria-hidden="true">*</span></label><br>
+            <select id="direction" name="direction" required
+                    data-testid="stock-adjust-direction-input">
+                <option value="">— pick one —</option>
+                {% for d in directions %}
+                    <option value="{{ d }}"
+                            {% if form.direction == d %}selected{% endif %}>{{ d }}</option>
+                {% endfor %}
+            </select>
+            <em>increase = found extra / corrected upwards; decrease = lost / scrapped / corrected downwards</em>
+        </p>
+
+        <p>
+            <label for="qty">Quantity <span aria-hidden="true">*</span></label><br>
+            <input type="text" inputmode="decimal" id="qty" name="qty" required
+                   value="{{ form.qty }}"
+                   data-testid="stock-adjust-qty-input"
+                   placeholder="e.g. 5">
+            <em>{{ item.unit }} (always positive — direction sets the sign)</em>
+        </p>
+
+        <p>
+            <label for="unit_cost">Unit cost</label><br>
+            <input type="text" inputmode="decimal" id="unit_cost" name="unit_cost"
+                   value="{{ form.unit_cost }}"
+                   data-testid="stock-adjust-unit-cost-input"
+                   placeholder="0.00">
+            <em>per {{ item.unit }} — required for increases (creates a cost layer); ignored for decreases (FIFO consumes existing layers)</em>
+        </p>
+
+        <p>
+            <label for="reason">Reason <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="reason" name="reason" required
+                   value="{{ form.reason }}"
+                   data-testid="stock-adjust-reason-input"
+                   maxlength="255"
+                   placeholder="e.g. stock-take variance, found in storage, scrap loss">
+            <em>required — adjustments must be attributed</em>
+        </p>
+
+        <p>
+            <label for="note">Note</label><br>
+            <textarea id="note" name="note"
+                      data-testid="stock-adjust-note-input"
+                      maxlength="2000"
+                      rows="3" cols="50">{{ form.note }}</textarea>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="stock-adjust-submit">
+                Record adjustment
+            </button>
+        </p>
+    </form>
+
+    <h2>Recent movements</h2>
+    {% if recent_movements %}
+        <table data-testid="movements-table">
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Total cost</th>
+                    <th>Actor</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in recent_movements %}
+                    <tr data-testid="movement-row" data-movement-id="{{ m.id }}">
+                        <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                        <td>{{ m.type }}</td>
+                        <td>{{ m.qty }}</td>
+                        <td>{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
+                        <td>{{ m.actor_email or "—" }}</td>
+                        <td>{{ m.reason or "" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="movements-empty">No movements yet for this item.</p>
+    {% endif %}
+{% endblock %}

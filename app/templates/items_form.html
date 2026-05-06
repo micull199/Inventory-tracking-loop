@@ -226,6 +226,11 @@
                         Stock out &rarr;
                     </a>
                 </p>
+                <p>
+                    <a href="/admin/items/{{ item.id }}/adjust" data-testid="stock-adjust-link">
+                        Adjust &rarr;
+                    </a>
+                </p>
             {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 <p>

@@ -1,4 +1,4 @@
-"""Manual stock-in (M2) and stock-out (M3) routes.
+"""Manual stock-in (M2), stock-out (M3), and adjustment (M4) routes.
 
 The first slices that wire the FIFO cost engine (``app/cost_engine.py``) into
 real routes. Workshop's first positive-write surface alongside Manager +
@@ -22,6 +22,17 @@ Route surface (mounted at ``/admin/items``):
   commit, redirect 303 with a flash. ``InsufficientStockError`` from the engine
   re-renders the form with a 400 status and an in-form error message — the
   only data-dependent failure case in the route, hence the carve-out.
+- ``GET  /admin/items/{item_id}/adjust`` — render an adjust form (qty +
+  direction {increase, decrease} + unit_cost + reason + note) plus the same
+  open-value + recent-movements summary.
+- ``POST /admin/items/{item_id}/adjust`` — validate, build a
+  ``StockMovement(type=ADJUSTMENT)``, flush, dispatch to ``record_receipt``
+  (direction=increase, ``source=POSITIVE_ADJUSTMENT``) or ``consume_fifo``
+  (direction=decrease — same insufficient-stock atomic-on-raise contract as
+  the ``out`` route), write a ``stock_movement.adjustment`` audit row, commit,
+  303 with flash. **Reason is required** (variance has to be attributed —
+  MISSION §3); ``unit_cost`` is required for increases and ignored for
+  decreases (consumption price comes from layers).
 
 The route never touches ``cost_layers.qty_remaining``, ``movement.total_cost``,
 or ``item.current_qty`` directly — the engine is the single owner of those
@@ -47,9 +58,17 @@ Audit shape — stock-out: ``action="stock_movement.out"``,
 layer) and no ``source`` (consumes don't carry one). The layer-level breakdown
 is in ``cost_layer_consumptions`` (queryable by ``movement_id``).
 
+Audit shape — adjustment: ``action="stock_movement.adjustment"``,
+``entity_type="stock_movement"``, ``entity_id=movement.id``, ``before=None``,
+``after={item_id, qty, direction, total_cost, reason, note, ...}``. ``qty``
+is always the positive Decimal the user submitted; ``direction`` carries the
+sign. Increase additionally records ``unit_cost``, ``source`` (=
+"positive_adjustment"), and ``received_at``; decrease leaves those keys absent
+(same gap as stock-out).
+
 Out of scope (deferred): backdated ``created_at`` / ``received_at`` UI,
-PO-receipt path (PO5), partial-receive against a PO line, adjustments (M4),
-unit-tracked item linkage on receipt / consume.
+PO-receipt path (PO5), partial-receive against a PO line, transfer movements
+(M5), unit-tracked item linkage on receipt / consume / adjust.
 """
 
 from __future__ import annotations
@@ -134,6 +153,36 @@ def _parse_non_negative_decimal(raw: str, *, field_name: str) -> Decimal:
             detail=f"{field_name} cannot be negative",
         )
     return value
+
+
+def _parse_required_reason(raw: str) -> str:
+    """Return a non-empty stripped reason, or 400.
+
+    Distinct from ``in`` and ``out`` where reason is optional: adjustments
+    record stock-take corrections (variance), and MISSION §3 requires every
+    adjustment movement to carry a reason so the variance is attributed.
+    """
+    text = (raw or "").strip()
+    if text == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reason is required",
+        )
+    return text
+
+
+_VALID_DIRECTIONS = ("increase", "decrease")
+
+
+def _parse_direction(raw: str) -> str:
+    """Return ``"increase"`` or ``"decrease"`` — anything else 400s."""
+    text = (raw or "").strip()
+    if text not in _VALID_DIRECTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="direction must be 'increase' or 'decrease'",
+        )
+    return text
 
 
 def _get_item_or_404(db: Session, item_id: int) -> Item:
@@ -451,5 +500,199 @@ def record_stock_out(
     )
     return RedirectResponse(
         url=f"/admin/items/{item.id}/out",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /admin/items/{item_id}/adjust — form
+# ---------------------------------------------------------------------------
+
+
+def _render_stock_adjust_form(
+    request: Request,
+    *,
+    user: User,
+    item: Item,
+    db: Session,
+    form_values: dict[str, str],
+    error: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "stock_adjust_form.html",
+        {
+            "current_user": user,
+            "item": item,
+            "open_value": open_value(db, item),
+            "recent_movements": _recent_movements(db, item.id),
+            "form": form_values,
+            "directions": _VALID_DIRECTIONS,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+@router.get("/{item_id}/adjust", response_class=HTMLResponse)
+def stock_adjust_form(
+    request: Request,
+    item_id: int,
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+    return _render_stock_adjust_form(
+        request,
+        user=user,
+        item=item,
+        db=db,
+        form_values={
+            "qty": "",
+            "direction": "",
+            "unit_cost": "",
+            "reason": "",
+            "note": "",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/items/{item_id}/adjust — record an adjustment
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{item_id}/adjust")
+def record_stock_adjustment(
+    request: Request,
+    item_id: int,
+    qty: str = Form(""),
+    direction: str = Form(""),
+    unit_cost: str = Form(""),
+    reason: str = Form(""),
+    note: str = Form(""),
+    user: User = Depends(
+        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
+    ),
+    db: Session = Depends(get_session),
+) -> Response:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+
+    qty_decimal = _parse_positive_decimal(qty, field_name="quantity")
+    direction_value = _parse_direction(direction)
+    clean_reason = _parse_required_reason(reason)
+    clean_note = (note or "").strip() or None
+
+    # unit_cost is only required + parsed for increases. For decreases it is
+    # ignored (consumption price is per-layer; same as the ``out`` route).
+    unit_cost_decimal: Decimal | None = None
+    if direction_value == "increase":
+        unit_cost_decimal = _parse_non_negative_decimal(
+            unit_cost, field_name="unit cost"
+        )
+
+    received_at = datetime.now(UTC)
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.ADJUSTMENT,
+        qty=qty_decimal,
+        user_id=user.id,
+        reason=clean_reason,
+        note=clean_note,
+    )
+    db.add(movement)
+    db.flush()
+
+    if direction_value == "increase":
+        # mypy: unit_cost_decimal is non-None on this branch by construction.
+        assert unit_cost_decimal is not None
+        record_receipt(
+            db,
+            item=item,
+            qty=qty_decimal,
+            unit_cost=unit_cost_decimal,
+            source=CostLayerSource.POSITIVE_ADJUSTMENT,
+            movement=movement,
+            received_at=received_at,
+        )
+        audit_after: dict[str, Any] = {
+            "item_id": item.id,
+            "qty": str(qty_decimal),
+            "direction": direction_value,
+            "unit_cost": str(unit_cost_decimal),
+            "total_cost": (
+                str(movement.total_cost)
+                if movement.total_cost is not None
+                else None
+            ),
+            "source": CostLayerSource.POSITIVE_ADJUSTMENT.value,
+            "reason": clean_reason,
+            "note": clean_note,
+            "received_at": received_at.isoformat(),
+        }
+        flash_message = (
+            f"Adjustment recorded: +{qty_decimal} {item.unit} of "
+            f"“{item.name}”."
+        )
+    else:
+        try:
+            consume_fifo(db, item=item, qty=qty_decimal, movement=movement)
+        except InsufficientStockError as exc:
+            db.rollback()
+            item = _get_item_or_404(db, item_id)
+            return _render_stock_adjust_form(
+                request,
+                user=user,
+                item=item,
+                db=db,
+                form_values={
+                    "qty": qty.strip(),
+                    "direction": direction_value,
+                    "unit_cost": (unit_cost or "").strip(),
+                    "reason": clean_reason,
+                    "note": (note or "").strip(),
+                },
+                error=(
+                    f"Not enough stock: requested {exc.requested}, "
+                    f"only {exc.available} available."
+                ),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        audit_after = {
+            "item_id": item.id,
+            "qty": str(qty_decimal),
+            "direction": direction_value,
+            "total_cost": (
+                str(movement.total_cost)
+                if movement.total_cost is not None
+                else None
+            ),
+            "reason": clean_reason,
+            "note": clean_note,
+        }
+        flash_message = (
+            f"Adjustment recorded: -{qty_decimal} {item.unit} of "
+            f"“{item.name}”."
+        )
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_movement.adjustment",
+        entity_type="stock_movement",
+        entity_id=movement.id,
+        before=None,
+        after=audit_after,
+    )
+    db.commit()
+
+    _flash(request, flash_message)
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/adjust",
         status_code=status.HTTP_303_SEE_OTHER,
     )

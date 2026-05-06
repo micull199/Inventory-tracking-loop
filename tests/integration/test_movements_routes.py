@@ -1584,3 +1584,920 @@ class TestStockOutLinkOnEditForm:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="stock-out-link"' not in resp.text
+
+
+# =============================================================================
+# M4 — adjustment movements
+# =============================================================================
+
+
+def _payload_adjust(
+    *,
+    qty: str = "5",
+    direction: str = "increase",
+    unit_cost: str = "2.00",
+    reason: str = "stock-take variance",
+    note: str = "",
+    csrf: str = "",
+) -> dict[str, str]:
+    return {
+        "qty": qty,
+        "direction": direction,
+        "unit_cost": unit_cost,
+        "reason": reason,
+        "note": note,
+        "csrf_token": csrf,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Role enforcement (adjustment)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustRoleEnforcement:
+    def test_anonymous_get_form_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 401
+
+    def test_anonymous_post_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_pending_user_get_form_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 403
+
+    def test_workshop_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 200
+
+    def test_workshop_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop's adjustment write surface (MISSION §3 grants this)."""
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_office_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 200
+
+    def test_office_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_manager_get_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 200
+
+    def test_manager_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_admin_post_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+
+# ---------------------------------------------------------------------------
+# Form rendering (adjustment)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustForm:
+    def test_form_includes_inputs_and_csrf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(
+            db_session, leaf=leaf, sku="WIRE-1", name="Silver wire"
+        )
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Silver wire" in body
+        assert 'name="qty"' in body
+        assert 'name="direction"' in body
+        assert 'name="unit_cost"' in body
+        assert 'name="reason"' in body
+        assert 'name="note"' in body
+        assert 'name="csrf_token"' in body
+        assert 'data-testid="stock-adjust-submit"' in body
+        # Both directions selectable.
+        assert 'value="increase"' in body
+        assert 'value="decrease"' in body
+        # Reason is marked required (HTML required attribute on the input).
+        # Search for the reason input segment specifically.
+        reason_section = body[body.index('name="reason"') :][:400]
+        assert "required" in reason_section
+
+    def test_form_shows_current_qty_and_open_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(
+            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
+        )
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        body = resp.text
+        assert 'data-testid="item-current-qty"' in body
+        assert 'data-testid="item-open-value"' in body
+        # 10 * 2.50 = 25
+        assert "25" in body
+
+    def test_form_recent_movements_empty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert "movements-empty" in resp.text
+
+    def test_unknown_item_form_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/items/999/adjust")
+        assert resp.status_code == 404
+
+    def test_archived_item_form_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Validation matrix (adjustment)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustValidation:
+    def _setup(self, db_session: Session, client: TestClient) -> Item:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="50", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        return item
+
+    def test_blank_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(qty="", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_zero_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(qty="0", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_negative_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(qty="-1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_qty_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(qty="lots", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_blank_direction_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(direction="", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_direction_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(direction="sideways", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_blank_reason_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(reason="", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_whitespace_only_reason_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(reason="   ", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_blank_unit_cost_on_increase_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase", unit_cost="", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_negative_unit_cost_on_increase_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase", unit_cost="-1", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_non_numeric_unit_cost_on_increase_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase", unit_cost="cheap", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_zero_unit_cost_on_increase_allowed(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase",
+                qty="2",
+                unit_cost="0",
+                reason="found",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_unit_cost_ignored_on_decrease(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Garbage unit_cost is fine for decreases — the field is ignored."""
+        item = self._setup(db_session, client)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="3",
+                unit_cost="not-a-number",
+                reason="loss",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+    def test_unknown_item_post_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            "/admin/items/999/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+    def test_archived_item_post_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_validation_failure_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = self._setup(db_session, client)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(qty="-1", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert _audit_rows(db_session, action="stock_movement.adjustment") == []
+
+
+# ---------------------------------------------------------------------------
+# Increase happy path (positive adjustment → new layer)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustIncreaseHappyPath:
+    def test_creates_movement_layer_and_bumps_qty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase",
+                qty="20",
+                unit_cost="3.00",
+                reason="found in storage",
+                note="boxed away",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/adjust"
+
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        assert adj.item_id == item.id
+        assert adj.type == MovementType.ADJUSTMENT
+        assert adj.qty == Decimal("20")
+        assert adj.user_id == ws.id
+        assert adj.reason == "found in storage"
+        assert adj.note == "boxed away"
+        # 20 * 3.00 = 60.00
+        assert adj.total_cost == Decimal("60.00")
+
+        layer = db_session.execute(select(CostLayer)).scalar_one()
+        assert layer.item_id == item.id
+        assert layer.qty_received == Decimal("20")
+        assert layer.qty_remaining == Decimal("20")
+        assert layer.unit_cost == Decimal("3.00")
+        assert layer.source == CostLayerSource.POSITIVE_ADJUSTMENT
+        assert layer.source_movement_id == adj.id
+
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("20")
+
+    def test_audit_row_for_increase(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase",
+                qty="5",
+                unit_cost="2.50",
+                reason="found extra",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="stock_movement.adjustment")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.actor_id == ws.id
+        assert row.entity_type == "stock_movement"
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        assert row.entity_id == adj.id
+        assert row.before_json is None
+        assert row.after_json is not None
+        a = row.after_json
+        assert a["item_id"] == item.id
+        assert a["qty"] == "5"
+        assert a["direction"] == "increase"
+        assert a["unit_cost"] == "2.50"
+        # 5 * 2.50 = 12.50
+        assert a["total_cost"] == "12.50"
+        assert a["source"] == "positive_adjustment"
+        assert a["reason"] == "found extra"
+        assert "received_at" in a
+
+    def test_increase_strips_whitespace_on_reason_and_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase",
+                qty="1",
+                unit_cost="1",
+                reason="  trim me  ",
+                note="  ditto  ",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        assert adj.reason == "trim me"
+        assert adj.note == "ditto"
+
+    def test_increase_flash_message(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Casting alloy")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="increase",
+                qty="2",
+                unit_cost="1",
+                reason="r",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert "Casting alloy" in resp.text
+        # Flash uses "+qty" for increases.
+        assert "+2" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Decrease happy path (negative adjustment → consume FIFO)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustDecreaseHappyPath:
+    def test_creates_movement_consumption_and_decrements_qty(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        seed = _seed_layer(
+            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
+        )
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="3",
+                unit_cost="ignored",
+                reason="scrap loss",
+                note="job 7",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        assert adj.qty == Decimal("3")
+        assert adj.reason == "scrap loss"
+        assert adj.note == "job 7"
+        # 3 * 2.50 = 7.50
+        assert adj.total_cost == Decimal("7.50")
+
+        cons = db_session.execute(select(CostLayerConsumption)).scalars().all()
+        assert len(cons) == 1
+        c = cons[0]
+        assert c.movement_id == adj.id
+        assert c.qty_consumed == Decimal("3")
+        assert c.unit_cost_at_consumption == Decimal("2.50")
+
+        layer = db_session.execute(
+            select(CostLayer).where(CostLayer.id == c.layer_id)
+        ).scalar_one()
+        assert layer.source_movement_id == seed.id
+        assert layer.qty_remaining == Decimal("7")
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("7")
+
+    def test_audit_row_for_decrease(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="4",
+                reason="damaged",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        rows = _audit_rows(db_session, action="stock_movement.adjustment")
+        assert len(rows) == 1
+        a = rows[0].after_json
+        assert a is not None
+        assert a["item_id"] == item.id
+        assert a["qty"] == "4"
+        assert a["direction"] == "decrease"
+        # Layer-weighted; reads back from Numeric(14,4).
+        assert a["total_cost"] == "8.0000"
+        assert a["reason"] == "damaged"
+        # No unit_cost / source / received_at on decrease.
+        assert "unit_cost" not in a
+        assert "source" not in a
+        assert "received_at" not in a
+
+    def test_decrease_blank_note_becomes_none(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="1",
+                reason="x",
+                note="   ",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        assert adj.note is None
+
+    def test_decrease_flash_message(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Casting alloy")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="5", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="2",
+                reason="loss",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/adjust")
+        assert "Casting alloy" in resp.text
+        # Flash uses "-qty" for decreases.
+        assert "-2" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Insufficient stock on decrease (atomic on raise)
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustInsufficientStock:
+    def test_decrease_more_than_open_returns_400_with_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, name="Wire")
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="3", unit_cost="2", actor=ws)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="10",
+                reason="oops",
+                note="too much",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        body = resp.text
+        assert 'data-testid="stock-adjust-error"' in body
+        assert "Not enough stock" in body
+        # Preserved form values.
+        assert 'value="10"' in body
+        assert "oops" in body
+        assert "too much" in body
+        # Direction preserved as "decrease" (selected option in the form).
+        # The selected attribute follows the value on the next line of the
+        # rendered <option>; check the segment between them contains nothing
+        # but whitespace.
+        idx = body.index('value="decrease"')
+        # Look at the next ~120 chars for the selected attribute.
+        assert "selected" in body[idx : idx + 120]
+
+        # No mutation: no ADJUSTMENT movement / consumption / qty change.
+        assert (
+            db_session.execute(
+                select(StockMovement).where(
+                    StockMovement.type == MovementType.ADJUSTMENT
+                )
+            ).first()
+            is None
+        )
+        assert db_session.execute(select(CostLayerConsumption)).first() is None
+        layer = db_session.execute(select(CostLayer)).scalar_one()
+        assert layer.qty_remaining == Decimal("3")
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("3")
+
+    def test_decrease_no_layers_returns_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="1",
+                reason="x",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert 'data-testid="stock-adjust-error"' in resp.text
+
+    def test_insufficient_stock_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _seed_layer(db_session, item=item, qty="2", unit_cost="1", actor=ws)
+        _login_as(client, ws)
+        client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="100",
+                reason="x",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert _audit_rows(db_session, action="stock_movement.adjustment") == []
+
+
+# ---------------------------------------------------------------------------
+# Multi-layer FIFO on decrease
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustMultiLayerFIFODecrease:
+    def test_decrease_spans_two_layers_oldest_first(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        old = datetime(2026, 1, 1, tzinfo=UTC)
+        new = datetime(2026, 2, 1, tzinfo=UTC)
+        _seed_layer(
+            db_session, item=item, qty="4", unit_cost="2.00",
+            actor=ws, received_at=old,
+        )
+        _seed_layer(
+            db_session, item=item, qty="6", unit_cost="3.00",
+            actor=ws, received_at=new,
+        )
+        _login_as(client, ws)
+        resp = client.post(
+            f"/admin/items/{item.id}/adjust",
+            data=_payload_adjust(
+                direction="decrease",
+                qty="7",
+                reason="scrap",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        adj = db_session.execute(
+            select(StockMovement).where(
+                StockMovement.type == MovementType.ADJUSTMENT
+            )
+        ).scalar_one()
+        # 4*2 + 3*3 = 17
+        assert adj.total_cost == Decimal("17.00")
+
+        cons = list(
+            db_session.execute(
+                select(CostLayerConsumption).order_by(
+                    CostLayerConsumption.id
+                )
+            ).scalars().all()
+        )
+        assert len(cons) == 2
+        assert cons[0].qty_consumed == Decimal("4")
+        assert cons[0].unit_cost_at_consumption == Decimal("2.00")
+        assert cons[1].qty_consumed == Decimal("3")
+        assert cons[1].unit_cost_at_consumption == Decimal("3.00")
+
+        db_session.refresh(item)
+        assert item.current_qty == Decimal("3")
+
+
+# ---------------------------------------------------------------------------
+# Edit-form integration: "Adjust" link
+# ---------------------------------------------------------------------------
+
+
+class TestStockAdjustLinkOnEditForm:
+    def test_edit_form_shows_adjust_link_for_active_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert f"/admin/items/{item.id}/adjust" in resp.text
+        assert 'data-testid="stock-adjust-link"' in resp.text
+
+    def test_edit_form_hides_adjust_link_for_archived_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, archived=True)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="stock-adjust-link"' not in resp.text
