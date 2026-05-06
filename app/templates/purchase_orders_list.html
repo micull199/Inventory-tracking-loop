@@ -15,6 +15,9 @@
             </select>
         </label>
         <noscript><button type="submit">Filter</button></noscript>
+        <a href="/admin/purchase-orders?format=csv&status_filter={{ status_filter }}"
+           data-testid="po-list-csv-link"
+           style="margin-left:0.75rem;">Download CSV</a>
     </form>
 
     {% if rows %}

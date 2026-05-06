@@ -3665,3 +3665,250 @@ class TestPOReceiveFormRender:
         assert resp.status_code == 200
         # The outstanding cell should now read 6.0000.
         assert "6.0000" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# CSV export (R5)
+# ---------------------------------------------------------------------------
+
+
+class TestPOListCsvRoleEnforcement:
+    """``?format=csv`` inherits the same role gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+
+
+class TestPOListCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="purchase_orders_all.csv"' in cd
+
+    def test_content_disposition_status_filtered_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/purchase-orders?format=csv&status_filter=draft"
+        )
+        cd = resp.headers["content-disposition"]
+        assert 'filename="purchase_orders_draft.csv"' in cd
+
+
+class TestPOListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        body = resp.text
+        assert body == (
+            "po_id,supplier,supplier_archived,status,line_count,created_at\r\n"
+        )
+
+    def test_one_po_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        po = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+        )
+        db_session.add(po)
+        db_session.commit()
+        db_session.refresh(po)
+
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(po.id)
+        assert cells[1] == "ACME"
+        assert cells[2] == "no"
+        assert cells[3] == "draft"
+        assert cells[4] == "0"
+        # cells[5] is the created_at ISO timestamp.
+
+    def test_archived_supplier_renders_yes(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME", archived=True)
+        po = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+        )
+        db_session.add(po)
+        db_session.commit()
+
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        # The supplier_archived cell carries the literal string "yes".
+        # Two-cell match avoids accidental hit on a substring "yes" elsewhere.
+        assert ",ACME,yes,draft," in resp.text
+
+    def test_status_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        draft = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+        )
+        sent = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
+        )
+        db_session.add_all([draft, sent])
+        db_session.commit()
+        db_session.refresh(draft)
+        db_session.refresh(sent)
+
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/purchase-orders?format=csv&status_filter=draft"
+        )
+        assert resp.status_code == 200
+        # The draft PO appears; the sent PO does not.
+        body = resp.text
+        # Match each PO id at the start of a CSV row.
+        assert f"\r\n{draft.id}," in body
+        assert f"\r\n{sent.id}," not in body
+
+    def test_newest_first_ordering_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        po1 = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+        )
+        db_session.add(po1)
+        db_session.commit()
+        po2 = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
+        )
+        db_session.add(po2)
+        db_session.commit()
+
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        body = resp.text
+        po2_pos = body.index(f"\r\n{po2.id},")
+        po1_pos = body.index(f"\r\n{po1.id},")
+        assert po2_pos < po1_pos
+
+
+class TestPOListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="po-list-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestPOListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="ACME")
+        po = PurchaseOrder(
+            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
+        )
+        db_session.add(po)
+        db_session.commit()
+        before = _audit_count(db_session)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?format=csv")
+        assert resp.status_code == 200
+        after = _audit_count(db_session)
+        assert after == before
+
+
+class TestPOListCsvLink:
+    def test_html_renders_csv_link_with_active_status_filter(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/purchase-orders?status_filter=draft")
+        assert resp.status_code == 200
+        assert 'data-testid="po-list-csv-link"' in resp.text
+        assert "format=csv" in resp.text
+        assert "status_filter=draft" in resp.text
+
+
+def _audit_count(db: Session) -> int:
+    return len(list(db.execute(select(AuditLog)).scalars().all()))

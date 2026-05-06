@@ -81,6 +81,7 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.config import settings as app_settings
 from app.cost_engine import record_receipt
+from app.csv_export import csv_response
 from app.db import get_session
 from app.email_backend import (
     EmailAttachment,
@@ -300,15 +301,51 @@ _STATUS_FILTER_VALUES: tuple[str, ...] = (
     *(s.value for s in POStatus),
 )
 
+_PO_LIST_CSV_HEADERS: list[str] = [
+    "po_id",
+    "supplier",
+    "supplier_archived",
+    "status",
+    "line_count",
+    "created_at",
+]
 
-@list_router.get("", response_class=HTMLResponse)
+
+def _po_list_csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """Map view-shaped PO list rows to CSV cell values.
+
+    The ``supplier_archived`` cell renders as the literal string ``"yes"`` or
+    ``"no"`` rather than ``"True"`` / ``"False"``: spreadsheet receivers tend
+    to find yes/no easier to filter on. Documented in ``app/csv_export.py``'s
+    module docstring as a per-caller pre-coercion.
+    """
+    return [
+        [
+            r["id"],
+            r["supplier_name"],
+            "yes" if r["supplier_archived"] else "no",
+            r["status"],
+            r["line_count"],
+            r["created_at"],
+        ]
+        for r in rows
+    ]
+
+
+@list_router.get("")
 def list_purchase_orders(
     request: Request,
     status_filter: str = "all",
+    format: str = "",
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
-    """List POs newest-first, optionally filtered by status."""
+) -> Response:
+    """List POs newest-first, optionally filtered by status.
+
+    ``?format=csv`` triggers a downloadable CSV; anything else (blank,
+    ``html``, garbage) renders the existing HTML — same silent-coerce posture
+    as ``status_filter``.
+    """
     if status_filter not in _STATUS_FILTER_VALUES:
         status_filter = "all"
 
@@ -333,6 +370,14 @@ def list_purchase_orders(
                 "line_count": _count_lines(db, po.id),
             }
         )
+
+    if format == "csv":
+        return csv_response(
+            filename=f"purchase_orders_{status_filter}.csv",
+            headers=_PO_LIST_CSV_HEADERS,
+            rows=_po_list_csv_rows(rows),
+        )
+
     return templates.TemplateResponse(
         request,
         "purchase_orders_list.html",

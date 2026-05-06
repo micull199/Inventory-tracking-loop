@@ -1,16 +1,19 @@
-"""Reports surface (R4 — stock-take variance trend, MISSION §3 reporting).
+"""Reports surface (R4 — stock-take variance trend; R5 — CSV export).
 
 Read-only reports that aggregate engine + history outputs. R4 is the first
 report on this prefix — a per-stock-take variance trend showing how far the
-workshop's counts drifted from the system over a rolling window. R5 (CSV
-export) will land here too.
+workshop's counts drifted from the system over a rolling window. R5 adds a
+``?format=csv`` branch on the same route so the report is downloadable as
+a spreadsheet.
 
 Route surface (mounted at ``/admin/reports``):
 
-- ``GET /admin/reports/variance-trend[?days=N]`` — Manager + Office. Renders
-  a per-stock-take aggregation of committed line variances over the last
-  ``days`` days (default 90, clamped [1, 365]; bad / out-of-range coerces to
-  the default — same posture as R1's ``top_days``).
+- ``GET /admin/reports/variance-trend[?days=N&format=csv|html]`` — Manager
+  + Office. Renders a per-stock-take aggregation of committed line variances
+  over the last ``days`` days (default 90, clamped [1, 365]; bad /
+  out-of-range coerces to the default — same posture as R1's ``top_days``).
+  ``?format=csv`` triggers the CSV branch; anything else (blank, ``html``,
+  garbage) renders HTML — same silent-coerce posture as the ``days`` param.
 
 The report is read-only by design — no audit, no mutations, no engine touches.
 The numbers come from joins against ``stock_takes`` + ``stock_take_lines`` +
@@ -28,12 +31,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
+from app.csv_export import csv_response
 from app.db import get_session
 from app.models import (
     Location,
@@ -252,15 +255,60 @@ def _load_trend_rows(db: Session, *, days: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/variance-trend", response_class=HTMLResponse)
+_CSV_HEADERS: list[str] = [
+    "stock_take_id",
+    "scope",
+    "scheduled_for",
+    "completed_at",
+    "lines_with_variance",
+    "positive_variance",
+    "negative_variance_abs",
+    "net_variance",
+    "abs_variance",
+]
+
+
+def _csv_rows_for_trend(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    """Map view-shaped trend rows to CSV cell values.
+
+    The shape mirrors the HTML table one-for-one — same nine columns, same
+    order. Decimal / datetime / date coercion is handled by ``csv_response``;
+    we just hand it the raw values.
+    """
+    out: list[list[Any]] = []
+    for row in rows:
+        agg = row["aggregate"]
+        out.append(
+            [
+                row["id"],
+                row["scope_label"],
+                row["scheduled_for"],
+                row["completed_at"],
+                agg["lines_with_variance"],
+                agg["positive_variance"],
+                agg["negative_variance_abs"],
+                agg["net_variance"],
+                agg["abs_variance"],
+            ]
+        )
+    return out
+
+
+@router.get("/variance-trend")
 def variance_trend(
     request: Request,
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
-    """Render the variance trend report."""
+) -> Response:
+    """Render the variance trend report (HTML default; ``?format=csv`` for CSV)."""
     days = _coerce_days(request.query_params.get("days"))
     rows = _load_trend_rows(db, days=days)
+    if request.query_params.get("format") == "csv":
+        return csv_response(
+            filename=f"variance_trend_{days}d.csv",
+            headers=_CSV_HEADERS,
+            rows=_csv_rows_for_trend(rows),
+        )
     totals = _combine_aggregates(rows)
     return templates.TemplateResponse(
         request,

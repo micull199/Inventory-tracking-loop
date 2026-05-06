@@ -521,3 +521,260 @@ class TestVarianceTrendDashboardLink:
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 200
         assert 'data-testid="dashboard-variance-trend-link"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# CSV export (R5)
+# ---------------------------------------------------------------------------
+
+
+class TestVarianceTrendCsvRoleEnforcement:
+    """``?format=csv`` inherits the same role gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+
+
+class TestVarianceTrendCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="variance_trend_90d.csv"' in cd
+
+    def test_content_disposition_custom_window(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Filename reflects the active ``days`` param."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv&days=30")
+        assert resp.status_code == 200
+        cd = resp.headers["content-disposition"]
+        assert 'filename="variance_trend_30d.csv"' in cd
+
+    def test_bad_days_filename_uses_default(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Non-int days silently coerces to default 90 (same as HTML)."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv&days=foo")
+        assert resp.status_code == 200
+        cd = resp.headers["content-disposition"]
+        assert 'filename="variance_trend_90d.csv"' in cd
+
+
+class TestVarianceTrendCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+        body = resp.text
+        # Header row only — nine columns ending in CRLF.
+        assert body == (
+            "stock_take_id,scope,scheduled_for,completed_at,"
+            "lines_with_variance,positive_variance,negative_variance_abs,"
+            "net_variance,abs_variance\r\n"
+        )
+
+    def test_one_stock_take_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session, name="Tools")
+        item = _make_item(db_session, leaf)
+        st = _make_completed_st(
+            db_session,
+            completed_at=datetime.now(UTC) - timedelta(hours=1),
+            scope_node=leaf,
+        )
+        _make_line(
+            db_session, st=st, item=item, variance=Decimal("3"), committed=True
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        # Header + 1 data row + trailing empty (from final CRLF).
+        assert len(lines) == 3
+        assert lines[2] == ""
+        # Data row carries the stock take id + scope + counts/sums. The
+        # decimals come back at the column's scale 4 (e.g. "3.0000"), so the
+        # tail check uses ``,1,3`` then matches the rest tolerantly.
+        data = lines[1]
+        assert data.startswith(f"{st.id},Category: Tools,")
+        cells = data.split(",")
+        # 9 columns total.
+        assert len(cells) == 9
+        assert cells[4] == "1"  # lines_with_variance
+        assert Decimal(cells[5]) == Decimal("3")  # positive_variance
+        assert Decimal(cells[6]) == Decimal("0")  # negative_variance_abs
+        assert Decimal(cells[7]) == Decimal("3")  # net_variance
+        assert Decimal(cells[8]) == Decimal("3")  # abs_variance
+
+    def test_days_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A 100-day-old completion is excluded by default 90, included at 200."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        st = _make_completed_st(
+            db_session, completed_at=datetime.now(UTC) - timedelta(days=100)
+        )
+        _make_line(
+            db_session, st=st, item=item, variance=Decimal("2"), committed=True
+        )
+        _login_as(client, mgr)
+        # Default window: only header row.
+        resp_default = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp_default.status_code == 200
+        assert resp_default.text.count("\r\n") == 1
+        # Widened window: header + 1 row.
+        resp_wide = client.get(
+            "/admin/reports/variance-trend?format=csv&days=200"
+        )
+        assert resp_wide.status_code == 200
+        assert resp_wide.text.count("\r\n") == 2
+        assert f",{st.id}," in resp_wide.text or resp_wide.text.split(
+            "\r\n"
+        )[1].startswith(f"{st.id},")
+
+    def test_multiple_stock_takes_newest_first(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        old = _make_completed_st(
+            db_session, completed_at=datetime.now(UTC) - timedelta(days=10)
+        )
+        new = _make_completed_st(
+            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
+        )
+        _make_line(
+            db_session, st=old, item=item, variance=Decimal("3"), committed=True
+        )
+        _make_line(
+            db_session, st=new, item=item, variance=Decimal("-5"), committed=True
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+        body = resp.text
+        new_pos = body.index(f"\r\n{new.id},")
+        old_pos = body.index(f"\r\n{old.id},")
+        assert new_pos < old_pos
+
+
+class TestVarianceTrendCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """No format param → existing HTML response."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="variance-trend-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """``?format=garbage`` falls back to HTML (silent coerce)."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestVarianceTrendCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        item = _make_item(db_session, leaf)
+        st = _make_completed_st(
+            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
+        )
+        _make_line(
+            db_session, st=st, item=item, variance=Decimal("3"), committed=True
+        )
+        before = _audit_count(db_session)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?format=csv")
+        assert resp.status_code == 200
+        after = _audit_count(db_session)
+        assert after == before
+
+
+class TestVarianceTrendCsvLink:
+    def test_html_renders_csv_link_with_active_days(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/variance-trend?days=45")
+        assert resp.status_code == 200
+        assert 'data-testid="variance-trend-csv-link"' in resp.text
+        # The link's href preserves the active ``days``.
+        assert "format=csv" in resp.text
+        assert "days=45" in resp.text
