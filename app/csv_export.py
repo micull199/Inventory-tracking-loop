@@ -97,3 +97,22 @@ def csv_response(
             "Content-Disposition": f'attachment; filename="{safe_name}"',
         },
     )
+
+
+def csv_branch(
+    format_value: str,
+    *,
+    filename: str,
+    headers: list[str],
+    rows: Iterable[Iterable[Any]],
+) -> Response | None:
+    """Return a CSV response when ``format_value == "csv"``, else ``None``.
+
+    Lets list-view routes collapse the recurring ``if format == "csv":
+    return csv_response(...)`` branch to a single ``if (resp := csv_branch(
+    format, ...)): return resp`` line. The HTML-render path stays explicit
+    on the next line.
+    """
+    if format_value != "csv":
+        return None
+    return csv_response(filename=filename, headers=headers, rows=rows)

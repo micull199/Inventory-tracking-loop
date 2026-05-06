@@ -44,7 +44,7 @@ from app.cost_engine import (
     consume_fifo,
     record_receipt,
 )
-from app.csv_export import csv_response
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
     CostLayer,
@@ -648,12 +648,15 @@ def list_stock_takes(
 ) -> Response:
     show = _coerce_show(request.query_params.get("show"))
     rows = _list_rows(db, show=show)
-    if format == "csv":
-        return csv_response(
+    if (
+        resp := csv_branch(
+            format,
             filename=f"stock_takes_{show}.csv",
             headers=_STOCK_TAKES_LIST_CSV_HEADERS,
             rows=_csv_rows_for_stock_takes_list(rows),
         )
+    ) is not None:
+        return resp
     return templates.TemplateResponse(
         request,
         "stock_takes_list.html",

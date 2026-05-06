@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
-from app.csv_export import csv_response
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Role, Supplier, User
 from app.template_env import templates
@@ -147,12 +147,15 @@ def list_suppliers(
 
     rows = list(db.execute(stmt).scalars().all())
 
-    if format == "csv":
-        return csv_response(
+    if (
+        resp := csv_branch(
+            format,
             filename=f"suppliers_{show}.csv",
             headers=_SUPPLIERS_CSV_HEADERS,
             rows=_csv_rows_for_suppliers(rows),
         )
+    ) is not None:
+        return resp
 
     return templates.TemplateResponse(
         request,

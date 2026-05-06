@@ -81,7 +81,7 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.config import settings as app_settings
 from app.cost_engine import record_receipt
-from app.csv_export import csv_response
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.email_backend import (
     EmailAttachment,
@@ -371,12 +371,15 @@ def list_purchase_orders(
             }
         )
 
-    if format == "csv":
-        return csv_response(
+    if (
+        resp := csv_branch(
+            format,
             filename=f"purchase_orders_{status_filter}.csv",
             headers=_PO_LIST_CSV_HEADERS,
             rows=_po_list_csv_rows(rows),
         )
+    ) is not None:
+        return resp
 
     return templates.TemplateResponse(
         request,

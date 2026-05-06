@@ -58,7 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
-from app.csv_export import csv_response
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
     FieldType,
@@ -1015,12 +1015,15 @@ def list_items(
         for item in items
     ]
 
-    if is_csv:
-        return csv_response(
+    if (
+        resp := csv_branch(
+            format,
             filename=f"items_{show}.csv",
             headers=_ITEMS_CSV_HEADERS,
             rows=_csv_rows_for_items(rows),
         )
+    ) is not None:
+        return resp
 
     return templates.TemplateResponse(
         request,

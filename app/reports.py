@@ -36,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
-from app.csv_export import csv_response
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
     Location,
@@ -303,12 +303,15 @@ def variance_trend(
     """Render the variance trend report (HTML default; ``?format=csv`` for CSV)."""
     days = _coerce_days(request.query_params.get("days"))
     rows = _load_trend_rows(db, days=days)
-    if request.query_params.get("format") == "csv":
-        return csv_response(
+    if (
+        resp := csv_branch(
+            request.query_params.get("format", ""),
             filename=f"variance_trend_{days}d.csv",
             headers=_CSV_HEADERS,
             rows=_csv_rows_for_trend(rows),
         )
+    ) is not None:
+        return resp
     totals = _combine_aggregates(rows)
     return templates.TemplateResponse(
         request,

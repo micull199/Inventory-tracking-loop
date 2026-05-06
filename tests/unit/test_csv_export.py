@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from app.csv_export import _safe_filename, csv_response
+from app.csv_export import _safe_filename, csv_branch, csv_response
 
 # ---------------------------------------------------------------------------
 # csv_response
@@ -172,3 +172,71 @@ class TestSafeFilename:
         assert _safe_filename("café.csv") == "caf__.csv" or "_" in _safe_filename(
             "café.csv"
         )
+
+
+# ---------------------------------------------------------------------------
+# csv_branch (R5e)
+# ---------------------------------------------------------------------------
+
+
+class TestCsvBranch:
+    """The list-view-route branch helper.
+
+    Returns a CSV ``Response`` when the format query value is the literal
+    ``"csv"``; otherwise returns ``None`` so the caller can fall through to
+    its HTML render path.
+    """
+
+    def test_returns_none_when_format_is_blank(self) -> None:
+        result = csv_branch(
+            "",
+            filename="t.csv",
+            headers=["a"],
+            rows=[["v"]],
+        )
+        assert result is None
+
+    def test_returns_none_when_format_is_html(self) -> None:
+        result = csv_branch(
+            "html",
+            filename="t.csv",
+            headers=["a"],
+            rows=[["v"]],
+        )
+        assert result is None
+
+    def test_returns_none_when_format_is_garbage(self) -> None:
+        result = csv_branch(
+            "xml",
+            filename="t.csv",
+            headers=["a"],
+            rows=[["v"]],
+        )
+        assert result is None
+
+    def test_returns_response_when_format_is_csv(self) -> None:
+        result = csv_branch(
+            "csv",
+            filename="t.csv",
+            headers=["a"],
+            rows=[["v"]],
+        )
+        assert result is not None
+        assert result.media_type == "text/csv; charset=utf-8"
+        assert 'filename="t.csv"' in result.headers["content-disposition"]
+
+    def test_csv_branch_delegates_body_through_csv_response(self) -> None:
+        """``csv_branch("csv", ...)`` produces the same body as ``csv_response`` direct."""
+        via_branch = csv_branch(
+            "csv",
+            filename="t.csv",
+            headers=["x", "y"],
+            rows=[[1, 2]],
+        )
+        direct = csv_response(
+            filename="t.csv",
+            headers=["x", "y"],
+            rows=[[1, 2]],
+        )
+        assert via_branch is not None
+        assert via_branch.body == direct.body
