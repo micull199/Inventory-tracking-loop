@@ -28,7 +28,7 @@ If the same test or the same problem fails three iterations in a row without mea
 ## Current state
 
 **Iteration:** 2 (complete)
-**Last commit:** _will be set after this commit; see Completed log_
+**Last commit:** b46ee57 — slice: F2 — Google SSO + users + roles
 **Branch:** main
 **Tests:** `make check` green: ruff ✓, mypy ✓, pytest 27 unit+integration ✓, Playwright 3 e2e ✓.
 **Definition-of-Done items ticked:** 0 / 12 (DoD #1 and #9 advanced — sign-in + pending state + server-side role enforcement all work; not ticked because the admin "assign role" UI doesn't exist yet, so the full DoD #1 happy path is not end-to-end demoable yet).
@@ -160,7 +160,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
-| 2 | F2 — Google SSO login + pending-state user model + role enum | _pending — see commit_ | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
+| 2 | F2 — Google SSO login + pending-state user model + role enum | `b46ee57` | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
 | 1 | F1 — Project skeleton and verification harness | `884cd46` | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
 
 ---
