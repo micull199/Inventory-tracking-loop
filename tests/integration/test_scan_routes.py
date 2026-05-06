@@ -118,6 +118,19 @@ def _audit_count(db: Session) -> int:
     return len(list(db.execute(select(AuditLog)).scalars().all()))
 
 
+def _scan_camera_script_block(body: str) -> str:
+    """Return the body of the inline ``data-testid="scan-camera-script"``
+    block (the SC2b glue IIFE). Tests assert against substring markers
+    inside this block — TestClient isn't a browser so we can't execute
+    the JS, but we can pin the source contents.
+    """
+    marker = body.find('data-testid="scan-camera-script"')
+    assert marker >= 0, "scan-camera-script block not found in response"
+    end = body.find("</script>", marker)
+    assert end > marker, "closing </script> not found after scan-camera-script"
+    return body[marker:end]
+
+
 # ---------------------------------------------------------------------------
 # GET /scan: role enforcement
 # ---------------------------------------------------------------------------
@@ -1290,19 +1303,214 @@ class TestScanCameraSurface:
         assert "getUserMedia" in block
         assert "addEventListener" in block
 
-    def test_no_external_scanning_lib_loaded_yet(
+    def test_html5_qrcode_lib_loaded_with_sri(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """SC2a deliberately doesn't load an external scanning library;
-        SC2b will pick one (provisional: html5-qrcode) and add the
-        ``<script src="...">`` with an SRI hash. This test pins the
-        boundary so an accidental SC2b-flavoured edit in SC2a is caught.
+        """SC2b loads ``html5-qrcode`` from jsDelivr with an SRI integrity
+        hash + ``crossorigin="anonymous"`` so a CDN compromise can't ship a
+        malicious payload. SRI hash was computed locally against the live
+        jsDelivr file (``2.3.8``, 375364 bytes) using
+        ``openssl dgst -sha384 -binary | openssl base64 -A``.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-lib"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<script", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        tag = resp.text[tag_start : tag_end + 1]
+        assert "src=" in tag
+        assert "html5-qrcode" in tag
+        assert (
+            'integrity="sha384-c9d8RFSL+u3exBOJ4Yp3HUJXS4znl9f+'
+            'z66d1y54ig+ea249SpqR+w1wyvXz/lk+"'
+        ) in tag
+        assert 'crossorigin="anonymous"' in tag
+
+    def test_html5_qrcode_lib_pinned_to_2_3_8(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The CDN URL pins ``@2.3.8`` so a future floating-version edit
+        (e.g. ``@latest`` or no version) is caught — SRI only protects
+        against payload tampering, not against accidentally bumping the
+        URL without re-pinning the hash.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-lib"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<script", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        tag = resp.text[tag_start : tag_end + 1]
+        assert "html5-qrcode@2.3.8" in tag
+
+    def test_no_other_scanning_libs_loaded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC2b picked html5-qrcode; this test pins that we did *not*
+        also accidentally pull in jsQR / zxing / qrcode-scanner via a
+        copy-paste from a how-to.
         """
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
         body = resp.text.lower()
-        assert "html5-qrcode" not in body
         assert "qrcode-scanner" not in body
         assert "jsqr" not in body
         assert "zxing" not in body
+
+    def test_lib_script_loads_before_glue_script(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The library script tag must appear earlier in the response than
+        the inline glue script so ``Html5Qrcode`` is defined globally by
+        the time the IIFE runs (synchronous-load contract).
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        lib_pos = resp.text.find('data-testid="scan-camera-lib"')
+        glue_pos = resp.text.find('data-testid="scan-camera-script"')
+        assert lib_pos >= 0
+        assert glue_pos >= 0
+        assert lib_pos < glue_pos
+
+    def test_viewfinder_div_has_id_for_html5_qrcode(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """``Html5Qrcode``'s constructor takes a string element id and uses
+        ``document.getElementById`` internally — so the viewfinder div
+        needs an ``id``, not just a ``data-testid``.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-viewfinder"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<div", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        tag = resp.text[tag_start : tag_end + 1]
+        assert 'id="scan-camera-viewfinder"' in tag
+
+    def test_inline_glue_calls_html5qrcode_constructor(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "new Html5Qrcode(" in block
+
+    def test_inline_glue_uses_environment_facing_mode(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Back camera (``facingMode: "environment"``) is the workshop
+        hot-path: scan a label sitting on a workbench from a phone or
+        tablet. No camera-select UI in v1.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert 'facingMode: "environment"' in block
+
+    def test_inline_glue_writes_decoded_to_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """On a successful decode, the IIFE writes the decoded value into
+        the keyboard ``<input name="code">`` (so the existing
+        ``/scan/resolve`` route handles the lookup — no separate
+        camera-resolve endpoint).
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "input.value =" in block
+
+    def test_inline_glue_submits_form_on_decode(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """After writing the decoded value, the IIFE submits the scan
+        form so the resolve happens automatically (matches USB-scanner
+        behaviour where Enter is the scanner's terminator — DoD #3's
+        two-interaction goal).
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "form.submit(" in block
+
+    def test_inline_glue_handles_permission_denial(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The permission-denial branch writes a plain-English message
+        that points the user at the keyboard fallback. The full sentence
+        is split across a JS ``+`` concatenation in source for line
+        length, so the test asserts each half independently — both must
+        appear inside the same script block.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "Camera permission denied" in block
+        assert "Use the keyboard input above to type a code instead" in block
+
+    def test_inline_glue_handles_no_camera(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "No camera detected on this device" in block
+        assert "Use the keyboard input above to type a code instead" in block
+
+    def test_inline_glue_stops_scanner_on_close_and_after_scan(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Calling ``scanner.stop()`` is the teardown path for both
+        toggle-close *and* successful decode (don't leak the camera
+        resource during full-page navigation). One marker covers both
+        sites because both go through the same ``stopScanner`` helper.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "scanner.stop(" in block
+
+    def test_inline_glue_preserves_existing_feature_detect(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC2a's feature-detect (``navigator.mediaDevices.getUserMedia``)
+        still gates the "Use camera" button reveal — SC2b adds the start /
+        stop wiring on top, doesn't replace the gate.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        block = _scan_camera_script_block(resp.text)
+        assert "navigator.mediaDevices" in block
+        assert "getUserMedia" in block
+
+    def test_camera_lib_present_on_scan_item_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The library + glue must be loaded on ``/scan/item/{id}`` too —
+        a Workshop user finishes a movement on the resolved-item page and
+        the next scan should be camera-driven without a manual nav back
+        to ``/scan``.
+        """
+        item = _make_item(db_session, sku="CAM-2", qr_code="CAM-Q2")
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="scan-camera-lib"' in resp.text
+        block = _scan_camera_script_block(resp.text)
+        assert "new Html5Qrcode(" in block

@@ -24,12 +24,16 @@
         </p>
     </form>
 
-    {# SC2a: camera scaffolding. The toggle button + surface are server-rendered
-       hidden; an inline JS feature-detect (at the bottom of this template)
-       reveals the button only when ``navigator.mediaDevices.getUserMedia`` is
-       available. SC2b will load html5-qrcode and inject a viewfinder into
-       ``scan-camera-viewfinder``; SC2b also writes status messages
-       ("permission denied" / "scanning…") into ``scan-camera-status``. #}
+    {# SC2a + SC2b: camera scaffolding + html5-qrcode integration. The toggle
+       button + surface are server-rendered hidden; the inline glue script
+       (at the bottom of this template) feature-detects ``getUserMedia`` and
+       only reveals the button when the browser supports it. On click,
+       ``Html5Qrcode("scan-camera-viewfinder").start({facingMode:"environment"}…)``
+       streams the back camera into the viewfinder div; on a successful
+       decode, the value is written into the keyboard ``<input name="code">``
+       and the scan-form is submitted. The status ``<p>`` carries
+       ``aria-live="polite"`` so progress / error messages reach
+       screen-readers. #}
     <section data-testid="scan-camera">
         <button type="button"
                 class="button"
@@ -43,7 +47,8 @@
                  data-testid="scan-camera-surface"
                  hidden>
             <p data-testid="scan-camera-status" aria-live="polite"></p>
-            <div data-testid="scan-camera-viewfinder"></div>
+            <div id="scan-camera-viewfinder"
+                 data-testid="scan-camera-viewfinder"></div>
         </section>
     </section>
 
@@ -204,6 +209,10 @@
         </section>
     {% endif %}
 
+    <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"
+            integrity="sha384-c9d8RFSL+u3exBOJ4Yp3HUJXS4znl9f+z66d1y54ig+ea249SpqR+w1wyvXz/lk+"
+            crossorigin="anonymous"
+            data-testid="scan-camera-lib"></script>
     <script data-testid="scan-camera-script">
     (function () {
         var btn = document.querySelector(
@@ -212,7 +221,21 @@
         var surface = document.querySelector(
             '[data-testid="scan-camera-surface"]'
         );
-        if (!btn || !surface) { return; }
+        var status = document.querySelector(
+            '[data-testid="scan-camera-status"]'
+        );
+        var viewfinder = document.querySelector(
+            '[data-testid="scan-camera-viewfinder"]'
+        );
+        var input = document.querySelector(
+            '[data-testid="scan-code-input"]'
+        );
+        var form = document.querySelector(
+            '[data-testid="scan-form"]'
+        );
+        if (!btn || !surface || !status || !viewfinder || !input || !form) {
+            return;
+        }
         if (
             !navigator.mediaDevices ||
             !navigator.mediaDevices.getUserMedia
@@ -220,10 +243,83 @@
             return;
         }
         btn.hidden = false;
+
+        var scanner = null;
+        var running = false;
+
+        function setStatus(msg) { status.textContent = msg; }
+
+        function stopScanner(after) {
+            if (scanner && running) {
+                running = false;
+                scanner.stop().then(function () {
+                    if (after) { after(); }
+                }).catch(function () {
+                    if (after) { after(); }
+                });
+            } else if (after) { after(); }
+        }
+
+        function onScanSuccess(decodedText) {
+            stopScanner(function () {
+                input.value = decodedText;
+                form.submit();
+            });
+        }
+
+        function startScanner() {
+            if (typeof Html5Qrcode === "undefined") {
+                setStatus(
+                    "Camera library failed to load. " +
+                    "Use the keyboard input above to type a code instead."
+                );
+                return;
+            }
+            if (!scanner) {
+                scanner = new Html5Qrcode("scan-camera-viewfinder");
+            }
+            setStatus("Starting camera…");
+            scanner.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: 250 },
+                onScanSuccess,
+                null
+            ).then(function () {
+                running = true;
+                setStatus("Scanning…");
+            }).catch(function (err) {
+                running = false;
+                var msg = String((err && err.name) || err || "");
+                if (msg.indexOf("NotAllowed") !== -1 ||
+                    msg.indexOf("Permission") !== -1) {
+                    setStatus(
+                        "Camera permission denied. " +
+                        "Use the keyboard input above to type a code instead."
+                    );
+                } else if (msg.indexOf("NotFound") !== -1 ||
+                           msg.indexOf("Devices") !== -1) {
+                    setStatus(
+                        "No camera detected on this device. " +
+                        "Use the keyboard input above to type a code instead."
+                    );
+                } else {
+                    setStatus(
+                        "Could not start camera: " + msg + ". " +
+                        "Use the keyboard input above instead."
+                    );
+                }
+            });
+        }
+
         btn.addEventListener('click', function () {
             var willHide = !surface.hidden;
             surface.hidden = willHide;
             btn.setAttribute('aria-expanded', String(!willHide));
+            if (!willHide) {
+                startScanner();
+            } else {
+                stopScanner(function () { setStatus(""); });
+            }
         });
     })();
     </script>
