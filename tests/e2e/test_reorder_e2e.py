@@ -88,9 +88,12 @@ def test_manager_reorder_dashboard_walk(
     expect(mgr_page.get_by_test_id("welcome")).to_be_visible()
     expect(mgr_page.get_by_test_id("nav-reorder")).to_be_visible()
 
-    # Supplier.
+    # Supplier — set an email so PO4's send route accepts the draft.
     mgr_page.goto(f"{app_server}/admin/suppliers/new")
     mgr_page.get_by_test_id("supplier-name-input").fill("Reorder Bullion Co")
+    mgr_page.get_by_test_id("supplier-email-input").fill(
+        "reorder-supplier@uc.test"
+    )
     mgr_page.get_by_test_id("supplier-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers")
 
@@ -252,19 +255,21 @@ def test_manager_reorder_dashboard_walk(
     )
     expect(mgr_page.get_by_test_id("po-row-line-count")).to_have_text("1")
 
-    # Step 6c (PO2b): Click into the PO and cancel it.
+    # Step 6c (PO4): Click into the PO and send it to the supplier.
     mgr_page.get_by_test_id("po-row-detail-link").click()
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
-    expect(mgr_page.get_by_test_id("po-cancel-submit")).to_be_visible()
-    mgr_page.get_by_test_id("po-cancel-submit").click()
+    expect(mgr_page.get_by_test_id("po-send-submit")).to_be_visible()
+    mgr_page.get_by_test_id("po-send-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
-    # Status now reads "cancelled" + the edit form is gone + the read-only
-    # banner appears.
-    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("cancelled")
+    # Status now reads "sent" + the edit + cancel + send forms are gone +
+    # the read-only banner appears. The PDF link is still rendered (sent POs
+    # can re-download the PDF).
+    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("sent")
     expect(mgr_page.get_by_test_id("po-readonly-banner")).to_be_visible()
     expect(mgr_page.get_by_test_id("po-edit-form")).to_have_count(0)
-    # PO3: cancelled POs hide the PDF link (the route also 400s for them).
-    expect(mgr_page.get_by_test_id("po-pdf-link")).to_have_count(0)
+    expect(mgr_page.get_by_test_id("po-cancel-form")).to_have_count(0)
+    expect(mgr_page.get_by_test_id("po-send-form")).to_have_count(0)
+    expect(mgr_page.get_by_test_id("po-pdf-link")).to_be_visible()
 
     # Back to reorder dashboard via nav.
     mgr_page.get_by_test_id("nav-reorder").click()
@@ -294,9 +299,8 @@ def test_manager_reorder_dashboard_walk(
     expect(mgr_page.locator('[data-testid="reorder-row"]')).to_have_count(0)
 
     # Step 9: Cleanup — archive both items + the supplier + the category so
-    # downstream walks see clean active lists. (The draft PO created in step 6
-    # remains in the test DB; that's fine — each test session uses a fresh
-    # schema, and there's no cancel-PO route in PO2 yet.)
+    # downstream walks see clean active lists. (The sent PO from step 6c
+    # remains in the test DB; each test session uses a fresh schema.)
     mgr_page.goto(f"{app_server}/admin/items")
     for sku in ("RD-LOW", "RD-OK"):
         row = mgr_page.locator('[data-testid="item-row"]', has_text=sku)

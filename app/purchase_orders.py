@@ -63,7 +63,7 @@ flips only the PO row's status.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -74,7 +74,13 @@ from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
+from app.config import settings as app_settings
 from app.db import get_session
+from app.email_backend import (
+    EmailAttachment,
+    EmailMessage,
+    get_email_backend,
+)
 from app.models import (
     CostLayer,
     Item,
@@ -749,4 +755,179 @@ def purchase_order_pdf(
         headers={
             "Content-Disposition": f'inline; filename="po-{po.id}.pdf"',
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# PO4 — Email the PO PDF to the supplier (draft → sent)
+# ---------------------------------------------------------------------------
+
+
+def _po_pdf_view(
+    db: Session, po: PurchaseOrder, supplier: Supplier
+) -> bytes:
+    """Build the PDF view + render bytes. Same shape as the PO3 GET handler."""
+    line_stmt = (
+        select(PurchaseOrderLine, Item)
+        .join(Item, PurchaseOrderLine.item_id == Item.id)
+        .where(PurchaseOrderLine.po_id == po.id)
+        .order_by(Item.sku)
+    )
+    lines: list[dict[str, Any]] = []
+    for line, item in db.execute(line_stmt).all():
+        lines.append(
+            {
+                "sku": item.sku,
+                "name": item.name,
+                "unit": item.unit,
+                "qty_ordered": line.qty_ordered,
+                "expected_unit_cost": line.expected_unit_cost,
+            }
+        )
+    return render_po_pdf(
+        po={
+            "id": po.id,
+            "status": po.status.value,
+            "created_at": po.created_at,
+            "expected_date": po.expected_date,
+            "notes": po.notes,
+        },
+        supplier={
+            "name": supplier.name,
+            "archived": supplier.archived_at is not None,
+        },
+        lines=lines,
+    )
+
+
+def _build_send_message(
+    *,
+    po: PurchaseOrder,
+    supplier: Supplier,
+    line_count: int,
+    pdf_bytes: bytes,
+    sender: str,
+) -> EmailMessage:
+    """Build the EmailMessage view for the supplier's PDF email.
+
+    Body is intentionally short HTML — letterhead / branding is a future
+    polish pass (see PO3 self-critique).
+    """
+    expected_line: str
+    if po.expected_date is not None:
+        expected_line = (
+            f"<p>Expected delivery: {po.expected_date.isoformat()}.</p>"
+        )
+    else:
+        expected_line = ""
+    notes_block = (
+        f"<p>Notes: {po.notes}</p>" if po.notes else ""
+    )
+    html = (
+        "<html><body>"
+        f"<p>Hi {supplier.name},</p>"
+        f"<p>Please find attached purchase order #{po.id} from UC, "
+        f"covering {line_count} line(s).</p>"
+        f"{expected_line}"
+        f"{notes_block}"
+        "<p>Reply to this email to confirm receipt or raise any issues.</p>"
+        "<p>Thanks,<br>UC Inventory</p>"
+        "</body></html>"
+    )
+    return EmailMessage(
+        sender=sender,
+        recipient=supplier.email or "",
+        subject=f"Purchase Order #{po.id} from UC",
+        html_body=html,
+        attachments=[
+            EmailAttachment(
+                filename=f"po-{po.id}.pdf",
+                content_type="application/pdf",
+                content=pdf_bytes,
+            )
+        ],
+    )
+
+
+@list_router.post("/{po_id}/send")
+def send_purchase_order(
+    request: Request,
+    po_id: int,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Send a draft PO to its supplier as an email with the PDF attached.
+
+    Validation order (all 400 *before* delivery / DB write — atomic):
+
+    1. PO exists (404).
+    2. ``po.status == draft`` (400 via ``_require_draft`` — non-drafts cannot
+       be sent; resending is out of scope for v1).
+    3. Supplier still active (400 — defence in depth; the dashboard hides the
+       button for archived-supplier groups).
+    4. Supplier has a non-blank email (400 — show the user a clear message).
+
+    On success: render the PDF; deliver via the configured email backend
+    (``settings.email_backend``); flip ``po.status`` to ``sent``; set
+    ``po.sent_at = now()``; write a ``purchase_order.sent`` audit row;
+    commit; flash; 303 to the detail page. Delivery happens *before* the DB
+    flip — if the backend raises, no state change and no audit row.
+    """
+    po = db.get(PurchaseOrder, po_id)
+    if po is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
+        )
+    _require_draft(po)
+
+    supplier = db.get(Supplier, po.supplier_id)
+    if supplier is None or supplier.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="supplier is not active",
+        )
+    supplier_email = (supplier.email or "").strip()
+    if supplier_email == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "supplier has no email address — add one before sending"
+            ),
+        )
+
+    pdf_bytes = _po_pdf_view(db, po, supplier)
+
+    line_count = _count_lines(db, po.id)
+    message = _build_send_message(
+        po=po,
+        supplier=supplier,
+        line_count=line_count,
+        pdf_bytes=pdf_bytes,
+        sender=app_settings.smtp_from,
+    )
+    backend = get_email_backend(app_settings)
+    backend.send(message)
+
+    sent_at = datetime.now(UTC)
+    po.status = POStatus.SENT
+    po.sent_at = sent_at
+    record_audit(
+        db,
+        actor=user,
+        action="purchase_order.sent",
+        entity_type="purchase_order",
+        entity_id=po.id,
+        before={"status": POStatus.DRAFT.value},
+        after={
+            "status": POStatus.SENT.value,
+            "sent_at": sent_at.isoformat(),
+            "to_email": supplier_email,
+        },
+    )
+    db.commit()
+
+    _flash(request, f"PO #{po.id} sent to {supplier_email}.")
+    return RedirectResponse(
+        url=f"/admin/purchase-orders/{po.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )

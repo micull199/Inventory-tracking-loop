@@ -29,11 +29,13 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.cost_engine import record_receipt
+from app.email_backend import clear_console_outbox, console_outbox
 from app.models import (
     AuditLog,
     CostLayerSource,
@@ -100,10 +102,15 @@ def _make_leaf(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
 
 
 def _make_supplier(
-    db: Session, name: str = "ACME", *, archived: bool = False
+    db: Session,
+    name: str = "ACME",
+    *,
+    archived: bool = False,
+    email: str | None = None,
 ) -> Supplier:
     s = Supplier(
         name=name,
+        email=email,
         archived_at=datetime(2026, 1, 1, tzinfo=UTC) if archived else None,
     )
     db.add(s)
@@ -2311,3 +2318,455 @@ class TestPOPdfLink:
         po = self._setup_po(db_session, client, POStatus.CANCELLED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert 'data-testid="po-pdf-link"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# PO4 — Send PO PDF to supplier (draft → sent)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_email_outbox() -> None:
+    """Drain the in-memory console outbox before every test in this module."""
+    clear_console_outbox()
+
+
+def _send_po(
+    client: TestClient, po_id: int
+) -> Any:
+    return client.post(
+        f"/admin/purchase-orders/{po_id}/send",
+        data={"csrf_token": _csrf(client)},
+        follow_redirects=False,
+    )
+
+
+class TestPOSendRoleEnforcement:
+    def _make_po(self, db: Session) -> PurchaseOrder:
+        actor = _make_user(db, email="creator@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME", email="acme@example.test")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=actor,
+            skus=["SEND-1"],
+            po_status=POStatus.DRAFT,
+        )
+        return po
+
+    def test_anonymous_post_send_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 401
+        assert console_outbox() == []
+
+    def test_pending_post_send_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 403
+        assert console_outbox() == []
+
+    def test_workshop_post_send_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 403
+        assert console_outbox() == []
+
+    def test_manager_post_send_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 303
+
+    def test_office_post_send_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 303
+
+    def test_admin_post_send_is_303(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make_po(db_session)
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 303
+
+
+class TestPOSendStatusGuard:
+    def _make(
+        self, db: Session, client: TestClient, *, po_status: POStatus
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="ACME", email="acme@example.test")
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-2"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_unknown_po_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = _send_po(client, 9999)
+        assert resp.status_code == 404
+        assert console_outbox() == []
+
+    def test_sent_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.SENT)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+    def test_partially_received_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(
+            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
+        )
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+    def test_received_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.RECEIVED)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+    def test_cancelled_po_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._make(db_session, client, po_status=POStatus.CANCELLED)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+
+class TestPOSendValidation:
+    def test_supplier_with_no_email_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="No Email Co", email=None)
+        leaf = _make_leaf(db_session)
+        po, _lines = _make_draft_po(
+            db_session,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-NOE-1"],
+        )
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        # No status flip + no audit + no outbox.
+        db_session.expire_all()
+        po_reloaded = db_session.get(PurchaseOrder, po.id)
+        assert po_reloaded is not None
+        assert po_reloaded.status == POStatus.DRAFT
+        assert po_reloaded.sent_at is None
+        assert _po_audit_rows(db_session, action="purchase_order.sent") == []
+        assert console_outbox() == []
+
+    def test_supplier_with_blank_email_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="Blank Email Co", email="   ")
+        leaf = _make_leaf(db_session)
+        po, _lines = _make_draft_po(
+            db_session,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-NOE-2"],
+        )
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+    def test_archived_supplier_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Supplier starts active so the draft can be created; we archive it
+        # *after*, simulating a stale POST.
+        sup = _make_supplier(
+            db_session, name="Will Archive", email="archive@example.test"
+        )
+        leaf = _make_leaf(db_session)
+        po, _lines = _make_draft_po(
+            db_session,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-ARC-1"],
+        )
+        sup.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, u)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 400
+        assert console_outbox() == []
+
+
+class TestPOSendHappyPath:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        supplier_email: str = "supplier@example.test",
+        supplier_name: str = "Send Bullion Co",
+        notes: str | None = None,
+        expected_date: date | None = None,
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(
+            db, name=supplier_name, email=supplier_email
+        )
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-OK-1"],
+            qty_ordered=Decimal("12"),
+            expected_unit_cost=Decimal("2.50"),
+        )
+        if notes is not None or expected_date is not None:
+            po.notes = notes
+            po.expected_date = expected_date
+            db.commit()
+            db.refresh(po)
+        _login_as(client, u)
+        return po
+
+    def test_status_flips_to_sent(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 303
+        db_session.expire_all()
+        reloaded = db_session.get(PurchaseOrder, po.id)
+        assert reloaded is not None
+        assert reloaded.status == POStatus.SENT
+
+    def test_sent_at_is_set_to_now(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        before = datetime.now(UTC)
+        resp = _send_po(client, po.id)
+        after = datetime.now(UTC)
+        assert resp.status_code == 303
+        db_session.expire_all()
+        reloaded = db_session.get(PurchaseOrder, po.id)
+        assert reloaded is not None
+        assert reloaded.sent_at is not None
+        # SQLite returns sent_at as naive; the route writes a UTC datetime,
+        # so attach UTC tzinfo for an apples-to-apples comparison.
+        sent_at = reloaded.sent_at
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=UTC)
+        assert (
+            before - timedelta(seconds=2)
+            <= sent_at
+            <= after + timedelta(seconds=2)
+        )
+
+    def test_audit_row_shape(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        _send_po(client, po.id)
+        rows = _po_audit_rows(db_session, action="purchase_order.sent")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.entity_type == "purchase_order"
+        assert row.entity_id == po.id
+        assert row.before_json == {"status": "draft"}
+        after = row.after_json
+        assert after is not None
+        assert after["status"] == "sent"
+        assert after["to_email"] == "supplier@example.test"
+        assert isinstance(after["sent_at"], str)
+        # ISO with timezone — round-trip parses cleanly.
+        parsed = datetime.fromisoformat(after["sent_at"])
+        assert parsed.tzinfo is not None
+
+    def test_redirect_target_is_detail_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = _send_po(client, po.id)
+        assert resp.status_code == 303
+        assert (
+            resp.headers["location"]
+            == f"/admin/purchase-orders/{po.id}"
+        )
+
+    def test_flash_includes_supplier_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        _send_po(client, po.id)
+        # Follow the redirect to see the flashed message rendered.
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert "supplier@example.test" in resp.text
+
+    def test_outbox_message_targets_supplier_with_pdf(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        _send_po(client, po.id)
+        outbox = console_outbox()
+        assert len(outbox) == 1
+        msg = outbox[0]
+        assert msg.recipient == "supplier@example.test"
+        assert f"#{po.id}" in msg.subject
+        assert "Send Bullion Co" in msg.html_body
+        assert "1 line(s)" in msg.html_body
+        # One PDF attachment with the right filename + magic bytes.
+        assert len(msg.attachments) == 1
+        att = msg.attachments[0]
+        assert att.filename == f"po-{po.id}.pdf"
+        assert att.content_type == "application/pdf"
+        assert att.content[:4] == b"%PDF"
+
+    def test_double_send_second_call_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The second call rejects via the status guard (PO is now sent)."""
+        po = self._setup(db_session, client)
+        resp1 = _send_po(client, po.id)
+        assert resp1.status_code == 303
+        # Second call: PO is now sent → 400.
+        resp2 = _send_po(client, po.id)
+        assert resp2.status_code == 400
+        # Outbox still only carries the first delivery.
+        assert len(console_outbox()) == 1
+        # Audit log still only carries one sent row.
+        assert (
+            len(_po_audit_rows(db_session, action="purchase_order.sent"))
+            == 1
+        )
+
+    def test_failed_validation_writes_no_audit_or_outbox(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db_session, name="No Email Co", email=None)
+        leaf = _make_leaf(db_session)
+        po, _lines = _make_draft_po(
+            db_session,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["SEND-NOAUDIT-1"],
+        )
+        _login_as(client, u)
+        _send_po(client, po.id)
+        assert _po_audit_rows(db_session, action="purchase_order.sent") == []
+        assert console_outbox() == []
+
+
+class TestPOSendDetailRender:
+    def _setup(
+        self,
+        db: Session,
+        client: TestClient,
+        *,
+        po_status: POStatus = POStatus.DRAFT,
+        email: str | None = "render@example.test",
+    ) -> PurchaseOrder:
+        u = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = _make_supplier(db, name="Render Co", email=email)
+        leaf = _make_leaf(db)
+        po, _lines = _make_draft_po(
+            db,
+            supplier=sup,
+            leaf=leaf,
+            actor=u,
+            skus=["RENDER-1"],
+            po_status=po_status,
+        )
+        _login_as(client, u)
+        return po
+
+    def test_draft_with_email_shows_send_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-send-form"' in resp.text
+        assert 'data-testid="po-send-submit"' in resp.text
+        assert 'data-testid="po-send-blocked-no-email"' not in resp.text
+
+    def test_draft_without_email_shows_blocked_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, email=None)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-send-form"' not in resp.text
+        assert 'data-testid="po-send-submit"' not in resp.text
+        assert 'data-testid="po-send-blocked-no-email"' in resp.text
+
+    def test_sent_does_not_show_send_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.SENT)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="po-send-form"' not in resp.text
+        assert 'data-testid="po-readonly-banner"' in resp.text
+
+    def test_cancelled_does_not_show_send_form(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        po = self._setup(db_session, client, po_status=POStatus.CANCELLED)
+        resp = client.get(f"/admin/purchase-orders/{po.id}")
+        assert 'data-testid="po-send-form"' not in resp.text

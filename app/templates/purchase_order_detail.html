@@ -87,6 +87,20 @@
             </p>
         </form>
 
+        {% if supplier and supplier.email %}
+            <form method="post" action="/admin/purchase-orders/{{ po.id }}/send"
+                  data-testid="po-send-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" data-testid="po-send-submit">
+                    Send to supplier
+                </button>
+            </form>
+        {% else %}
+            <p data-testid="po-send-blocked-no-email">
+                <em>This supplier has no email address — add one on the supplier record before sending.</em>
+            </p>
+        {% endif %}
+
         <form method="post" action="/admin/purchase-orders/{{ po.id }}/cancel"
               data-testid="po-cancel-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
