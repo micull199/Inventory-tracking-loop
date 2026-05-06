@@ -273,13 +273,15 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-items"' in resp.text
 
-    def test_workshop_nav_excludes_items_link(
+    def test_workshop_nav_includes_items_link(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """I1c: Workshop now has read-only access to the items list."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/")
-        assert 'data-testid="nav-items"' not in resp.text
+        assert 'data-testid="nav-items"' in resp.text
+        assert 'href="/admin/items"' in resp.text
 
     def test_office_nav_includes_items_link(
         self, client: TestClient, db_session: Session

@@ -562,6 +562,17 @@ def _can_edit_thresholds(user: User) -> bool:
     return user.role in (Role.MANAGER, Role.ADMIN)
 
 
+def _can_save_item(user: User) -> bool:
+    """I1c: Manager + Office + Admin can save edits to items; Workshop cannot.
+
+    Drives the ``can_save`` template flag (form inputs ``disabled`` + submit
+    button hidden when False). The POST routes still server-enforce the
+    contract via ``require_role(MANAGER, OFFICE)`` — this predicate only
+    shapes the form UI for the read-only Workshop view.
+    """
+    return user.role in (Role.MANAGER, Role.OFFICE, Role.ADMIN)
+
+
 # ---------------------------------------------------------------------------
 # Custom field helpers (I2)
 # ---------------------------------------------------------------------------
@@ -919,7 +930,9 @@ def list_items(
     request: Request,
     show: str = "active",
     node_id: int | None = None,
-    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    _user: User = Depends(
+        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
+    ),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     if show not in {"active", "archived"}:
@@ -952,6 +965,7 @@ def list_items(
             "node_id": node_id,
             "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
+            "can_edit_item": _can_save_item(_user),
         },
     )
 
@@ -992,6 +1006,7 @@ def new_item_form(
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": True,
+            "can_save": True,
             "field_defs": field_defs,
         },
     )
@@ -1094,7 +1109,9 @@ async def create_item(
 def edit_item_form(
     request: Request,
     item_id: int,
-    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    _user: User = Depends(
+        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
+    ),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = db.get(Item, item_id)
@@ -1106,6 +1123,7 @@ def edit_item_form(
     existing_rows = _load_custom_field_value_rows(db, item.id)
     form = _form_for_item(item)
     form["custom"] = _form_for_custom_fields(field_defs, existing_rows)
+    can_save = _can_save_item(_user)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -1113,7 +1131,9 @@ def edit_item_form(
             "current_user": _user,
             "item": item,
             "form": form,
-            "title": f"Edit {item.name}",
+            "title": (
+                f"Edit {item.name}" if can_save else f"View {item.name}"
+            ),
             "action": f"/admin/items/{item.id}",
             "leaf_options": _leaf_options(db, current_id=item.taxonomy_node_id),
             "supplier_options": _supplier_options(
@@ -1124,6 +1144,7 @@ def edit_item_form(
             ),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": _can_edit_thresholds(_user),
+            "can_save": can_save,
             "field_defs": field_defs,
         },
     )

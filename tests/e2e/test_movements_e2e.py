@@ -1,16 +1,18 @@
 """End-to-end walk for manual stock-in (M2), stock-out (M3), and adjust (M4).
 
 Workshop's first positive-write surface: M2 + M3 + M4 are the only places a
-Workshop user can mutate the system today (Workshop still 403s on items list /
-edit per I3a's role table). The walk:
+Workshop user can mutate the system today. After I1c, Workshop also has
+*read-only* access to the items list and per-item view. The walk:
 
 1. A pending workshop user signs up via dev-login.
 2. Admin (bootstrap or pre-promoted) promotes them to Workshop + active.
 3. A manager (separately) creates a category and an item via the UI so we
    exercise the items routes' end-to-end shape, not just inserted rows.
-4. The workshop user signs in and deep-links to ``/admin/items/{id}/in`` —
-   no UI link from the items list because Workshop can't see it yet (deferred
-   to I1c).
+4. The workshop user signs in. I1c: Workshop's nav now shows the items
+   link; Workshop browses the list (no New CTA, "View" link instead of
+   "Edit"), opens the read-only form (disabled inputs, no submit button),
+   and confirms the in/out/adjust action links are still reachable. Then
+   deep-links to ``/admin/items/{id}/in``.
 5. Workshop submits a receipt; the form re-renders with the flash, the bumped
    ``current_qty``, and the new movement in the recent-movements table.
 6. Workshop deep-links to ``/admin/items/{id}/out`` and consumes part of the
@@ -182,9 +184,10 @@ def test_workshop_records_a_manual_stock_in(
         # Keep the manager context alive for cleanup at the end of the test.
         pass
 
-    # Step 6: Workshop user signs in and deep-links to the stock-in form. The
-    # items list is still 403 for Workshop (deferred to I1c), so we don't try
-    # to navigate there.
+    # Step 6: Workshop user signs in. After I1c, Workshop has the items
+    # link in the primary nav, can see the items list (read-only), and can
+    # click into a per-item read-only view. We exercise that path here before
+    # the deep-links to the stock-in/out/adjust forms.
     ws_context = context.browser.new_context() if context.browser else context
     ws_page = ws_context.new_page()
     _dev_login(
@@ -195,6 +198,29 @@ def test_workshop_records_a_manual_stock_in(
         name="Movements Workshop",
     )
     expect(ws_page.get_by_test_id("welcome")).to_be_visible()
+    expect(ws_page.get_by_test_id("nav-items")).to_be_visible()
+
+    # I1c: Workshop navigates to the items list via the nav link, sees the
+    # row created by the manager, and clicks "View" (not "Edit"). The form
+    # renders with disabled inputs and no submit button — but the in/out/
+    # adjust action links remain visible.
+    ws_page.get_by_test_id("nav-items").click()
+    ws_page.wait_for_url(f"{app_server}/admin/items")
+    expect(ws_page.get_by_test_id("new-item")).not_to_be_visible()
+    item_row_ws = ws_page.locator(
+        '[data-testid="item-row"]', has_text="MV-E2E-001"
+    )
+    expect(item_row_ws).to_be_visible()
+    expect(item_row_ws.get_by_test_id("view-item")).to_be_visible()
+    expect(item_row_ws.get_by_test_id("archive-item")).not_to_be_visible()
+    item_row_ws.get_by_test_id("view-item").click()
+    ws_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    expect(ws_page.get_by_test_id("item-form-readonly-note")).to_be_visible()
+    expect(ws_page.get_by_test_id("item-submit")).not_to_be_visible()
+    expect(ws_page.get_by_test_id("stock-in-link")).to_be_visible()
 
     ws_page.goto(f"{app_server}/admin/items/{item_id}/in")
     expect(ws_page.get_by_test_id("movements-empty")).to_be_visible()

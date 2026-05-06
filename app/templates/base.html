@@ -115,7 +115,7 @@
                         </a>
                     </li>
                 {% endif %}
-                {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
+                {% if current_user.role and current_user.role.value in ("admin", "manager", "office", "workshop") %}
                     <li>
                         <a href="/admin/items"
                            data-testid="nav-items"

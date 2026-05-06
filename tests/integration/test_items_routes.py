@@ -154,13 +154,127 @@ class TestRoleEnforcement:
         resp = client.get("/admin/items")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_403(
+    def test_workshop_get_list_is_200(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """I1c: Workshop can list items (read-only). Direct precursor to SC1."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/admin/items")
+        assert resp.status_code == 200
+
+    def test_workshop_get_edit_form_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """I1c: Workshop can GET the edit form (renders read-only)."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="W-1",
+            name="W item",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+
+    def test_workshop_get_new_form_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """I1c: Workshop cannot reach the create form."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/admin/items/new")
         assert resp.status_code == 403
+
+    def test_workshop_update_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """I1c: Workshop cannot POST updates — and no audit row written."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="W-2",
+            name="W item",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, worker)
+        resp = client.post(
+            f"/admin/items/{item.id}",
+            data=_create_payload(
+                sku="W-2-CHANGED",
+                name="W item changed",
+                taxonomy_node_id=leaf.id,
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        db_session.refresh(item)
+        assert item.sku == "W-2"
+        assert item.name == "W item"
+        assert _audit_rows(db_session, action="item.updated") == []
+
+    def test_workshop_archive_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="W-3",
+            name="W",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, worker)
+        resp = client.post(
+            f"/admin/items/{item.id}/archive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        db_session.refresh(item)
+        assert item.archived_at is None
+
+    def test_workshop_unarchive_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="W-4",
+            name="W",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, worker)
+        resp = client.post(
+            f"/admin/items/{item.id}/unarchive",
+            data={"csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 403
+        db_session.refresh(item)
+        assert item.archived_at is not None
 
     def test_office_get_list_is_200(
         self, client: TestClient, db_session: Session
@@ -2709,4 +2823,205 @@ class TestItemCustomFieldsEdit:
         assert resp.status_code == 303
         ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
         assert ifv.value_text == "gold"
+
+
+# ---------------------------------------------------------------------------
+# Workshop read-only view (I1c)
+# ---------------------------------------------------------------------------
+#
+# Workshop has GET access to ``/admin/items`` and ``/admin/items/{id}/edit``
+# but every POST returns 403. The list shows a "View" link instead of "Edit"
+# and hides the New CTA + per-row archive forms; the form template renders
+# every input as ``disabled`` and hides the submit button. The POST 403s are
+# covered above in ``TestRoleEnforcement``; this class focuses on the rendered
+# read-only view.
+
+
+class TestWorkshopReadOnlyView:
+    def _seed(
+        self, db: Session, *, with_custom_field: bool = False
+    ) -> tuple[User, Item]:
+        worker = _make_user(db, email="w@x.test", role=Role.WORKSHOP)
+        leaf = _make_leaf(db)
+        item = Item(
+            sku="WV-1",
+            name="Workshop view item",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        if with_custom_field:
+            fd = TaxonomyFieldDef(
+                node_id=leaf.id,
+                name="Alloy",
+                key="alloy",
+                type=FieldType.TEXT,
+                required=False,
+            )
+            db.add(fd)
+            db.commit()
+            db.refresh(fd)
+            db.add(
+                ItemFieldValue(
+                    item_id=item.id, field_def_id=fd.id, value_text="silver"
+                )
+            )
+            db.commit()
+        return worker, item
+
+    def test_list_shows_view_link_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, _ = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        assert 'data-testid="view-item"' in resp.text
+        assert 'data-testid="edit-item"' not in resp.text
+
+    def test_list_hides_new_cta_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, _ = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get("/admin/items")
+        assert 'data-testid="new-item"' not in resp.text
+
+    def test_list_hides_archive_buttons_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, _ = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get("/admin/items")
+        assert 'data-testid="archive-item"' not in resp.text
+        assert 'data-testid="unarchive-item"' not in resp.text
+
+    def test_list_shows_edit_link_for_office(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Confirms the link-label split: Office still sees 'Edit'."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="OF-1",
+            name="Office item",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        _login_as(client, office)
+        resp = client.get("/admin/items")
+        assert 'data-testid="edit-item"' in resp.text
+        assert 'data-testid="view-item"' not in resp.text
+
+    def test_form_inputs_are_disabled_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, item = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        body = resp.text
+        # Every named input/select/textarea should carry the ``disabled``
+        # attribute somewhere in its tag. We sample the most important ones.
+        for tid in (
+            "item-sku-input",
+            "item-name-input",
+            "item-category-input",
+            "item-unit-input",
+            "item-tracking-mode-input",
+            "item-requires-checkout-input",
+            "item-supplier-input",
+            "item-location-input",
+            "item-qr-input",
+            "item-notes-input",
+        ):
+            tag_start = body.find(f'data-testid="{tid}"')
+            assert tag_start != -1, f"missing input {tid!r}"
+            # Find the enclosing tag (back to '<' before the testid attr).
+            open_lt = body.rfind("<", 0, tag_start)
+            close_gt = body.find(">", tag_start)
+            assert open_lt != -1
+            assert close_gt != -1
+            tag = body[open_lt:close_gt]
+            assert "disabled" in tag, (
+                f"input {tid!r} is not disabled in workshop view: {tag!r}"
+            )
+
+    def test_form_hides_submit_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, item = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="item-submit"' not in resp.text
+
+    def test_form_renders_readonly_note_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, item = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="item-form-readonly-note"' in resp.text
+
+    def test_form_title_is_view_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, item = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert "View Workshop view item" in resp.text
+
+    def test_form_shows_action_links_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop has access to /in, /out, /adjust, /detail — links remain."""
+        worker, item = self._seed(db_session)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="stock-in-link"' in resp.text
+        assert 'data-testid="stock-out-link"' in resp.text
+        assert 'data-testid="stock-adjust-link"' in resp.text
+        assert 'data-testid="detail-link"' in resp.text
+
+    def test_form_disables_custom_field_inputs_for_workshop(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker, item = self._seed(db_session, with_custom_field=True)
+        _login_as(client, worker)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        body = resp.text
+        tag_start = body.find('data-testid="item-cf-alloy-input"')
+        assert tag_start != -1
+        open_lt = body.rfind("<", 0, tag_start)
+        close_gt = body.find(">", tag_start)
+        tag = body[open_lt:close_gt]
+        assert "disabled" in tag
+
+    def test_form_for_manager_keeps_submit_and_does_not_render_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Sanity-check: the read-only treatment is Workshop-only."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = Item(
+            sku="MX-1",
+            name="Mgr item",
+            taxonomy_node_id=leaf.id,
+            unit="g",
+            tracking_mode=TrackingMode.QTY,
+        )
+        db_session.add(item)
+        db_session.commit()
+        db_session.refresh(item)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert 'data-testid="item-submit"' in resp.text
+        assert 'data-testid="item-form-readonly-note"' not in resp.text
 

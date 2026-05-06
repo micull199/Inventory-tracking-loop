@@ -4,6 +4,12 @@
     <p><a href="/admin/items">&larr; Back to items</a></p>
     <h1>{{ title }}</h1>
 
+    {% set ro = (can_save is defined) and (not can_save) %}
+    {% if ro %}
+        <p data-testid="item-form-readonly-note">
+            <em>View only — your role cannot edit items.</em>
+        </p>
+    {% endif %}
     <form method="post" action="{{ action }}" data-testid="item-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
@@ -12,7 +18,8 @@
             <input type="text" id="sku" name="sku" required
                    value="{{ form.sku }}"
                    data-testid="item-sku-input"
-                   maxlength="64">
+                   maxlength="64"
+                   {% if ro %}disabled{% endif %}>
         </p>
 
         <p>
@@ -20,13 +27,15 @@
             <input type="text" id="name" name="name" required
                    value="{{ form.name }}"
                    data-testid="item-name-input"
-                   maxlength="255">
+                   maxlength="255"
+                   {% if ro %}disabled{% endif %}>
         </p>
 
         <p>
             <label for="taxonomy_node_id">Category <span aria-hidden="true">*</span></label><br>
             <select id="taxonomy_node_id" name="taxonomy_node_id" required
-                    data-testid="item-category-input">
+                    data-testid="item-category-input"
+                    {% if ro %}disabled{% endif %}>
                 <option value="">— pick a category —</option>
                 {% for opt in leaf_options %}
                     {% if opt.is_group %}
@@ -47,13 +56,15 @@
                    value="{{ form.unit }}"
                    data-testid="item-unit-input"
                    maxlength="32"
-                   placeholder="e.g. g, ml, ea">
+                   placeholder="e.g. g, ml, ea"
+                   {% if ro %}disabled{% endif %}>
         </p>
 
         <p>
             <label for="tracking_mode">Tracking mode</label><br>
             <select id="tracking_mode" name="tracking_mode"
-                    data-testid="item-tracking-mode-input">
+                    data-testid="item-tracking-mode-input"
+                    {% if ro %}disabled{% endif %}>
                 {% for m in tracking_modes %}
                     <option value="{{ m }}"
                             {% if form.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
@@ -65,7 +76,8 @@
             <label>
                 <input type="checkbox" name="requires_checkout" value="true"
                        data-testid="item-requires-checkout-input"
-                       {% if form.requires_checkout %}checked{% endif %}>
+                       {% if form.requires_checkout %}checked{% endif %}
+                       {% if ro %}disabled{% endif %}>
                 Requires check-out (tools, moulds)
             </label>
         </p>
@@ -75,14 +87,16 @@
                 <label for="reorder_threshold">Reorder threshold</label><br>
                 <input type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
                        value="{{ form.reorder_threshold }}"
-                       data-testid="item-reorder-threshold-input">
+                       data-testid="item-reorder-threshold-input"
+                       {% if ro %}disabled{% endif %}>
             </p>
 
             <p>
                 <label for="reorder_qty">Reorder quantity</label><br>
                 <input type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
                        value="{{ form.reorder_qty }}"
-                       data-testid="item-reorder-qty-input">
+                       data-testid="item-reorder-qty-input"
+                       {% if ro %}disabled{% endif %}>
             </p>
         {% else %}
             <p>
@@ -99,7 +113,8 @@
 
         <p>
             <label for="supplier_id">Supplier</label><br>
-            <select id="supplier_id" name="supplier_id" data-testid="item-supplier-input">
+            <select id="supplier_id" name="supplier_id" data-testid="item-supplier-input"
+                    {% if ro %}disabled{% endif %}>
                 <option value="">— none —</option>
                 {% for s in supplier_options %}
                     <option value="{{ s.id }}"
@@ -112,7 +127,8 @@
 
         <p>
             <label for="location_id">Location</label><br>
-            <select id="location_id" name="location_id" data-testid="item-location-input">
+            <select id="location_id" name="location_id" data-testid="item-location-input"
+                    {% if ro %}disabled{% endif %}>
                 <option value="">— none —</option>
                 {% for l in location_options %}
                     <option value="{{ l.id }}"
@@ -128,7 +144,8 @@
             <input type="text" id="qr_code" name="qr_code"
                    value="{{ form.qr_code }}"
                    data-testid="item-qr-input"
-                   maxlength="128">
+                   maxlength="128"
+                   {% if ro %}disabled{% endif %}>
         </p>
 
         <p>
@@ -136,7 +153,8 @@
             <textarea id="notes" name="notes"
                       data-testid="item-notes-input"
                       maxlength="2000"
-                      rows="4" cols="50">{{ form.notes }}</textarea>
+                      rows="4" cols="50"
+                      {% if ro %}disabled{% endif %}>{{ form.notes }}</textarea>
         </p>
 
         {% if field_defs %}
@@ -153,14 +171,16 @@
                                 <input type="checkbox" id="{{ fid }}" name="{{ fname }}"
                                        value="true"
                                        data-testid="{{ tid_base }}-input"
-                                       {% if form.custom[fkey] %}checked{% endif %}>
+                                       {% if form.custom[fkey] %}checked{% endif %}
+                                       {% if ro %}disabled{% endif %}>
                                 {{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}
                             </label>
                         {% elif fd.type.value == "select" %}
                             <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
                             <select id="{{ fid }}" name="{{ fname }}"
                                     {% if fd.required %}required{% endif %}
-                                    data-testid="{{ tid_base }}-input">
+                                    data-testid="{{ tid_base }}-input"
+                                    {% if ro %}disabled{% endif %}>
                                 <option value="">— pick one —</option>
                                 {% for opt in fd.options_json or [] %}
                                     <option value="{{ opt }}"
@@ -171,7 +191,8 @@
                             <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
                             <select id="{{ fid }}" name="{{ fname }}" multiple
                                     {% if fd.required %}required{% endif %}
-                                    data-testid="{{ tid_base }}-input">
+                                    data-testid="{{ tid_base }}-input"
+                                    {% if ro %}disabled{% endif %}>
                                 {% for opt in fd.options_json or [] %}
                                     <option value="{{ opt }}"
                                             {% if opt in form.custom[fkey] %}selected{% endif %}>{{ opt }}</option>
@@ -182,26 +203,30 @@
                             <input type="number" step="1" id="{{ fid }}" name="{{ fname }}"
                                    value="{{ form.custom[fkey] }}"
                                    {% if fd.required %}required{% endif %}
-                                   data-testid="{{ tid_base }}-input">
+                                   data-testid="{{ tid_base }}-input"
+                                   {% if ro %}disabled{% endif %}>
                         {% elif fd.type.value == "decimal" %}
                             <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
                             <input type="text" inputmode="decimal" id="{{ fid }}" name="{{ fname }}"
                                    value="{{ form.custom[fkey] }}"
                                    {% if fd.required %}required{% endif %}
-                                   data-testid="{{ tid_base }}-input">
+                                   data-testid="{{ tid_base }}-input"
+                                   {% if ro %}disabled{% endif %}>
                         {% elif fd.type.value == "date" %}
                             <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
                             <input type="date" id="{{ fid }}" name="{{ fname }}"
                                    value="{{ form.custom[fkey] }}"
                                    {% if fd.required %}required{% endif %}
-                                   data-testid="{{ tid_base }}-input">
+                                   data-testid="{{ tid_base }}-input"
+                                   {% if ro %}disabled{% endif %}>
                         {% else %}
                             {# Default: text. #}
                             <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
                             <input type="text" id="{{ fid }}" name="{{ fname }}"
                                    value="{{ form.custom[fkey] }}"
                                    {% if fd.required %}required{% endif %}
-                                   data-testid="{{ tid_base }}-input">
+                                   data-testid="{{ tid_base }}-input"
+                                   {% if ro %}disabled{% endif %}>
                         {% endif %}
                     </p>
                 {% endfor %}
@@ -246,10 +271,12 @@
             {% endif %}
         {% endif %}
 
-        <p>
-            <button type="submit" class="button" data-testid="item-submit">
-                {% if item %}Save changes{% else %}Create item{% endif %}
-            </button>
-        </p>
+        {% if not ro %}
+            <p>
+                <button type="submit" class="button" data-testid="item-submit">
+                    {% if item %}Save changes{% else %}Create item{% endif %}
+                </button>
+            </p>
+        {% endif %}
     </form>
 {% endblock %}
