@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Suppliers — UC Inventory{% endblock %}
+{% block content %}
+    <h1>Suppliers</h1>
+    <p>Vendors UC buys stock from. Archive a supplier when you stop using them — historical purchase orders keep working.</p>
+
+    <p>
+        <a class="button" href="/admin/suppliers/new" data-testid="new-supplier">New supplier</a>
+    </p>
+
+    <nav aria-label="Filter suppliers" data-testid="suppliers-tabs" style="margin-bottom: 1rem;">
+        <a href="/admin/suppliers?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        |
+        <a href="/admin/suppliers?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if suppliers %}
+        <table data-testid="suppliers-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Notes</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in suppliers %}
+                    <tr data-testid="supplier-row" data-supplier-id="{{ s.id }}">
+                        <td data-testid="supplier-name">{{ s.name }}</td>
+                        <td>{{ s.email or "" }}</td>
+                        <td>{{ s.phone or "" }}</td>
+                        <td>{{ s.notes or "" }}</td>
+                        <td>
+                            <a href="/admin/suppliers/{{ s.id }}/edit" data-testid="edit-supplier">Edit</a>
+                            {% if s.archived_at is none %}
+                                <form method="post" action="/admin/suppliers/{{ s.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-supplier">Archive</button>
+                                </form>
+                            {% else %}
+                                <form method="post" action="/admin/suppliers/{{ s.id }}/unarchive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="unarchive-supplier">Unarchive</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="suppliers-empty">
+            {% if show == "archived" %}No archived suppliers.{% else %}No suppliers yet. Create your first one above.{% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

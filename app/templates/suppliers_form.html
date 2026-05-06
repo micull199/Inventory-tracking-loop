@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/suppliers">&larr; Back to suppliers</a></p>
+    <h1>{{ title }}</h1>
+
+    <form method="post" action="{{ action }}" data-testid="supplier-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="name">Name <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="name" name="name" required
+                   value="{{ form.name }}"
+                   data-testid="supplier-name-input"
+                   maxlength="255">
+        </p>
+
+        <p>
+            <label for="email">Email</label><br>
+            <input type="email" id="email" name="email"
+                   value="{{ form.email }}"
+                   data-testid="supplier-email-input"
+                   maxlength="255">
+        </p>
+
+        <p>
+            <label for="phone">Phone</label><br>
+            <input type="tel" id="phone" name="phone"
+                   value="{{ form.phone }}"
+                   data-testid="supplier-phone-input"
+                   maxlength="64">
+        </p>
+
+        <p>
+            <label for="notes">Notes</label><br>
+            <textarea id="notes" name="notes"
+                      data-testid="supplier-notes-input"
+                      maxlength="2000"
+                      rows="4" cols="50">{{ form.notes }}</textarea>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="supplier-submit">
+                {% if supplier %}Save changes{% else %}Create supplier{% endif %}
+            </button>
+        </p>
+    </form>
+{% endblock %}

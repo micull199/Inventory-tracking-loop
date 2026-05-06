@@ -125,6 +125,87 @@ class TestRoleAwareNav:
         snippet = resp.text[resp.text.find('data-testid="nav-users"') :]
         assert 'aria-current="page"' in snippet[:300]
 
+    def test_manager_nav_includes_suppliers_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/")
+        assert 'data-testid="nav-suppliers"' in resp.text
+        assert 'href="/admin/suppliers"' in resp.text
+        # Manager is not an admin — no Users link.
+        assert 'data-testid="nav-users"' not in resp.text
+
+    def test_admin_nav_includes_suppliers_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="nav-suppliers"' in resp.text
+
+    def test_workshop_nav_excludes_suppliers_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/")
+        assert 'data-testid="nav-suppliers"' not in resp.text
+
+    def test_office_nav_excludes_suppliers_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Suppliers are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/")
+        assert 'data-testid="nav-suppliers"' not in resp.text
+
+    def test_aria_current_on_suppliers_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/suppliers")
+        snippet = resp.text[resp.text.find('data-testid="nav-suppliers"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
+
+class TestFlashRegion:
+    def test_no_flash_renders_nothing(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _login_as(client, _make_user(db_session, email="m@x.test", role=Role.MANAGER))
+        resp = client.get("/")
+        assert 'data-testid="flash"' not in resp.text
+
+    def test_flash_appears_after_set_then_cleared_on_next_load(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Flash is one-shot: appears once, then is consumed."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        # Trigger a flash by creating a supplier.
+        token = _csrf(client)
+        resp = client.post(
+            "/admin/suppliers",
+            data={"name": "Flashed Co", "csrf_token": token},
+            follow_redirects=True,
+        )
+        assert resp.status_code == 200
+        assert 'data-testid="flash"' in resp.text
+        assert "Flashed Co" in resp.text
+
+        # Reloading the same page should NOT re-render the flash.
+        again = client.get("/admin/suppliers")
+        assert 'data-testid="flash"' not in again.text
+
+
+def _csrf(client: TestClient) -> str:
+    if "csrftoken" not in client.cookies:
+        client.get("/")
+    return client.cookies["csrftoken"]
+
 
 class TestHeaderSignOut:
     def test_anonymous_has_no_signout_form(self, client: TestClient) -> None:

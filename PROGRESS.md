@@ -27,11 +27,21 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current state
 
-**Iteration:** 5 (complete)
-**Last commit:** 03f51a1 — slice: F4 — Base layout, role-aware nav, CSRF, require_active_user
+**Iteration:** 6 (complete)
+**Last commit:** *(set on commit)* — slice: S1 — Suppliers CRUD
 **Branch:** main
-**Tests:** `make check` green: ruff ✓, mypy ✓, pytest 104 unit+integration ✓, Playwright 4 e2e ✓.
-**Definition-of-Done items ticked:** 0 / 12. F4 lands the CSRF middleware + `require_active_user` + base layout + role-aware nav, which the rest of the app depends on. None of the 12 DoD bullets become tickable from this slice alone — DoD #9 needs a non-admin role-gated route in place to be properly verified end-to-end (S1 will land that). DoD #1 / #8 status unchanged.
+**Tests:** `make check` green: ruff ✓, mypy ✓, pytest 152 unit+integration ✓, Playwright 5 e2e ✓.
+**Definition-of-Done items ticked:** 0 / 12. S1 advances #2 (first manager-owned settings entity), #6 (suppliers feed POs — half of the dependency satisfied), #8 (audit on a non-user `entity_type`), #9 (first Manager-only route, Workshop/Office both verified to 403 via integration tests). None of the 12 bullets are *fully* tickable from this slice alone: #2 needs taxonomy + items, #6 needs PO flow, #9 wants e2e coverage of the negative path before we tick it (currently integration-only).
+
+**Repo health:**
+- ruff: clean (`app tests`)
+- mypy: clean (strict on `app/`, 9 source files — `app/suppliers.py` added)
+- pytest unit + integration: 152 passing (was 104, +48 from this slice)
+- Playwright e2e: 5 passing (was 4, +1 from this slice — manager creates / archives / unarchives via the UI)
+
+**What's running:** Everything from F4, plus the **Manager-owned `/admin/suppliers` CRUD**: list (active/archived tabs, default active), new form, create, edit form, update with audit-row diff, archive/unarchive (idempotent — no audit row on a no-op). Schema is `suppliers(id, name unique, email, phone, notes, archived_at, created_at, updated_at)` with an index on `archived_at`. Every mutation calls `record_audit` with `entity_type="supplier"`. Role gate is `require_role(Role.MANAGER)` (admins always pass per the helper); Workshop and Office both 403 — Office is a sibling role, not a subset, per MISSION §3. **Nav link "Suppliers" added** to the role-aware primary nav for Manager + Admin. **Flash-message region added** to `base.html` and a `_flash_context_processor` registered on `Jinja2Templates`; the supplier routes use it for "Supplier 'X' created/updated/archived/restored." messages.
+
+**Known broken:** none.
 
 **Repo health:**
 - ruff: clean (`app tests`)
@@ -47,26 +57,15 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current slice
 
-*(none — slice F4 just shipped, see Completed log)*
+*(none — slice S1 just shipped, see Completed log)*
 
 ---
 
 ## Next slice
 
-**Slice name:** S1 — Suppliers CRUD (Manager-owned, server-rendered, CSRF + nav now in place)
-**Targets DoD item(s):** First-half of #6 (suppliers feed PO drafts) and #2 (Manager surface for taxonomy/settings — start with suppliers because they have no schema versioning to think about).
-**Why this next:** F4 just shipped CSRF, role-aware nav, and a base layout. Suppliers are the simplest CRUD entity in §6 — no taxonomy, no FIFO, no children — so they're the cheapest way to (a) prove the new CSRF + nav stack on a non-admin route, (b) tick the first piece of #2, (c) verify DoD #9 with a real Manager-only route that 403s a Workshop user. Adds a Manager nav link and a `Manager`-only `/admin/suppliers` route.
-**Sketch (refine in iteration):**
-- `suppliers` table + Alembic migration. Columns: id, name (unique), email, phone, notes, archived_at, timestamps.
-- ORM `Supplier` model.
-- Routes (Manager + Admin):
-  - `GET /admin/suppliers` — list (active + archived tabs).
-  - `GET /admin/suppliers/new`, `POST /admin/suppliers` — create.
-  - `GET /admin/suppliers/{id}/edit`, `POST /admin/suppliers/{id}` — edit.
-  - `POST /admin/suppliers/{id}/archive`, `POST /admin/suppliers/{id}/unarchive` — soft delete / restore.
-- Audit: every mutation hits `record_audit` with `entity_type="supplier"`.
-- Nav link in `base.html` for Manager + Admin.
-- Tests: model unit tests; integration for each route incl. role enforcement (Workshop = 403; Office = 403 since suppliers are Manager-owned per §3); e2e: Manager creates a supplier → sees it in the list → archives it.
+**Slice name:** S2 — Locations CRUD (Manager-owned)
+**Targets DoD item(s):** #2 (Manager-owned settings — second entity). Locations are required for items (I1) and transfers (M5).
+**Why this next:** Near-identical shape to S1 (CRUD entity with name + notes + archived_at, Manager-owned). Pressure-tests the supplier patterns: if the same shape can be lifted with minimal copy-paste, that's a green light to extract a shared "settings CRUD" pattern (or it stays simple and we don't extract). Either outcome is informative. Migration `0004_create_locations.py`, `Location` model, `app/locations.py` router with `init_templates`, two templates, mirroring tests. Add a "Locations" nav link for Manager + Admin alongside "Suppliers".
 
 ---
 
@@ -166,6 +165,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
+| 6 | S1 — Suppliers CRUD (Manager-owned) | *(set on commit)* | New Manager-only `/admin/suppliers` server-rendered CRUD: list (active/archived tabs), new, create, edit, update (with field-level audit diff), archive, unarchive. Migration `0003_create_suppliers.py` adds the `suppliers` table (`name` unique). `Supplier` ORM model in `app/models.py`. New `app/suppliers.py` router mounted under the shared `Jinja2Templates` (with CSRF + new flash context processor) via a small `init_templates()` shim. `base.html` gains a **flash region** (`role="status"`, one-shot; `_flash_context_processor` pops `request.session["flash"]`) and a **Suppliers nav link** visible to Manager + Admin (with `aria-current="page"`). 48 new tests (10 unit `_suppliers` + 32 integration `suppliers_routes` + 6 layout for nav-suppliers/flash) + 1 new e2e: pending → admin promotes → manager creates "Acme Wax Co" → archives → tab to archived → unarchive. Idempotent archive/unarchive (no audit row on no-op). Validation: empty/whitespace name = 400, duplicate name = 400 (active and archived names share the namespace by design). 152 unit+integration + 5 e2e passing. |
 | 5 | F4 — Base layout, role-aware nav, CSRF, `require_active_user` | `03f51a1` | New `app/csrf.py` with `CSRFMiddleware` (raw ASGI, double-submit cookie, header **or** form-field token, exempt set = `{/auth/google/callback, /auth/_dev-login}`) + `csrf_context_processor` registered on `Jinja2Templates`. New `require_active_user` dependency in `app/auth.py` applied to `/auth/me` (so a disabled user with a still-valid cookie immediately gets 403). Rebuilt `app/templates/base.html`: skip link, focus styles, header with email/status/role + CSRF-protected sign-out form, role-aware primary nav with `aria-current="page"`, HTMX 1.9.12 via CDN with SRI hash. `admin_users.html` forms render the hidden CSRF input. 25 new tests (8 unit `_csrf` + 11 integration `csrf` + 11 integration `layout` + 4 `require_active_user` unit + 2 disabled/pending `/auth/me` integration). Existing admin/audit/auth POST tests threaded with `_csrf(client)` helper. 104 unit/integration + 4 e2e passing. |
 | 3 | F2.1 — Admin user-management UI: assign role, activate/disable users | `e80feb6` | `/admin/users` is now an HTML page with per-user role + status forms (POST → 303 redirect, no HTMX yet). New routes `POST /admin/users/{id}/role` + `/status` with server-side guards: admin can't demote themselves, can't disable themselves, can't activate a user with no role. Pending users sort to the top of the list. e2e covers the full round-trip: pending user signs in → admin promotes them → user signs back in and sees the welcome page. 43 unit/integration + 4 e2e passing. |
 | 2 | F2 — Google SSO login + pending-state user model + role enum | `b46ee57` | `users` table (Alembic mig), `Role`/`UserStatus`, Authlib OAuth, signed sessions, `require_role`, role-gated `/admin/users`, anon/pending/welcome index, dev/test-only login backdoor for Playwright. Prod-config validator now requires non-default `SECRET_KEY` + Google creds. 27 unit/integration + 3 e2e passing. |
@@ -177,9 +177,15 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 *(Carry forward weaknesses noted during iteration self-critiques but not yet addressed. Clear an entry when it gets fixed in a later slice. Don't let this get longer than ~10 items — if it does, something has gone off the rails.)*
 
+- **S1 / `app.suppliers.init_templates()` is a small global-state code smell.** I needed `app/suppliers.py` to share the same `Jinja2Templates` instance as `app/main.py` (so the CSRF + flash context processors apply) without circular imports. Did this by exposing a module-level `_templates` set by `init_templates()` from `app.main`. It works, it's tiny, and it has a guard (`RuntimeError` if not initialised), but as more routers land (S2 locations, S3+ taxonomy, items, etc.) this pattern will repeat — refactor into a shared `app.template_env` module that builds the Templates instance once and is imported by routers directly. Acceptable for one router; revisit before the third one lands.
+- **S1 / validation failures show a bare 400 page, not the form re-rendered with errors.** A user submits an empty name and gets "name is required" as a stark FastAPI HTTPException page instead of the form with the field highlighted. Mirrors the existing `admin_users` route convention but isn't great UX. The `suppliers_form.html` template already takes a `form` dict and renders submitted values, so the upgrade is small: swap `HTTPException(400, ...)` for `templates.TemplateResponse(..., status_code=400, ...)` with an `errors` dict. Defer to a "settings UX polish" slice (after S2/S3 land so the change covers all settings forms at once).
+- **S1 / no email format validation.** Browser `type="email"` validates client-side but not server-side. Storing garbage emails will bite at PO send time (PO5). MISSION says "boring is good" — defer to a single validation point at PO5 (cheaper than re-validating everywhere).
+- **S1 / DoD #9 has integration coverage but not e2e coverage on the negative path.** Workshop=403, Office=403, anonymous=401 are exhaustively integration-tested for `/admin/suppliers`. The e2e only covers the positive path (manager succeeds). Strictly the DoD says "verified by tests" (plural, not specifically e2e). I'm leaving #9 unticked for now — being conservative; consider in the next iteration whether to (a) tick as-is, or (b) add a one-liner e2e that has a workshop user navigate to `/admin/suppliers` and assert a 403 page renders. Cheap addition.
+- **S1 / no pagination on the suppliers list.** The list view renders every active or archived row inline. UC has tens of suppliers, not thousands, so this is fine for v1. Worth flagging because the same template will be cloned for items (I1+), where 5000 rows IS realistic. Don't copy the bare-list pattern there.
+- **S1 / archived names share the namespace with active names.** Tested + intentional: archiving doesn't free the name. Operator must rename the old row or unarchive it. The 400 message ("a supplier with that name already exists") doesn't tell the user *which* one — confusing if the conflict is with an archived supplier they don't see by default. Defer to a UX polish slice.
 - **F4 / CSRF doesn't cover multipart bodies.** `_extract_submitted_token` reads only `application/x-www-form-urlencoded`. Multipart form-posts (file uploads — not yet a feature) must send the token in the `X-CSRF-Token` header instead, or they'll fail CSRF. When the first upload route lands (likely with item photos or PO PDFs), either extend the middleware to parse multipart or document the header requirement explicitly on those routes. Captured in the docstring of `app/csrf.py` so the next dev sees it.
-- **F4 / no flash-message region in the layout.** The plan called for a flash region but I dropped it because no slice is writing flashes today. Suppliers (S1) is the natural first user — add the `request.session.pop('flash', None)` render block there alongside the first redirect-after-success that needs to surface a message.
-- **F4 / nav for active non-admin users renders just "Home".** Workshop / Manager / Office users currently see a primary nav with only the Home link until S1+ adds role-relevant items. Cosmetic clutter rather than a UX trap; will resolve naturally as Suppliers / Items / Movements ship.
+- ~~**F4 / no flash-message region in the layout.**~~ *Resolved in S1: `_flash_context_processor` registered on `Jinja2Templates`, base layout renders `<div class="flash" role="status" data-testid="flash">` when `request.session["flash"]` is set; supplier mutations populate it. Tested in `tests/integration/test_layout.py::TestFlashRegion`.*
+- ~~**F4 / nav for active non-admin users renders just "Home".**~~ *Partially resolved in S1: Manager + Admin now also see "Suppliers". Workshop and Office still see only "Home" until M2 (stock-in form) and SC1 (scan-mode page) land.*
 - **F4 / CSRF token doesn't rotate on login or logout.** Same token persists across sign-in/sign-out cycles for as long as the cookie lives. Threat model says fine: SameSite=Lax + non-HttpOnly-but-same-origin means a cross-site attacker can't read or set the cookie. The window where this matters is a session-fixation-style attack where attacker plants a known csrftoken cookie in the victim's browser before login — they can't, because they can't write our domain's cookies cross-site. Document and move on.
 - **F4 / HTMX is loaded but unused.** No route emits HTML fragments yet. The `<script>` tag is there for the next slice to start using; the integrity hash pins us to 1.9.12 — bumping requires updating both the URL and the SRI.
 - **F3 / no audit-viewer UI.** Today the audit log is observable only via direct DB access. That's enough for tests and for an eyeball on a dev DB, but for "Manager can see who has what" / "Admin can investigate an incident" we'll need a real `/admin/audit` (or per-entity timeline) view. Belongs alongside the item-detail timeline (M6 territory) — building it earlier means rendering rows for actions that don't exist yet. Not blocking DoD #8.
@@ -234,3 +240,9 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 - **CSRF middleware runs outside SessionMiddleware.** `CSRFMiddleware` is added second in `app/main.py` so it's the *outermost* middleware. Forged requests get rejected before SessionMiddleware ever decodes the session cookie. Cost: anonymous forged POSTs return 403 before authentication runs, which is why `test_unauthenticated_post_is_401` has to bootstrap a CSRF cookie first.
 - **`/auth/_dev-login` is CSRF-exempt by design.** The dev-login backdoor is mounted only in `dev`/`test`. Adding CSRF to a backdoor that bypasses real auth would only add ceremony, not security — anyone who can reach the dev server already has full access. This is documented in `app/csrf.py::DEFAULT_EXEMPT_PATHS` so the next dev doesn't quietly "fix" it.
 - **`require_active_user` is a separate dependency from `require_role`.** Pre-F4, `require_user` only checked "is there a user?" and `require_role` checked status as a side-effect. Routes that don't have role gating but should still reflect current account state (today: `/auth/me`) need their own status check — added as `require_active_user`. Without it, a user disabled mid-session continues to read their own profile via a still-valid cookie until they sign out.
+- **Suppliers (and other Manager-owned settings) live under `/admin/...`** even though "admin" in the URL implies the admin role. Reasoning: the existing `/admin/users` set the `admin` prefix as "admin/settings area," not strictly "admin role." The role gate is in the dependency (`require_role(Role.MANAGER)` for suppliers, `require_role(Role.ADMIN)` for users), not the URL. Don't read the URL prefix as a role signal.
+- **Suppliers `name` is unique across active *and* archived rows.** Archiving does not free the name. To re-use a name the operator must rename the existing row or unarchive it. Reason: PO history and FIFO layers may reference a supplier by id, but humans reference by name; allowing two "Acme Wax Co" rows (one archived, one active) would silently let the wrong one feed reorder math. Tested at the DB layer (`uq_suppliers_name`) and at the route layer (`_check_name_unique`).
+- **No-op POSTs (update with no field changes, archive an already-archived supplier, unarchive an active one) write no audit row but still 303 to the list.** Reason: tests assert this explicitly so a future refactor doesn't accidentally start logging spurious "X updated" rows that drown the real signal. The 303 still happens so the browser's POST-redirect-GET cycle terminates cleanly.
+- **`record_audit` for `supplier.updated` records *only* the changed fields, not the full row.** `_diff()` returns a sparse `(before, after)` of fields whose value changed. Reason: full-row before/after gets noisy fast (especially with `notes`), and the DoD requirement is that "every state change is attributable" — knowing exactly what changed beats a lossy snapshot of everything.
+- **Flash messages live in `request.session["flash"]` and are popped (read+clear) by `_flash_context_processor` on render.** One-shot semantics: appears on the next page render, never on the one after. Tested in `test_layout.py::TestFlashRegion::test_flash_appears_after_set_then_cleared_on_next_load`. Don't try to "tag" flashes with a type (success/warning/etc.) until there's a real second type to render — current uses are all success messages.
+- **`app.suppliers.init_templates()` injects the shared `Jinja2Templates` from the app factory** rather than each router building its own. Reason: each router would otherwise need to register every context processor (CSRF, flash, future ones) on its own templates, and any router that forgot would silently drop those vars. Module-level state set once at startup is acceptable for now; refactor to a shared `app.template_env` module before the third router adopts the pattern.

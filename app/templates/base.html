@@ -92,6 +92,15 @@
         <nav class="primary" aria-label="Primary" data-testid="primary-nav">
             <ul>
                 <li><a href="/" {% if request.url.path == "/" %}aria-current="page"{% endif %}>Home</a></li>
+                {% if current_user.role and current_user.role.value in ("admin", "manager") %}
+                    <li>
+                        <a href="/admin/suppliers"
+                           data-testid="nav-suppliers"
+                           {% if request.url.path.startswith("/admin/suppliers") %}aria-current="page"{% endif %}>
+                            Suppliers
+                        </a>
+                    </li>
+                {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>
                         <a href="/admin/users"
@@ -106,6 +115,9 @@
     {% endif %}
 
     <main id="main" tabindex="-1">
+        {% if flash %}
+            <div class="flash" role="status" data-testid="flash">{{ flash }}</div>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
 </body>
