@@ -297,6 +297,30 @@ def test_office_schedules_a_stock_take(
     )
     expect(completed_row).to_have_attribute("data-committed", "true")
 
+    # Step 7g (R4): office navigates to the dashboard and clicks the variance
+    # trend link, asserts the just-committed stock take appears with the
+    # expected per-side splits and the totals card shows one stock take.
+    office_page.get_by_test_id("nav-dashboard").click()
+    office_page.wait_for_url(f"{app_server}/admin/dashboard")
+    office_page.get_by_test_id("dashboard-variance-trend-link").click()
+    office_page.wait_for_url(
+        f"{app_server}/admin/reports/variance-trend"
+    )
+    expect(
+        office_page.get_by_test_id("variance-trend-stock-take-count")
+    ).to_have_text("1")
+    expect(
+        office_page.get_by_test_id("variance-trend-total-negative-abs")
+    ).to_contain_text("2")
+    trend_row = office_page.locator('[data-testid="variance-trend-row"]')
+    expect(trend_row).to_have_count(1)
+    expect(
+        trend_row.get_by_test_id("variance-trend-row-net")
+    ).to_contain_text("-2")
+    expect(
+        trend_row.get_by_test_id("variance-trend-row-lines-with-variance")
+    ).to_have_text("1")
+
     office_page.close()
     if office_context is not context:
         office_context.close()
