@@ -39,6 +39,8 @@
                         <td data-testid="sub-sort-order">{{ n.sort_order }}</td>
                         <td data-testid="sub-name">{{ n.name }}</td>
                         <td>
+                            <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-sub-fields">Fields</a>
+                            |
                             <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-sub">Edit</a>
                             {% if n.archived_at is none %}
                                 <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/archive" style="display:inline">

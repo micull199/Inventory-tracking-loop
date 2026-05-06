@@ -48,6 +48,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
+from app.field_defs import has_active_field_defs
 from app.models import Role, TaxonomyNode, User
 from app.template_env import templates
 
@@ -242,6 +243,22 @@ def list_taxonomy(
     stmt = stmt.order_by(_LIST_ORDER, TaxonomyNode.sort_order, TaxonomyNode.name)
 
     rows = list(db.execute(stmt).scalars().all())
+    # A top-level node is a leaf (and therefore eligible to own field defs) iff
+    # it has no active children. The template uses this to decide whether the
+    # per-row "Fields" link renders or a "manage on sub-cats instead" hint
+    # appears. Computed here so the template stays logic-light.
+    leaf_ids: set[int] = set()
+    if rows:
+        active_parent_ids = set(
+            db.execute(
+                select(TaxonomyNode.parent_id)
+                .where(TaxonomyNode.parent_id.in_([n.id for n in rows]))
+                .where(TaxonomyNode.archived_at.is_(None))
+            )
+            .scalars()
+            .all()
+        )
+        leaf_ids = {n.id for n in rows if n.id not in active_parent_ids}
     return templates.TemplateResponse(
         request,
         "taxonomy_list.html",
@@ -249,6 +266,7 @@ def list_taxonomy(
             "current_user": _user,
             "nodes": rows,
             "show": show,
+            "leaf_ids": leaf_ids,
         },
     )
 
@@ -545,6 +563,17 @@ def new_sub_category_form(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add sub-categories under an archived category",
         )
+    # S5 leaf invariant: a top-level node with active field defs is the leaf
+    # — adding a sub-cat would un-leaf it and orphan the schema. Manager has
+    # to archive the field defs first.
+    if has_active_field_defs(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-categories: this category has custom fields. "
+                "Archive the fields first, then add sub-categories."
+            ),
+        )
     return templates.TemplateResponse(
         request,
         "taxonomy_form.html",
@@ -574,6 +603,15 @@ def create_sub_category(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add sub-categories under an archived category",
+        )
+    # S5 leaf invariant — same as the form GET above.
+    if has_active_field_defs(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-categories: this category has custom fields. "
+                "Archive the fields first, then add sub-categories."
+            ),
         )
 
     fields = _normalise(name, sort_order)

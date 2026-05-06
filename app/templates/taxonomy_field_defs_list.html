@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{{ node.name }} — Fields — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="{{ back_url }}" data-testid="fields-back">&larr; Back</a></p>
+    <h1>Fields on {{ node.name }}</h1>
+
+    {% if parent %}
+        <p data-testid="field-defs-parent-context">
+            Sub-category of <strong>{{ parent.name }}</strong>.
+        </p>
+    {% endif %}
+
+    {% if node.archived_at %}
+        <p data-testid="node-archived-note">
+            <em>This node is archived. Existing fields stay visible for history; no new fields can be added.</em>
+        </p>
+    {% elif not is_leaf %}
+        <p data-testid="non-leaf-note">
+            <em>This category has sub-categories. Fields are defined per leaf — manage them on each sub-category.</em>
+        </p>
+    {% else %}
+        <p>
+            <a class="button" href="/admin/taxonomy/{{ node.id }}/fields/new" data-testid="new-field-def">New field</a>
+        </p>
+    {% endif %}
+
+    <nav aria-label="Filter fields" data-testid="field-defs-tabs" style="margin-bottom: 1rem;">
+        <a href="/admin/taxonomy/{{ node.id }}/fields?show=active"
+           data-testid="field-defs-tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        |
+        <a href="/admin/taxonomy/{{ node.id }}/fields?show=archived"
+           data-testid="field-defs-tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if fields %}
+        <table data-testid="field-defs-table">
+            <thead>
+                <tr>
+                    <th>Order</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Required</th>
+                    <th>Options</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in fields %}
+                    <tr data-testid="field-def-row" data-field-id="{{ f.id }}">
+                        <td data-testid="field-def-sort-order">{{ f.sort_order }}</td>
+                        <td data-testid="field-def-name">{{ f.name }}</td>
+                        <td data-testid="field-def-type">{{ f.type.value }}</td>
+                        <td data-testid="field-def-required">{% if f.required %}Yes{% else %}No{% endif %}</td>
+                        <td data-testid="field-def-options">
+                            {% if f.options_json %}
+                                {{ f.options_json | join(", ") }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/admin/taxonomy/fields/{{ f.id }}/edit" data-testid="edit-field-def">Edit</a>
+                            {% if f.archived_at is none %}
+                                <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-field-def">Archive</button>
+                                </form>
+                            {% else %}
+                                <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/unarchive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="unarchive-field-def">Unarchive</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="field-defs-empty">
+            {% if show == "archived" %}No archived fields.{% else %}No fields yet.{% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

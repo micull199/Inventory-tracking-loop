@@ -35,6 +35,9 @@
                         <td data-testid="taxonomy-name">{{ n.name }}</td>
                         <td>
                             <a href="/admin/taxonomy/{{ n.id }}/children" data-testid="open-children">Manage</a>
+                            {% if n.id in leaf_ids %}
+                                | <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-fields">Fields</a>
+                            {% endif %}
                         </td>
                         <td>
                             <a href="/admin/taxonomy/{{ n.id }}/edit" data-testid="edit-taxonomy">Edit</a>

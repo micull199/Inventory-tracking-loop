@@ -171,6 +171,51 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     )
     expect(restored_silver).to_be_visible()
 
+    # Step 16: Click into the sub-cat's Fields page.
+    restored_silver.get_by_test_id("open-sub-fields").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
+    expect(mgr_page.get_by_test_id("field-defs-empty")).to_be_visible()
+
+    # Step 17: Create a "Karat" select field with options 9, 14, 18.
+    mgr_page.get_by_test_id("new-field-def").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/fields/new"))
+    mgr_page.get_by_test_id("field-def-name-input").fill("Karat")
+    mgr_page.get_by_test_id("field-def-type-input").select_option("select")
+    mgr_page.get_by_test_id("field-def-options-input").fill("9\n14\n18")
+    mgr_page.get_by_test_id("field-def-required-input").check()
+    mgr_page.get_by_test_id("field-def-submit").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
+    expect(mgr_page.get_by_test_id("flash")).to_contain_text("Karat")
+    karat_row = mgr_page.locator(
+        '[data-testid="field-def-row"]', has_text="Karat"
+    )
+    expect(karat_row).to_be_visible()
+    expect(karat_row.get_by_test_id("field-def-type")).to_have_text("select")
+    expect(karat_row.get_by_test_id("field-def-required")).to_have_text("Yes")
+
+    # Step 18: Archive it.
+    karat_row.get_by_test_id("archive-field-def").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
+    expect(
+        mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
+    ).to_have_count(0)
+
+    # Step 19: Switch to archived tab — Karat is there.
+    mgr_page.get_by_test_id("field-defs-tab-archived").click()
+    mgr_page.wait_for_url(lambda u: "show=archived" in u)
+    archived_karat = mgr_page.locator(
+        '[data-testid="field-def-row"]', has_text="Karat"
+    )
+    expect(archived_karat).to_be_visible()
+
+    # Step 20: Unarchive — back to active.
+    archived_karat.get_by_test_id("unarchive-field-def").click()
+    mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
+    restored_karat = mgr_page.locator(
+        '[data-testid="field-def-row"]', has_text="Karat"
+    )
+    expect(restored_karat).to_be_visible()
+
     mgr_page.close()
     if mgr_context is not context:
         mgr_context.close()

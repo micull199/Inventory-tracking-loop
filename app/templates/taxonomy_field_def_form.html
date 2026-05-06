@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="{{ back_url }}" data-testid="field-def-back">&larr; Back</a></p>
+    <h1>{{ title }}</h1>
+
+    <p data-testid="field-def-node-context">
+        On node: <strong>{{ node.name }}</strong>
+        {% if parent %}(sub-category of {{ parent.name }}){% endif %}
+    </p>
+
+    <form method="post" action="{{ action }}" data-testid="field-def-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="name">Name <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="name" name="name" required
+                   value="{{ form.name }}"
+                   data-testid="field-def-name-input"
+                   maxlength="255">
+        </p>
+
+        <p>
+            <label for="type">Type</label><br>
+            <select id="type" name="type" data-testid="field-def-type-input">
+                {% for t in field_types %}
+                    <option value="{{ t }}" {% if form.type == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label for="options_text">Options (one per line — for select / multiselect only)</label><br>
+            <textarea id="options_text" name="options_text" rows="4" cols="40"
+                      data-testid="field-def-options-input">{{ form.options_text }}</textarea>
+        </p>
+
+        <p>
+            <label>
+                <input type="checkbox" name="required" value="true"
+                       data-testid="field-def-required-input"
+                       {% if form.required %}checked{% endif %}>
+                Required
+            </label>
+        </p>
+
+        <p>
+            <label for="sort_order">Sort order</label><br>
+            <input type="number" id="sort_order" name="sort_order"
+                   value="{{ form.sort_order }}"
+                   data-testid="field-def-sort-order-input"
+                   step="1">
+            <br>
+            <small>Optional. Lower numbers appear first. Leave blank on a new field to append it (steps of 10).</small>
+        </p>
+
+        <p>
+            <button type="submit" class="button" data-testid="field-def-submit">
+                {% if field %}Save changes{% else %}Create field{% endif %}
+            </button>
+        </p>
+    </form>
+{% endblock %}

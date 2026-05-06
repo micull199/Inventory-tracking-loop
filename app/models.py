@@ -10,7 +10,17 @@ import enum
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, func, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -215,6 +225,107 @@ class TaxonomyNode(Base):
         return (
             f"<TaxonomyNode id={self.id} name={self.name!r} "
             f"parent_id={self.parent_id} archived={self.archived_at is not None}>"
+        )
+
+
+class FieldType(enum.StrEnum):
+    """Type of a custom field def attached to a taxonomy leaf node.
+
+    Mirrors MISSION §3 / §6: ``select`` and ``multiselect`` carry a list of
+    options in ``options_json``; the other types do not. Stored as a string
+    column with ``values_callable`` so the DB sees the lowercase ``.value``
+    rather than the Python member name.
+    """
+
+    TEXT = "text"
+    NUMBER = "number"
+    DECIMAL = "decimal"
+    DATE = "date"
+    BOOLEAN = "boolean"
+    SELECT = "select"
+    MULTISELECT = "multiselect"
+
+
+class TaxonomyFieldDef(Base):
+    """A custom field on a taxonomy *leaf* node.
+
+    Items in this leaf inherit the field; required fields must be filled to
+    save. Edits to the schema are non-retroactive (existing items keep their
+    stored values; that's enforced when items land in I1+, not here).
+    Soft-deletable; never hard-deleted. Archiving hides the field from new
+    entry but keeps the row so historical item values remain meaningful.
+
+    Uniqueness:
+    - ``(node_id, name)`` and ``(node_id, key)`` are both unique across
+      *active and archived* rows. Archiving must not free either, because
+      ``item_field_values`` will reference the def by id, and likely by key for
+      cross-version stability — re-using a name on a new def under the same
+      node would silently overload the audit history.
+
+    The "leaf" invariant is enforced in the application layer (the field-def
+    routes), not in this model — a row whose ``node_id`` points at a top-level
+    node *with active children* is still schema-valid in isolation.
+    """
+
+    __tablename__ = "taxonomy_field_defs"
+    __table_args__ = (
+        Index(
+            "uq_taxonomy_field_defs_node_name",
+            "node_id",
+            "name",
+            unique=True,
+        ),
+        Index(
+            "uq_taxonomy_field_defs_node_key",
+            "node_id",
+            "key",
+            unique=True,
+        ),
+        Index("ix_taxonomy_field_defs_node_id", "node_id"),
+        Index("ix_taxonomy_field_defs_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    node_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[FieldType] = mapped_column(
+        SAEnum(
+            FieldType,
+            name="taxonomy_field_type",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+    )
+    options_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<TaxonomyFieldDef id={self.id} node_id={self.node_id} "
+            f"name={self.name!r} key={self.key!r} type={self.type} "
+            f"required={self.required} archived={self.archived_at is not None}>"
         )
 
 
