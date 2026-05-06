@@ -1,10 +1,10 @@
-"""End-to-end walk for the check-out + check-in flow (C2 + C3).
+"""End-to-end walk for the check-out + check-in flow (C2 + C3 + C4).
 
 A manager creates a flagged unique-tracked item with two units. A workshop
 user navigates via the role-aware nav into the item's read-only view, follows
 the new ``checkout-link`` → ``/admin/items/{id}/checkout`` form, picks one of
-the two units, fills an expected return date and a condition note, submits,
-and asserts:
+the two units, fills a *backdated* expected return date (yesterday) and a
+condition note, submits, and asserts:
 
 - The flash includes the item name + the picked unit's serial.
 - The status block now lists the just-checked-out unit with the workshop
@@ -12,18 +12,30 @@ and asserts:
 - The next form render's unit ``<select>`` no longer offers the picked unit
   (it's now in the open-checkouts set, not the available set).
 
+C4 leg: the manager signs in, navigates ``nav-checkouts`` → the cross-item
+oversight view, and asserts:
+
+- The default ``open`` tab lists the just-checked-out CHK-A row.
+- The ``overdue`` tab also lists it (because the expected_return was set to
+  yesterday, the row is past-due — overdue badge visible with days_overdue
+  ≥ 1).
+- The dashboard's ``dashboard-overdue-checkouts`` widget reads "1".
+
 Then the workshop user clicks the inline "Check in" button on the open-row,
 optionally adds a return note, and asserts:
 
 - The flash includes "Checked in" + the item name + the unit serial.
 - The status block is now hidden (no open checkouts left).
 - CHK-A is back in the available ``<select>``.
+- The C4 ``open`` tab is now empty; the dashboard widget reads "0".
 
 Cleanup archives the units + item + taxonomy category so downstream walks see
 empty active lists.
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 
 from playwright.sync_api import BrowserContext, Page, expect
 
@@ -189,9 +201,11 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     # No open checkouts yet.
     expect(ws_page.get_by_test_id("checkout-status-block")).not_to_be_visible()
 
-    # Step 5: pick a unit, fill the form, submit.
+    # Step 5: pick a unit, fill the form, submit. expected_return is set to
+    # *yesterday* so the row appears as overdue in the C4 oversight view.
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
     ws_page.get_by_test_id("checkout-unit-input").select_option(label="CHK-A")
-    ws_page.get_by_test_id("checkout-expected-return-input").fill("2026-06-15")
+    ws_page.get_by_test_id("checkout-expected-return-input").fill(yesterday)
     ws_page.get_by_test_id("checkout-note-input").fill("careful with the lip")
     ws_page.get_by_test_id("checkout-submit").click()
     ws_page.wait_for_url(f"{app_server}/admin/items/{item_id}/checkout")
@@ -211,10 +225,63 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     options_text = available.inner_text()
     assert "CHK-A" not in options_text
     assert "CHK-B" in options_text
+    ws_page.close()
 
-    # Step 6b (C3): workshop checks the unit back in via the inline form on
-    # the open-row, with an optional return note. The note input lives inside
-    # a collapsed <details>; expand it before filling.
+    # Step 6a (C4): manager signs in, visits the cross-item checkouts view +
+    # the dashboard widget. CHK-A should appear as overdue.
+    c4_context = (
+        context.browser.new_context() if context.browser else context
+    )
+    c4_page = c4_context.new_page()
+    _dev_login(
+        c4_page,
+        app_server,
+        email="checkouts-mgr@uc.test",
+        sub="g-e2e-checkouts-mgr",
+        name="Checkouts Manager",
+    )
+    expect(c4_page.get_by_test_id("welcome")).to_be_visible()
+
+    # Default `open` tab — CHK-A row is visible.
+    c4_page.get_by_test_id("nav-checkouts").click()
+    c4_page.wait_for_url(f"{app_server}/admin/checkouts")
+    expect(c4_page.get_by_test_id("checkouts-admin-heading")).to_be_visible()
+    expect(c4_page.get_by_test_id("checkouts-open-count")).to_have_text("1")
+    expect(c4_page.get_by_test_id("checkouts-overdue-count")).to_have_text("1")
+    overdue_row = c4_page.locator('[data-testid="checkouts-row"]').first
+    expect(overdue_row).to_contain_text("CHK-MOULD-1")
+    expect(overdue_row).to_contain_text("CHK-A")
+    expect(overdue_row).to_contain_text("checkouts-ws@uc.test")
+    expect(overdue_row.get_by_test_id("checkouts-row-overdue-badge")).to_be_visible()
+    assert overdue_row.get_attribute("data-overdue") == "true"
+
+    # `overdue` tab — same row.
+    c4_page.get_by_test_id("filter-overdue").click()
+    c4_page.wait_for_url(f"{app_server}/admin/checkouts?show=overdue")
+    expect(c4_page.locator('[data-testid="checkouts-row"]')).to_have_count(1)
+
+    # Dashboard widget now reads 1.
+    c4_page.get_by_test_id("nav-dashboard").click()
+    c4_page.wait_for_url(f"{app_server}/admin/dashboard")
+    expect(c4_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text(
+        "1"
+    )
+    c4_page.close()
+    if c4_context is not context:
+        c4_context.close()
+
+    # Step 6b (C3): workshop signs back in and checks the unit back in via
+    # the inline form on the open-row, with an optional return note. The note
+    # input lives inside a collapsed <details>; expand it before filling.
+    ws_page = ws_context.new_page()
+    _dev_login(
+        ws_page,
+        app_server,
+        email="checkouts-ws@uc.test",
+        sub="g-e2e-checkouts-ws",
+        name="Checkouts Workshop",
+    )
+    ws_page.goto(f"{app_server}/admin/items/{item_id}/checkout")
     open_row = ws_page.locator('[data-testid="checkout-open-row"]').first
     open_row.locator("details summary").click()
     open_row.get_by_test_id("checkout-return-note-input").fill(
@@ -236,6 +303,31 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     assert "CHK-A" in options_after
     assert "CHK-B" in options_after
     ws_page.close()
+
+    # Step 6c (C4 follow-up): re-visit the cross-item view + the dashboard
+    # widget — both should now be empty / zero.
+    c4_after_context = (
+        context.browser.new_context() if context.browser else context
+    )
+    c4_after_page = c4_after_context.new_page()
+    _dev_login(
+        c4_after_page,
+        app_server,
+        email="checkouts-mgr@uc.test",
+        sub="g-e2e-checkouts-mgr",
+        name="Checkouts Manager",
+    )
+    c4_after_page.goto(f"{app_server}/admin/checkouts")
+    expect(c4_after_page.get_by_test_id("checkouts-open-count")).to_have_text("0")
+    expect(c4_after_page.get_by_test_id("checkouts-overdue-count")).to_have_text("0")
+    expect(c4_after_page.get_by_test_id("checkouts-admin-empty")).to_be_visible()
+    c4_after_page.goto(f"{app_server}/admin/dashboard")
+    expect(
+        c4_after_page.get_by_test_id("dashboard-overdue-checkouts")
+    ).to_have_text("0")
+    c4_after_page.close()
+    if c4_after_context is not context:
+        c4_after_context.close()
 
     # Step 7: cleanup. Manager signs back in and archives the units, item, cat.
     cleanup_context = (

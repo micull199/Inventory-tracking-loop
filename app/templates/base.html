@@ -148,6 +148,13 @@
                             POs
                         </a>
                     </li>
+                    <li>
+                        <a href="/admin/checkouts"
+                           data-testid="nav-checkouts"
+                           {% if request.url.path == "/admin/checkouts" or request.url.path.startswith("/admin/checkouts/") %}aria-current="page"{% endif %}>
+                            Checkouts
+                        </a>
+                    </li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>

@@ -435,6 +435,50 @@ class TestRoleAwareNav:
         snippet = resp.text[resp.text.find('data-testid="nav-dashboard"') :]
         assert 'aria-current="page"' in snippet[:300]
 
+    def test_manager_nav_includes_checkouts_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """C4: Manager + Office + Admin can reach the checkouts oversight view."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/")
+        assert 'data-testid="nav-checkouts"' in resp.text
+        assert 'href="/admin/checkouts"' in resp.text
+
+    def test_office_nav_includes_checkouts_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/")
+        assert 'data-testid="nav-checkouts"' in resp.text
+
+    def test_admin_nav_includes_checkouts_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="nav-checkouts"' in resp.text
+
+    def test_workshop_nav_excludes_checkouts_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop sees per-item status blocks, not the cross-item view."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/")
+        assert 'data-testid="nav-checkouts"' not in resp.text
+
+    def test_aria_current_on_checkouts_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/checkouts")
+        snippet = resp.text[resp.text.find('data-testid="nav-checkouts"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
     def test_reorder_aria_current_does_not_match_pos_path(
         self, client: TestClient, db_session: Session
     ) -> None:

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import checkouts as checkouts_module
+from app import checkouts_admin as checkouts_admin_module
 from app import dashboard as dashboard_module
 from app import field_defs as field_defs_module
 from app import item_units as item_units_module
@@ -53,6 +54,7 @@ app.include_router(items_module.router)
 app.include_router(item_units_module.router)
 app.include_router(movements_module.router)
 app.include_router(checkouts_module.router)
+app.include_router(checkouts_admin_module.router)
 app.include_router(reorder_module.router)
 app.include_router(purchase_orders_module.draft_router)
 app.include_router(purchase_orders_module.list_router)

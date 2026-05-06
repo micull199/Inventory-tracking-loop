@@ -53,6 +53,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
+from app.checkouts_admin import overdue_count as _overdue_count
 from app.db import get_session
 from app.models import (
     CostLayer,
@@ -271,7 +272,7 @@ def dashboard(
             "total_value": _total_inventory_value(db),
             "low_stock_count": _low_stock_count(db),
             "open_pos_count": _open_pos_count(db),
-            "overdue_checkouts": 0,
+            "overdue_checkouts": _overdue_count(db),
             "top_consumed": _top_consumed(db, days=top_days),
             "top_days": top_days,
             "cogs_amount": _cogs(db, start=cogs_start, end=cogs_end),
