@@ -391,6 +391,50 @@ class TestRoleAwareNav:
         snippet = resp.text[resp.text.find('data-testid="nav-pos"') :]
         assert 'aria-current="page"' in snippet[:300]
 
+    def test_manager_nav_includes_dashboard_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """R1: Manager + Office + Admin can reach the reporting dashboard."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/")
+        assert 'data-testid="nav-dashboard"' in resp.text
+        assert 'href="/admin/dashboard"' in resp.text
+
+    def test_office_nav_includes_dashboard_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/")
+        assert 'data-testid="nav-dashboard"' in resp.text
+
+    def test_admin_nav_includes_dashboard_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="nav-dashboard"' in resp.text
+
+    def test_workshop_nav_excludes_dashboard_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop cannot see aggregated cost data (MISSION §3)."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/")
+        assert 'data-testid="nav-dashboard"' not in resp.text
+
+    def test_aria_current_on_dashboard_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/dashboard")
+        snippet = resp.text[resp.text.find('data-testid="nav-dashboard"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
     def test_reorder_aria_current_does_not_match_pos_path(
         self, client: TestClient, db_session: Session
     ) -> None:
