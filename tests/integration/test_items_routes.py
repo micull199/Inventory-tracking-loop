@@ -20,10 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AuditLog,
+    FieldType,
     Item,
+    ItemFieldValue,
     Location,
     Role,
     Supplier,
+    TaxonomyFieldDef,
     TaxonomyNode,
     TrackingMode,
     User,
@@ -1946,4 +1949,746 @@ class TestArchivedFKPreservation:
         resp = client.get("/admin/items/new")
         assert "Archived Sup" not in resp.text
         assert "Archived Loc" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Custom field values (I2)
+# ---------------------------------------------------------------------------
+
+
+def _make_field_def(
+    db: Session,
+    node: TaxonomyNode,
+    *,
+    name: str,
+    field_type: FieldType,
+    options: list[str] | None = None,
+    required: bool = False,
+    sort_order: int = 0,
+    archived: bool = False,
+    key: str | None = None,
+) -> TaxonomyFieldDef:
+    fd = TaxonomyFieldDef(
+        node_id=node.id,
+        name=name,
+        key=key or name.lower().replace(" ", "_"),
+        type=field_type,
+        options_json=options,
+        required=required,
+        sort_order=sort_order,
+    )
+    if archived:
+        fd.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+    db.add(fd)
+    db.commit()
+    db.refresh(fd)
+    return fd
+
+
+def _existing_item(
+    db: Session, node: TaxonomyNode, *, sku: str = "RM-001", name: str = "Wire"
+) -> Item:
+    item = Item(
+        sku=sku,
+        name=name,
+        taxonomy_node_id=node.id,
+        unit="g",
+        tracking_mode=TrackingMode.QTY,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+class TestItemCustomFieldsCreate:
+    """Custom field rendering, parsing, validation, persistence on create."""
+
+    def test_form_renders_active_fields_for_a_chosen_node(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'name="cf_alloy"' in resp.text
+        assert "Alloy" in resp.text
+
+    def test_form_omits_archived_fields(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Old Field",
+            field_type=FieldType.TEXT,
+            archived=True,
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'name="cf_old_field"' not in resp.text
+
+    def test_form_omits_section_when_no_field_defs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert "Category fields" not in resp.text
+
+    def test_create_persists_text_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_alloy"] = "silver"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+
+        item = db_session.execute(select(Item)).scalars().one()
+        rows = list(
+            db_session.execute(
+                select(ItemFieldValue).where(ItemFieldValue.item_id == item.id)
+            ).scalars()
+        )
+        assert len(rows) == 1
+        assert rows[0].field_def_id == fd.id
+        assert rows[0].value_text == "silver"
+
+        audit = _audit_rows(db_session, action="item.created")
+        assert len(audit) == 1
+        assert audit[0].after_json is not None
+        assert audit[0].after_json.get("custom_fields") == {"alloy": "silver"}
+
+    def test_create_persists_number_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Karat", field_type=FieldType.NUMBER
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_karat"] = "18"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_number == 18
+
+    def test_create_persists_decimal_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Density", field_type=FieldType.DECIMAL
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_density"] = "10.49"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_decimal == Decimal("10.49")
+        # Audit value is stringified.
+        audit = _audit_rows(db_session, action="item.created")[0]
+        assert audit.after_json is not None
+        assert audit.after_json["custom_fields"] == {"density": "10.49"}
+
+    def test_create_persists_date_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Last Calibrated", field_type=FieldType.DATE
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_last_calibrated"] = "2026-04-15"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        from datetime import date as date_cls
+
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_date == date_cls(2026, 4, 15)
+        audit = _audit_rows(db_session, action="item.created")[0]
+        assert audit.after_json is not None
+        assert audit.after_json["custom_fields"] == {
+            "last_calibrated": "2026-04-15"
+        }
+
+    def test_create_persists_boolean_true_when_checked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_hazardous"] = "true"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_bool is True
+
+    def test_create_persists_boolean_false_when_unchecked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """An unchecked checkbox is absent from the form. False IS a value
+        and IS stored — tests the "boolean values are always definite"
+        invariant from the route docstring.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        # cf_hazardous intentionally absent — checkbox unchecked.
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_bool is False
+
+    def test_create_persists_select_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Karat",
+            field_type=FieldType.SELECT,
+            options=["9", "14", "18"],
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_karat"] = "18"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        # Select stores the picked option as text.
+        assert ifv.value_text == "18"
+
+    def test_create_persists_multiselect_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Tags",
+            field_type=FieldType.MULTISELECT,
+            options=["bench", "polish", "set"],
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        # Multi-key submission (HTML select multiple) — TestClient packs into a list.
+        resp = client.post(
+            "/admin/items",
+            data={**payload, "cf_tags": ["bench", "set"]},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_json == ["bench", "set"]
+
+    def test_create_blank_optional_field_writes_no_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
+            required=False,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_alloy"] = ""
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        rows = list(db_session.execute(select(ItemFieldValue)).scalars())
+        assert rows == []
+        audit = _audit_rows(db_session, action="item.created")[0]
+        assert audit.after_json is not None
+        assert "custom_fields" not in audit.after_json
+
+    def test_create_missing_required_text_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
+            required=True,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        # cf_alloy missing entirely.
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+        assert "Alloy" in resp.text
+        # No item, no field-value rows, no audit.
+        assert db_session.execute(select(Item)).first() is None
+        assert db_session.execute(select(ItemFieldValue)).first() is None
+        assert _audit_rows(db_session) == []
+
+    def test_create_required_boolean_unchecked_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Required boolean = "must be checked"; unchecked submission rejected."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Confirmed",
+            field_type=FieldType.BOOLEAN,
+            required=True,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+        assert "Confirmed" in resp.text
+
+    def test_create_bad_number_value_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Karat", field_type=FieldType.NUMBER
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_karat"] = "not-a-number"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+        assert db_session.execute(select(Item)).first() is None
+
+    def test_create_bad_date_value_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Calibrated", field_type=FieldType.DATE
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_calibrated"] = "yesterday"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+
+    def test_create_select_value_not_in_options_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Karat",
+            field_type=FieldType.SELECT,
+            options=["9", "14", "18"],
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_karat"] = "24"  # not a valid option
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+
+    def test_create_multiselect_partial_invalid_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Tags",
+            field_type=FieldType.MULTISELECT,
+            options=["bench", "polish"],
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        resp = client.post(
+            "/admin/items",
+            data={**payload, "cf_tags": ["bench", "stranger"]},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_create_does_not_persist_archived_field_def_submission(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Submitting cf_<key> for an archived field def is silently ignored.
+
+        The form doesn't render those inputs, so a real user can't even submit
+        one. A tampered request with the key set must not write a row — only
+        active defs are processed.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Old Field",
+            field_type=FieldType.TEXT,
+            archived=True,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
+        payload["cf_old_field"] = "ignored"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303
+        assert db_session.execute(select(ItemFieldValue)).first() is None
+
+
+class TestItemCustomFieldsEdit:
+    """Custom field rendering, parsing, validation, persistence on edit."""
+
+    def test_edit_form_pre_fills_existing_values(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="silver"
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'value="silver"' in resp.text
+
+    def test_edit_form_does_not_render_archived_fields(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session,
+            leaf,
+            name="Old Field",
+            field_type=FieldType.TEXT,
+            archived=True,
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="ancient"
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'name="cf_old_field"' not in resp.text
+        assert "ancient" not in resp.text
+
+    def test_edit_setting_a_value_writes_row_and_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        item = _existing_item(db_session, leaf)
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = "silver"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+
+        rows = list(db_session.execute(select(ItemFieldValue)).scalars())
+        assert len(rows) == 1
+        assert rows[0].field_def_id == fd.id
+        assert rows[0].value_text == "silver"
+
+        audit = _audit_rows(db_session, action="item.updated")
+        assert len(audit) == 1
+        assert audit[0].before_json == {"custom_fields": {"alloy": None}}
+        assert audit[0].after_json == {"custom_fields": {"alloy": "silver"}}
+
+    def test_edit_changing_a_value_diffs_only_that_key(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        a = _make_field_def(
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
+            key="alloy",
+        )
+        b = _make_field_def(
+            db_session,
+            leaf,
+            name="Karat",
+            field_type=FieldType.NUMBER,
+            key="karat",
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add_all(
+            [
+                ItemFieldValue(
+                    item_id=item.id, field_def_id=a.id, value_text="silver"
+                ),
+                ItemFieldValue(
+                    item_id=item.id, field_def_id=b.id, value_number=18
+                ),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = "gold"  # changed
+        payload["cf_karat"] = "18"  # unchanged
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+
+        audit = _audit_rows(db_session, action="item.updated")
+        assert len(audit) == 1
+        assert audit[0].before_json == {"custom_fields": {"alloy": "silver"}}
+        assert audit[0].after_json == {"custom_fields": {"alloy": "gold"}}
+
+        # Karat row left as-is.
+        rows = list(
+            db_session.execute(
+                select(ItemFieldValue).order_by(ItemFieldValue.field_def_id)
+            ).scalars()
+        )
+        assert len(rows) == 2
+        assert rows[0].value_text == "gold"
+        assert rows[1].value_number == 18
+
+    def test_edit_clearing_a_value_deletes_row_and_audits(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="silver"
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = ""
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+
+        assert db_session.execute(select(ItemFieldValue)).first() is None
+        audit = _audit_rows(db_session, action="item.updated")
+        assert len(audit) == 1
+        assert audit[0].before_json == {"custom_fields": {"alloy": "silver"}}
+        assert audit[0].after_json == {"custom_fields": {"alloy": None}}
+
+    def test_edit_no_change_writes_no_audit_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="silver"
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = "silver"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert _audit_rows(db_session, action="item.updated") == []
+
+    def test_edit_required_field_left_blank_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
+            required=True,
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="silver"
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = ""
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 400
+        # Existing row preserved (atomic: 400 short-circuits before any write).
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_text == "silver"
+
+    def test_edit_does_not_touch_archived_field_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Existing values for archived defs are preserved across edits.
+
+        MISSION §3 "Deleting a field hides it from new entry but preserves
+        the value in audit history." → on edit, the archived-def row stays
+        on the item even when nothing on the form references it.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        archived_fd = _make_field_def(
+            db_session,
+            leaf,
+            name="Old Field",
+            field_type=FieldType.TEXT,
+            archived=True,
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id,
+                field_def_id=archived_fd.id,
+                value_text="ancient",
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        payload = _create_payload(
+            sku=item.sku,
+            name=f"{item.name} updated",  # force a non-empty diff
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+
+        # Archived value still present.
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.field_def_id == archived_fd.id
+        assert ifv.value_text == "ancient"
+        # Audit row only mentions the core change, not the archived field.
+        audit = _audit_rows(db_session, action="item.updated")[0]
+        assert audit.before_json is not None
+        assert audit.after_json is not None
+        assert "custom_fields" not in audit.before_json
+        assert "custom_fields" not in audit.after_json
+
+    def test_office_can_edit_custom_field_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Custom-field editing is part of editing the item, which Office can do."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        leaf = _make_leaf(db_session)
+        fd = _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
+        )
+        item = _existing_item(db_session, leaf)
+        db_session.add(
+            ItemFieldValue(
+                item_id=item.id, field_def_id=fd.id, value_text="silver"
+            )
+        )
+        db_session.commit()
+        _login_as(client, office)
+        payload = _create_payload(
+            sku=item.sku,
+            name=item.name,
+            taxonomy_node_id=leaf.id,
+            csrf=_csrf(client),
+        )
+        payload["cf_alloy"] = "gold"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+        ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
+        assert ifv.value_text == "gold"
 

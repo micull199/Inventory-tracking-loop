@@ -7,19 +7,21 @@ package so Alembic autogenerate can see every table.
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
+    Text,
     func,
     text,
 )
@@ -443,6 +445,80 @@ class Item(Base):
         return (
             f"<Item id={self.id} sku={self.sku!r} name={self.name!r} "
             f"node_id={self.taxonomy_node_id} archived={self.archived_at is not None}>"
+        )
+
+
+class ItemFieldValue(Base):
+    """Custom-field value bound to one (item, field def) pair (I2).
+
+    Sparse storage: exactly one of the ``value_*`` columns is populated for any
+    given row, chosen by the def's ``type``:
+
+    - ``text``        → ``value_text``
+    - ``number``      → ``value_number`` (integer)
+    - ``decimal``     → ``value_decimal``
+    - ``date``        → ``value_date``
+    - ``boolean``     → ``value_bool``
+    - ``select``      → ``value_text`` (the chosen option, as-is)
+    - ``multiselect`` → ``value_json`` (list of chosen options)
+
+    A row exists only when the item has a non-null/non-empty value for that
+    field; clearing a value deletes the row. The ``(item_id, field_def_id)``
+    unique index prevents the route layer from accidentally double-writing.
+
+    The field def is referenced by id, not key. The S5 self-critique flagged
+    that field renames re-derive the slug — a key change is recorded in the
+    audit row but doesn't affect existing values stored here, because the link
+    is by id. ``field_def.archived_at`` is intentionally not enforced at this
+    layer: items keep their stored values when a def is archived (per MISSION
+    §3 "Deleting a field hides it from new entry but preserves the value").
+    """
+
+    __tablename__ = "item_field_values"
+    __table_args__ = (
+        Index(
+            "uq_item_field_values_item_field_def",
+            "item_id",
+            "field_def_id",
+            unique=True,
+        ),
+        Index("ix_item_field_values_item_id", "item_id"),
+        Index("ix_item_field_values_field_def_id", "field_def_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    field_def_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_field_defs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    value_decimal: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4), nullable=True
+    )
+    value_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    value_bool: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    value_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<ItemFieldValue id={self.id} item_id={self.item_id} "
+            f"field_def_id={self.field_def_id}>"
         )
 
 

@@ -1,11 +1,24 @@
-"""Item CRUD against a taxonomy *leaf* node (I1a + I1b).
+"""Item CRUD against a taxonomy *leaf* node (I1a + I1b + I2).
 
 Items are the unblocking primitive for everything in MISSION §3 from "Stock
 movements" onward. The shipped fields: SKU, name, leaf-node, unit, tracking
 mode, requires-checkout flag, reorder thresholds, optional supplier/location/
-QR/notes. ``current_qty`` is read-only at 0; only stock movements (M1+) move
-it. Custom fields per the leaf's schema (S5 → I2), unique-tracked per-unit
-rows (I3), QR label generation (I4), and movements (M1+) are deferred.
+QR/notes, plus the **custom field values** inherited from the leaf node's
+schema (I2). ``current_qty`` is read-only at 0; only stock movements (M1+)
+move it. Unique-tracked per-unit rows (I3), QR label generation (I4), and
+movements (M1+) are deferred.
+
+Custom fields (I2): each item inherits the active field defs of its leaf
+node (see ``app/field_defs.py``). Values are stored sparsely in
+``item_field_values`` (one row per (item, field def) with a non-null value)
+and rendered + validated by ``app/items.py`` directly — no extra route layer.
+Required defs raise 400 if blank; type-coercion failures (bad date, non-int
+in a number field, out-of-options select) also 400. Archived defs are
+preserved on the item but invisible to the form: edits leave them untouched
+("Deleting a field hides it from new entry but preserves the value", per
+MISSION §3). Boolean ``required`` is interpreted as "must be checked", since
+an unchecked box is a definite "False" answer rather than a missing one — a
+"required" boolean would otherwise be meaningless.
 
 Access (I1b refines I1a):
 - **Manager / Admin**: full access — list, create, edit (every field),
@@ -33,11 +46,12 @@ is archived — that's an explicit user action, not silent data loss.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi.datastructures import FormData
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
@@ -46,10 +60,13 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
 from app.models import (
+    FieldType,
     Item,
+    ItemFieldValue,
     Location,
     Role,
     Supplier,
+    TaxonomyFieldDef,
     TaxonomyNode,
     TrackingMode,
     User,
@@ -545,6 +562,335 @@ def _can_edit_thresholds(user: User) -> bool:
     return user.role in (Role.MANAGER, Role.ADMIN)
 
 
+# ---------------------------------------------------------------------------
+# Custom field helpers (I2)
+# ---------------------------------------------------------------------------
+#
+# Items inherit the field schema of their leaf node (MISSION §3). Field defs
+# live in ``taxonomy_field_defs`` (S5); per-item values live in
+# ``item_field_values`` (one row per (item, field def) with a non-null value).
+# The form renders one input per *active* field def for the chosen leaf;
+# archived defs are not rendered, but their existing values are preserved on
+# the item — "Deleting a field hides it from new entry but preserves the
+# value in audit history."
+
+# Map a field def's type → the column on ``ItemFieldValue`` that stores the
+# value. Select stores the chosen option as a plain string in ``value_text``;
+# multiselect stores a list of strings in ``value_json``.
+_VALUE_COLUMN: dict[FieldType, str] = {
+    FieldType.TEXT: "value_text",
+    FieldType.NUMBER: "value_number",
+    FieldType.DECIMAL: "value_decimal",
+    FieldType.DATE: "value_date",
+    FieldType.BOOLEAN: "value_bool",
+    FieldType.SELECT: "value_text",
+    FieldType.MULTISELECT: "value_json",
+}
+
+
+def _get_active_field_defs(
+    db: Session, node_id: int
+) -> list[TaxonomyFieldDef]:
+    """Active (non-archived) field defs for ``node_id``, ordered by sort_order then name."""
+    stmt = (
+        select(TaxonomyFieldDef)
+        .where(TaxonomyFieldDef.node_id == node_id)
+        .where(TaxonomyFieldDef.archived_at.is_(None))
+        .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def _parse_custom_field(
+    field_def: TaxonomyFieldDef, raw: str | list[str] | None
+) -> Any:
+    """Coerce a raw form value (or list, for multiselect) into the right Python type.
+
+    Returns ``None`` for blank / empty / unset (for booleans, returns ``False``
+    when the checkbox is absent — booleans always have a definite value). The
+    required-flag check is the caller's job (``_collect_custom_fields``).
+
+    Raises ``HTTPException(400)`` on a type mismatch or an out-of-options
+    select / multiselect.
+    """
+    field_label = field_def.name
+    if field_def.type == FieldType.MULTISELECT:
+        # ``raw`` may be a list (the form returned multiple values) or None
+        # (no entries submitted). Empty list → None.
+        values = [
+            v.strip()
+            for v in (raw if isinstance(raw, list) else [])
+            if v and v.strip()
+        ]
+        if not values:
+            return None
+        options = field_def.options_json or []
+        bad = [v for v in values if v not in options]
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_label}: {bad[0]!r} is not a valid option",
+            )
+        # De-dup while preserving submission order; HTML <select multiple>
+        # can't naturally repeat but a tampered request could.
+        seen: set[str] = set()
+        out: list[str] = []
+        for v in values:
+            if v not in seen:
+                out.append(v)
+                seen.add(v)
+        return out
+
+    # Scalar types — collapse list (defensive) to first entry.
+    text = raw if isinstance(raw, str) else (raw[0] if isinstance(raw, list) and raw else "")
+    text = (text or "").strip()
+
+    if field_def.type == FieldType.BOOLEAN:
+        # HTML checkbox: present (any non-empty value) → True; absent → False.
+        return text != ""
+
+    if text == "":
+        return None
+
+    if field_def.type == FieldType.TEXT:
+        return text
+
+    if field_def.type == FieldType.NUMBER:
+        try:
+            return int(text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_label} must be a whole number",
+            ) from exc
+
+    if field_def.type == FieldType.DECIMAL:
+        try:
+            return Decimal(text)
+        except InvalidOperation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_label} must be a number",
+            ) from exc
+
+    if field_def.type == FieldType.DATE:
+        try:
+            return date.fromisoformat(text)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_label} must be a date (YYYY-MM-DD)",
+            ) from exc
+
+    if field_def.type == FieldType.SELECT:
+        options = field_def.options_json or []
+        if text not in options:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_label}: {text!r} is not a valid option",
+            )
+        return text
+
+    # Defensive — should be unreachable given FieldType is closed.
+    raise HTTPException(  # pragma: no cover
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"unknown field type {field_def.type!r}",
+    )
+
+
+def _is_set(field_def: TaxonomyFieldDef, value: Any) -> bool:
+    """Whether a parsed value should be stored / treated as filled.
+
+    For booleans, both True and False count as "set" — a boolean checkbox
+    always has a definite value. For everything else, ``None`` (blank input)
+    counts as not set; required-flag enforcement and persistence both gate on
+    this.
+    """
+    if field_def.type == FieldType.BOOLEAN:
+        return True
+    if value is None:
+        return False
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, str):
+        return value != ""
+    return True
+
+
+def _collect_custom_fields(
+    form: FormData, field_defs: list[TaxonomyFieldDef]
+) -> dict[int, Any]:
+    """Parse every active field def's submission and enforce ``required``.
+
+    Returns a dict keyed by ``field_def.id`` of parsed values (None for
+    blank-and-not-required, False for unchecked boolean). Raises 400 on the
+    first violation: bad type, out-of-options pick, or a required field that
+    wasn't filled. For boolean, "required" means the checkbox must be checked
+    (must be True) — see the route docstring for the rationale.
+    """
+    out: dict[int, Any] = {}
+    for fd in field_defs:
+        key = f"cf_{fd.key}"
+        raw: str | list[str] | None
+        if fd.type == FieldType.MULTISELECT:
+            raw = list(form.getlist(key))  # type: ignore[arg-type]
+        else:
+            raw_val = form.get(key)
+            raw = raw_val if isinstance(raw_val, str) else None
+        value = _parse_custom_field(fd, raw)
+        if fd.required:
+            if fd.type == FieldType.BOOLEAN:
+                if value is not True:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"{fd.name} must be checked",
+                    )
+            else:
+                if not _is_set(fd, value):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"{fd.name} is required",
+                    )
+        out[fd.id] = value
+    return out
+
+
+def _audit_friendly(field_def: TaxonomyFieldDef, value: Any) -> Any:
+    """Convert a parsed value into a JSON-serialisable shape for the audit log.
+
+    Decimals → str (preserves precision); dates → ISO; everything else passes
+    through (lists and primitives are already JSON-friendly).
+    """
+    if value is None:
+        return None
+    if field_def.type == FieldType.DECIMAL and isinstance(value, Decimal):
+        return str(value)
+    if field_def.type == FieldType.DATE and isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _persist_custom_field_values(
+    db: Session,
+    item_id: int,
+    field_defs: list[TaxonomyFieldDef],
+    values: dict[int, Any],
+) -> dict[str, Any]:
+    """Insert sparse ``ItemFieldValue`` rows; return audit dict (key → friendly value).
+
+    Skips rows for fields whose value is "not set" (blank text, None number,
+    empty multiselect). Boolean ``False`` IS persisted — it's a meaningful
+    answer.
+    """
+    audit: dict[str, Any] = {}
+    for fd in field_defs:
+        v = values.get(fd.id)
+        if not _is_set(fd, v):
+            continue
+        ifv = ItemFieldValue(item_id=item_id, field_def_id=fd.id)
+        col = _VALUE_COLUMN[fd.type]
+        setattr(ifv, col, v)
+        db.add(ifv)
+        audit[fd.key] = _audit_friendly(fd, v)
+    return audit
+
+
+def _load_custom_field_value_rows(
+    db: Session, item_id: int
+) -> dict[int, ItemFieldValue]:
+    """Existing ``ItemFieldValue`` rows for an item, keyed by ``field_def_id``."""
+    stmt = select(ItemFieldValue).where(ItemFieldValue.item_id == item_id)
+    return {row.field_def_id: row for row in db.execute(stmt).scalars().all()}
+
+
+def _stored_value(field_def: TaxonomyFieldDef, row: ItemFieldValue) -> Any:
+    """Extract the populated value-column off a stored row."""
+    return getattr(row, _VALUE_COLUMN[field_def.type])
+
+
+def _diff_and_apply_custom_fields(
+    db: Session,
+    item_id: int,
+    field_defs: list[TaxonomyFieldDef],
+    parsed: dict[int, Any],
+    existing: dict[int, ItemFieldValue],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply parsed custom-field updates and return sparse before/after dicts.
+
+    For each active field def: insert / update / delete the row to match the
+    parsed value. ``before`` and ``after`` are keyed by the field def's
+    ``key`` and contain *only* fields whose value changed (``before`` may be
+    ``None`` for newly-set fields; ``after`` may be ``None`` for cleared
+    ones). Caller folds these into the wider audit diff.
+    """
+    before: dict[str, Any] = {}
+    after: dict[str, Any] = {}
+    for fd in field_defs:
+        new_val = parsed.get(fd.id)
+        new_set = _is_set(fd, new_val)
+        old_row = existing.get(fd.id)
+        old_val = _stored_value(fd, old_row) if old_row is not None else None
+        old_set = old_row is not None
+        if new_set and not old_set:
+            # Insert a new row.
+            ifv = ItemFieldValue(item_id=item_id, field_def_id=fd.id)
+            setattr(ifv, _VALUE_COLUMN[fd.type], new_val)
+            db.add(ifv)
+            before[fd.key] = None
+            after[fd.key] = _audit_friendly(fd, new_val)
+        elif not new_set and old_set:
+            # Clear: delete the row.
+            assert old_row is not None
+            db.delete(old_row)
+            before[fd.key] = _audit_friendly(fd, old_val)
+            after[fd.key] = None
+        elif new_set and old_set:
+            # Both set — compare. Decimals compare correctly across str/Decimal
+            # representations so we don't need to normalise here.
+            if old_val != new_val:
+                assert old_row is not None
+                setattr(old_row, _VALUE_COLUMN[fd.type], new_val)
+                before[fd.key] = _audit_friendly(fd, old_val)
+                after[fd.key] = _audit_friendly(fd, new_val)
+        # else: both unset — nothing to do.
+    return before, after
+
+
+def _form_for_custom_fields(
+    field_defs: list[TaxonomyFieldDef],
+    rows: dict[int, ItemFieldValue],
+) -> dict[str, Any]:
+    """Render-shape the existing values for the form template.
+
+    Returns a dict keyed by field key. Values are stringified per type so the
+    template can drop them straight into ``value=`` attributes; multiselect
+    values stay as lists for the ``selected`` check.
+    """
+    out: dict[str, Any] = {}
+    for fd in field_defs:
+        row = rows.get(fd.id)
+        if row is None:
+            if fd.type == FieldType.MULTISELECT:
+                out[fd.key] = []
+            elif fd.type == FieldType.BOOLEAN:
+                out[fd.key] = False
+            else:
+                out[fd.key] = ""
+            continue
+        v = _stored_value(fd, row)
+        if fd.type == FieldType.MULTISELECT:
+            out[fd.key] = list(v) if v is not None else []
+        elif fd.type == FieldType.BOOLEAN:
+            out[fd.key] = bool(v)
+        elif fd.type == FieldType.DECIMAL and v is not None:
+            out[fd.key] = str(v)
+        elif fd.type == FieldType.DATE and v is not None:
+            out[fd.key] = v.isoformat()
+        else:
+            out[fd.key] = v if v is not None else ""
+    return out
+
+
 def _category_label(item: Item, db: Session) -> str:
     """Display label for an item's category: ``Parent / Leaf`` or ``Top``."""
     node = db.get(TaxonomyNode, item.taxonomy_node_id)
@@ -623,11 +969,15 @@ def new_item_form(
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     form = _form_for_item(None)
+    field_defs: list[TaxonomyFieldDef] = []
     if node_id is not None:
         # Pre-fill the category if the URL specified one; the form still
         # re-validates on POST so an archived/non-leaf id here just means the
-        # user sees their pick rejected.
+        # user sees their pick rejected. Also fetch the leaf's active field
+        # defs so the form renders custom inputs alongside the core fields.
         form["taxonomy_node_id"] = str(node_id)
+        field_defs = _get_active_field_defs(db, node_id)
+    form["custom"] = _form_for_custom_fields(field_defs, {})
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -642,12 +992,13 @@ def new_item_form(
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": True,
+            "field_defs": field_defs,
         },
     )
 
 
 @router.post("")
-def create_item(
+async def create_item(
     request: Request,
     sku: str = Form(""),
     name: str = Form(""),
@@ -682,6 +1033,14 @@ def create_item(
     _check_sku_unique(db, fields["sku"])
     _check_qr_unique(db, fields["qr_code"])
 
+    # Custom fields: read the full form (FastAPI caches it after the typed
+    # ``Form()`` parameters above, so this is free) and parse against the
+    # leaf's active schema. Required fields raise 400 here, preventing the
+    # item row from being inserted at all.
+    field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+    form = await request.form()
+    parsed_custom = _collect_custom_fields(form, field_defs)
+
     item = Item(
         sku=fields["sku"],
         name=fields["name"],
@@ -700,6 +1059,16 @@ def create_item(
     db.add(item)
     db.flush()
 
+    custom_audit = _persist_custom_field_values(
+        db, item.id, field_defs, parsed_custom
+    )
+
+    audit_after: dict[str, Any] = {
+        f: fields[f] for f in _FIELDS
+    } | {"current_qty": item.current_qty}
+    if custom_audit:
+        audit_after["custom_fields"] = custom_audit
+
     record_audit(
         db,
         actor=user,
@@ -707,7 +1076,7 @@ def create_item(
         entity_type="item",
         entity_id=item.id,
         before=None,
-        after={f: fields[f] for f in _FIELDS} | {"current_qty": item.current_qty},
+        after=audit_after,
     )
     db.commit()
     _flash(request, f"Item “{item.name}” created.")
@@ -733,13 +1102,17 @@ def edit_item_form(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
         )
+    field_defs = _get_active_field_defs(db, item.taxonomy_node_id)
+    existing_rows = _load_custom_field_value_rows(db, item.id)
+    form = _form_for_item(item)
+    form["custom"] = _form_for_custom_fields(field_defs, existing_rows)
     return templates.TemplateResponse(
         request,
         "items_form.html",
         {
             "current_user": _user,
             "item": item,
-            "form": _form_for_item(item),
+            "form": form,
             "title": f"Edit {item.name}",
             "action": f"/admin/items/{item.id}",
             "leaf_options": _leaf_options(db, current_id=item.taxonomy_node_id),
@@ -751,12 +1124,13 @@ def edit_item_form(
             ),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": _can_edit_thresholds(_user),
+            "field_defs": field_defs,
         },
     )
 
 
 @router.post("/{item_id}")
-def update_item(
+async def update_item(
     request: Request,
     item_id: int,
     sku: str = Form(""),
@@ -808,11 +1182,32 @@ def update_item(
     _check_sku_unique(db, fields["sku"], exclude_id=item.id)
     _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)
 
+    # Custom fields: parse against the *current* leaf's active schema.
+    # Existing rows for archived defs (or for defs that no longer belong to
+    # this leaf if the category just changed) are intentionally left alone —
+    # MISSION §3 "existing items keep their stored values". Required-flag
+    # validation runs here, so a 400 short-circuits before any item update
+    # writes.
+    field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+    form = await request.form()
+    parsed_custom = _collect_custom_fields(form, field_defs)
+    existing_rows = _load_custom_field_value_rows(db, item.id)
+
     diff = _diff(item, fields)
-    if diff is not None:
-        before, after = diff
-        for f in _FIELDS:
-            setattr(item, f, fields[f])
+    custom_before, custom_after = _diff_and_apply_custom_fields(
+        db, item.id, field_defs, parsed_custom, existing_rows
+    )
+    if diff is not None or custom_before:
+        if diff is not None:
+            before, after = diff
+            for f in _FIELDS:
+                setattr(item, f, fields[f])
+        else:
+            before = {}
+            after = {}
+        if custom_before:
+            before["custom_fields"] = custom_before
+            after["custom_fields"] = custom_after
         record_audit(
             db,
             actor=user,

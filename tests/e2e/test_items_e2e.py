@@ -98,22 +98,73 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
+    # Step 6b (I2): manager defines two field defs on the new category — a
+    # required text "Alloy" and an optional select "Karat" with three options.
+    # Items created under this category must satisfy "Alloy" or be rejected.
+    items_e2e_row = mgr_page.locator(
+        '[data-testid="taxonomy-row"]', has_text="Items E2E Cat"
+    )
+    items_e2e_row.get_by_test_id("open-fields").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/taxonomy/")
+        and u.endswith("/fields")
+    )
+    mgr_page.get_by_test_id("new-field-def").click()
+    mgr_page.wait_for_url(
+        lambda u: "/fields/new" in u and u.startswith(f"{app_server}/admin/taxonomy/")
+    )
+    mgr_page.get_by_test_id("field-def-name-input").fill("Alloy")
+    mgr_page.get_by_test_id("field-def-required-input").check()
+    mgr_page.get_by_test_id("field-def-submit").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/taxonomy/")
+        and u.endswith("/fields")
+    )
+
+    mgr_page.get_by_test_id("new-field-def").click()
+    mgr_page.wait_for_url(
+        lambda u: "/fields/new" in u and u.startswith(f"{app_server}/admin/taxonomy/")
+    )
+    mgr_page.get_by_test_id("field-def-name-input").fill("Karat")
+    mgr_page.get_by_test_id("field-def-type-input").select_option("select")
+    mgr_page.get_by_test_id("field-def-options-input").fill("9\n14\n18")
+    mgr_page.get_by_test_id("field-def-submit").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/taxonomy/")
+        and u.endswith("/fields")
+    )
+
+    # Capture the category id from the fields-list URL *before* navigating
+    # away — we'll use it to deep-link the new-item form.
+    fields_url = mgr_page.url
+    cat_id = fields_url.rstrip("/").split("/")[-2]
+
     # Step 7: Click into Items.
     mgr_page.get_by_test_id("nav-items").click()
     mgr_page.wait_for_url(lambda u: u.startswith(f"{app_server}/admin/items"))
     expect(mgr_page.get_by_test_id("items-empty")).to_be_visible()
 
-    # Step 8: Create an item under "Items E2E Cat".
-    mgr_page.get_by_test_id("new-item").click()
-    mgr_page.wait_for_url(f"{app_server}/admin/items/new")
+    # Step 8: Open the new-item form *with the category preselected* so the
+    # I2 custom-field inputs render. (The unfiltered new-item form doesn't
+    # know which category to render fields for — POSTing from there with a
+    # required field unfilled would 400.)
+    mgr_page.goto(f"{app_server}/admin/items/new?node_id={cat_id}")
+
     mgr_page.get_by_test_id("item-sku-input").fill("RM-E2E-001")
     mgr_page.get_by_test_id("item-name-input").fill("Silver wire (e2e)")
+    # Category is pre-selected via ?node_id, but verify it's correct.
     mgr_page.get_by_test_id("item-category-input").select_option(
         label="Items E2E Cat"
     )
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("100")
     mgr_page.get_by_test_id("item-reorder-qty-input").fill("500")
+
+    # I2: fill the custom fields the leaf inherits. "Alloy" required, "Karat"
+    # optional select.
+    mgr_page.get_by_test_id("item-cf-alloy-input").fill("silver")
+    mgr_page.get_by_test_id("item-cf-karat-input").select_option("18")
+
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
@@ -129,6 +180,20 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     expect(item_row.get_by_test_id("item-category")).to_have_text(
         "Items E2E Cat"
     )
+
+    # Step 8b (I2): re-open the edit form and verify the custom-field values
+    # round-tripped (form pre-fills from item_field_values rows).
+    item_row.get_by_test_id("edit-item").click()
+    mgr_page.wait_for_url(
+        lambda u: u.startswith(f"{app_server}/admin/items/")
+        and u.endswith("/edit")
+    )
+    expect(mgr_page.get_by_test_id("item-cf-alloy-input")).to_have_value(
+        "silver"
+    )
+    expect(mgr_page.get_by_test_id("item-cf-karat-input")).to_have_value("18")
+    # Bounce back to the list without changes.
+    mgr_page.goto(f"{app_server}/admin/items")
 
     # Step 9: Archive the item.
     item_row.get_by_test_id("archive-item").click()
