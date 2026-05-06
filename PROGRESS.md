@@ -27,8 +27,8 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current state
 
-**Iteration:** 1 (complete; commit pending)
-**Last commit:** f51cc78 — Initial scaffolding (slice F1 commit appended below)
+**Iteration:** 1 (complete)
+**Last commit:** 884cd46 — slice: F1 — Project skeleton and verification harness
 **Branch:** main
 **Tests:** harness established. `make check` green: ruff ✓, mypy ✓, pytest (2 unit + 1 e2e) ✓.
 **Definition-of-Done items ticked:** 0 / 12 (#10 and #11 partially advanced; not ticked — no auth, no real features yet)
@@ -162,7 +162,7 @@ From MISSION.md §7. Tick only when verified by tests AND a manual sanity-check.
 
 | Iter | Slice | Commit | Notes |
 |------|-------|--------|-------|
-| 1 | F1 — Project skeleton and verification harness | _(pending)_ | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
+| 1 | F1 — Project skeleton and verification harness | `884cd46` | FastAPI app + `/health`, SQLAlchemy + Alembic wired, pytest + Playwright harness, `make check` green. |
 
 ---
 
