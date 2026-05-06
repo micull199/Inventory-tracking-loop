@@ -877,7 +877,80 @@ No `archived_at` on any of the three. The engine maintains six invariants (docum
 
 ## Current slice
 
-*(none — slice SC1d just shipped, see Completed log; full self-critique below)*
+**SC2a — Camera surface scaffolding + feature-detect + graceful degradation (DoD #3 camera leg, first step; MISSION §3 "Barcode/QR workflow"):** smallest first sub-slice of SC2. Lays down the HTML scaffolding + a tiny inline JS feature-detect that SC2b will hook `html5-qrcode` into. **No external library loaded.** No new routes. No new modules. Pure template + tests change. After SC2a the scan-flow surfaces (`/scan` + `/scan/item/{id}`) carry an invisible-by-default "Use camera" button that becomes visible only when JS runs *and* `navigator.mediaDevices.getUserMedia` is supported; clicking it toggles a placeholder surface (empty viewfinder + an `aria-live` status region) that SC2b will fill.
+
+**Picked SC2a (camera scaffolding) over the full SC2 in one shot because:** SC2 has four genuinely independent concerns (scaffolding/permission UX, library integration, permission denial handling, e2e walk on mobile-viewport Playwright) that each deserve their own iteration. The smallest verifiable end-to-end step is "render the scaffolding + inline JS that progressively enhances when the browser supports the camera" — no library, no `getUserMedia` call, no Playwright. SC2b layers `html5-qrcode` on top; SC2c adds the e2e walk.
+
+**Design decisions (the open questions in the SC2 brainstorm — answered for SC2a + deferred for SC2b/c):**
+
+- **Q1 — Library choice (deferred to SC2b).** SC2a doesn't load any library. Scaffolding is library-agnostic; SC2b picks between `html5-qrcode` (~50KB, single-file, has both `Html5Qrcode` low-level + `Html5QrcodeScanner` canned-UI classes) / `jsQR` (decode-only, no UI, ~40KB) / `zxing-js/library` (multi-format ~200KB). Provisional pick is `html5-qrcode` for the canned UI. SRI hash pinning lives in SC2b.
+
+- **Q2 — Surface placement.** Camera disclosure (button + surface) goes between the existing `<form data-testid="scan-form">` block (keyboard input) and the `{% if resolved_item %}` block (resolved-item action picker). Both scan inputs (keyboard + camera) sit together at the top; resolved-item action picker stays below the `<hr>`. On a phone the page reads top-to-bottom: heading → instructions → keyboard input → camera disclosure → (if resolved) item identity + action forms. Pinned by ordering check in `test_camera_block_rendered_on_scan_page` (camera markup appears after `scan-form` and before any `scan-resolved-item` substring).
+
+- **Q3 — Permission UX (deferred to SC2b).** SC2a doesn't request `getUserMedia` — it only feature-detects whether `navigator.mediaDevices.getUserMedia` *exists*. SC2b adds the actual `getUserMedia` call on first toggle-open + permission-denial handling (write into the status region: "Camera permission denied; use the keyboard input above").
+
+- **Q4 — Graceful degradation.** Three states:
+  - **JS off**: server-rendered button + surface both have the `hidden` attribute → both invisible. Keyboard input + USB scanner workflow is unchanged. The user sees no "Use camera" affordance — fine, because the camera fundamentally needs JS.
+  - **JS on, no camera support** (older browser, insecure context, `navigator.mediaDevices` undefined): inline JS short-circuits before unhiding the button → button stays invisible. Same posture as JS off.
+  - **JS on, camera supported**: inline JS removes `hidden` from the button + wires the click handler. Click toggles `surface.hidden` + flips `aria-expanded` between `"true"` and `"false"`.
+
+- **Q5 — Inline JS vs separate static file.** Inline. ~15 LoC; no `/static/` mount exists yet (would need its own slice). Inline keeps SC2a self-contained. SC2b's external `<script src="...html5-qrcode...">` will be the first external script on the page (currently only htmx is loaded from CDN in `base.html`).
+
+- **Q6 — `<details>` / `<summary>` vs `<button>` + JS-driven reveal.** Pick `<button>`. `<details>` is no-JS-friendly but always renders the disclosure summary visibly, even on devices that can't actually use the camera. With a `<button hidden>` + JS feature-detect, devices that can't use the camera don't see the button at all — cleaner UX. Trade-off: the disclosure doesn't work without JS — acceptable because the camera fundamentally needs JS; there's no value in offering a "Use camera" affordance to a JS-off user. Pinned by `test_camera_toggle_button_starts_hidden`.
+
+- **Q7 — `aria-expanded` + `aria-controls` for accessibility.** Yes. Button initially `aria-expanded="false"` + `aria-controls="scan-camera-surface"`. Surface element has `id="scan-camera-surface"` so the controls relationship resolves. The inline JS toggles `aria-expanded` between `"true"` (when surface visible) and `"false"` (when hidden). Pinned by two render tests + the JS source asserts the toggle code is present.
+
+- **Q8 — Status / live-region for SC2b's progress messages.** Add `<p data-testid="scan-camera-status" aria-live="polite"></p>` inside the surface as part of SC2a's scaffolding. SC2b will write into it ("Camera permission denied", "No camera found", "Scanning…"). Empty in SC2a; pinned by `test_camera_status_region_has_aria_live_polite`.
+
+- **Q9 — Render the disclosure on archived-item pages?** Yes. `/scan/item/{id}` renders the camera disclosure at the top regardless of `resolved_item.archived_at`. The disclosure isn't tied to the resolved item — it's a scan input for the *next* code, the same as the keyboard form (which also stays visible on archived items per SC1b). Pinned by `test_camera_block_rendered_on_scan_item_page` (uses an archived item — actually no, uses a fresh item, but the rationale stands).
+
+- **Q10 — E2E walk for SC2a?** No. The toggle behaviour is JS-only with no scan output yet; an e2e walk would test JS plumbing, not the slice's purpose. SC2c (or a later sub-slice) adds the round-trip Playwright walk (mobile viewport, fake camera via Chromium flags, click toggle → simulate-scan → assert resolve → action picker).
+
+**Template changes** (`app/templates/scan.html`):
+- New `<section data-testid="scan-camera">` inserted between the existing `<form data-testid="scan-form">` block and the `{% if resolved_item %}` block. Structure:
+  ```html
+  <section data-testid="scan-camera">
+      <button type="button"
+              data-testid="scan-camera-toggle"
+              aria-expanded="false"
+              aria-controls="scan-camera-surface"
+              hidden>
+          Use camera
+      </button>
+      <section id="scan-camera-surface"
+               data-testid="scan-camera-surface"
+               hidden>
+          <p data-testid="scan-camera-status"
+             aria-live="polite"></p>
+          <div data-testid="scan-camera-viewfinder"></div>
+      </section>
+  </section>
+  ```
+- New inline `<script data-testid="scan-camera-script">` block at the bottom of the content block (so the elements exist when the script runs — no need for `DOMContentLoaded`). The IIFE feature-detects `navigator.mediaDevices.getUserMedia`, short-circuits if absent, otherwise unhides the button + wires a click handler that toggles `surface.hidden` and flips `aria-expanded`.
+
+**No route changes.** `app/scan.py` is unchanged. Both `GET /scan` and `GET /scan/item/{id}` render the same `scan.html` template, so the disclosure surfaces uniformly.
+
+**No new modules.** Pure template + tests change. mypy source-file count stays at 28.
+
+**Manual sanity check** (no human required): the integration tests pin the rendered HTML structure end-to-end (button + surface + status + viewfinder + script). The inline JS short-circuits when `navigator.mediaDevices` is absent (the TestClient isn't a browser, so JS doesn't run — but that's irrelevant; we're pinning the *server-rendered* HTML that SC2b's JS will hook into). SC2b's html5-qrcode integration will be the slice that exercises real JS behaviour; at that point a Playwright walk pins the click → start-camera → scan → resolve chain.
+
+**Tests** (target ~10 new in `tests/integration/test_scan_routes.py`, new class `TestScanCameraSurface`):
+1. `test_camera_block_rendered_on_scan_page` — GET `/scan` as Workshop → 200; assert `data-testid="scan-camera"` present + appears after `scan-form` and before any `scan-resolved-item` marker.
+2. `test_camera_block_rendered_on_scan_item_page` — GET `/scan/item/{id}` as Workshop → 200; assert same.
+3. `test_camera_toggle_button_starts_hidden` — assert the rendered `<button data-testid="scan-camera-toggle" ... hidden>` carries the `hidden` attribute (server-side).
+4. `test_camera_surface_starts_hidden` — assert the rendered `<section data-testid="scan-camera-surface" ... hidden>` carries `hidden`.
+5. `test_camera_toggle_has_aria_expanded_false` — initial `aria-expanded="false"`.
+6. `test_camera_toggle_aria_controls_scan_camera_surface` — button has `aria-controls="scan-camera-surface"` + the surface has `id="scan-camera-surface"`.
+7. `test_camera_status_region_has_aria_live_polite` — status element has `aria-live="polite"`.
+8. `test_camera_viewfinder_div_present` — `data-testid="scan-camera-viewfinder"` substring present.
+9. `test_inline_camera_script_present` — `<script data-testid="scan-camera-script">` block contains `navigator.mediaDevices` and `getUserMedia` markers (the feature-detect) + `addEventListener` (the toggle wiring).
+10. `test_no_external_scanning_lib_loaded_yet` — no `<script src=` referencing `html5-qrcode` / `qrcode-scanner` / `jsqr` / `zxing` (SC2a doesn't load any external scanning lib; SC2b will).
+
+**Repo health target**: ruff clean; mypy clean (28 source files unchanged); pytest unit + integration ~1687 passing (was 1677, +~10); Playwright 14 passing (no e2e walk this slice).
+
+**DoD impact**: SC2a doesn't tick DoD #3 — it lays down the scaffolding that SC2b/c build on. DoD #3 still requires SC2b (real camera scanning) + SC2c (e2e walk on mobile viewport).
+
+---
 
 <!-- SC1d plan (now shipped) — kept commented for audit-trail context only.
 
@@ -922,6 +995,26 @@ DoD #3 wording is "record an in, out, or adjustment movement in two interactions
 - **DoD impact**: SC1d does not tick a DoD on its own — it polishes DoD #3's desktop/USB leg (already substantively delivered by SC1c). DoD #3 still requires the camera leg (SC2) to tick.
 
 -->
+
+---
+
+**Self-critique notes (rolling) — SC2a:**
+
+- **DoD #3 still doesn't tick.** SC2a is scaffolding only — no library loaded, no `getUserMedia` call, no scan output. A user clicking the "Use camera" button on a JS+camera-capable device sees an empty surface (placeholder viewfinder + empty status region). Until SC2b lands the real scan path, this is a "preview" affordance with no value to a real user. Mitigation: SC2a + SC2b + SC2c are intended to ship as a coordinated trio; the slice plan and the Next-slice queue both pin SC2b as the immediate next iteration so the SC2a-only "click does nothing visible" state doesn't persist.
+- **Empty surface on toggle-open is a UX dead-end pre-SC2b.** The status region is empty in SC2a. SC2b will write into it ("Camera permission denied" / "Scanning…" / "No camera found"). For SC2a's snapshot of behaviour, a curious user who clicks the button sees nothing happen visually except the surface revealing itself. Acceptable v1 cost because the button is feature-detected — only devices with `getUserMedia` see it at all, and SC2b should land in the same release window.
+- **Inline `<script>` block bypasses any future CSP.** No Content Security Policy is currently configured in the app (verified — no `script-src` / `Content-Security-Policy` middleware anywhere in `app/`). If a future slice adds CSP with `script-src 'self'`, the inline block would break. SC2b will load an external CDN script for html5-qrcode — at that point the inline + external mix is the right time to think about CSP (likely pin a `'sha256-...'` hash for the inline block + `'self'` + `https://unpkg.com` for the externals). Documented; deferred.
+- **No `<noscript>` fallback message added.** A user with JS off gets no explicit "camera unavailable" message. Trade-off: the keyboard input above is still fully functional, the camera is an *enhancement* not a fallback, and a `<noscript>` would just say "camera needs JavaScript" — redundant with the existing keyboard form. Documented; not a regression (camera surface is invisible without JS, same as if it didn't exist).
+- **Feature-detect only checks `navigator.mediaDevices.getUserMedia` truthiness — not secure-context (HTTPS).** `getUserMedia` requires a secure context (HTTPS or `localhost`) on most browsers; calling it on `http://` non-localhost throws. SC2a's detect doesn't catch that case — it's only a "does the API exist" check. SC2b will discover the secure-context requirement at first call (the `getUserMedia` Promise rejects); the catch block will surface the message in the status region. Adding a secure-context check now (`window.isSecureContext` is the modern API) would be a 1-line addition, but without an actual `getUserMedia` call the check has no path to surface the message. Defer to SC2b. Documented.
+- **Click handler doesn't move focus to the surface on toggle-open.** A keyboard / screen-reader user clicking "Use camera" hears `aria-expanded` flip from `"false"` to `"true"` but focus stays on the button. SC2b's start-camera flow will likely move focus to the status region (or announce the camera-started message via `aria-live`). For SC2a's no-op-on-click behaviour, leaving focus on the button is the right default — moving focus to an empty surface would be confusing. Pinned implicitly by the absence of any `.focus()` call in the inline JS.
+- **Toggle button label is a generic "Use camera" — not "Scan with camera" or "Open camera scanner".** SC2b can refine the wording. The current label reads correctly with `aria-expanded` ("Use camera, button, expanded false"). Documented; flagged as a bikeshed-able copy decision for the SC2 brainstorm.
+- **`hidden` attribute hides via the user-agent default `display: none` — no project CSS for it.** Modern browsers all honour the `hidden` attribute; very old browsers without UA `display: none` for `hidden` would render the toggle + surface unstyled. Negligible v1 concern (no IE support claimed). Acceptable.
+- **The inline JS is server-rendered (and therefore *cached* by the browser as part of the HTML).** When SC2b lands and modifies the script, the cached HTML on a returning user's browser will still carry the SC2a-flavoured script for one request cycle. Acceptable — no breaking change between SC2a and SC2b's expected JS shape (SC2b's script extends the SC2a feature-detect; SC2a's IIFE is a no-op on completion).
+- **Camera disclosure renders on archived-item pages too.** A user landing on `/scan/item/{archived-id}` sees the "Use camera" button (when JS+camera supported). The disclosure isn't tied to the resolved item — it's a scan input for the *next* code, same posture as the keyboard input form (which also stays visible on archived items per SC1b). Documented; pinned indirectly by `test_camera_block_rendered_on_scan_item_page` (uses a non-archived item, but the template branch isn't gated on `archived_at`).
+- **Engine isolation preserved.** No routes change; no new modules; no new helpers. Source-file count stays at 28 (`mypy app` green). The existing tests all pass unchanged — the template extension is purely additive; the `data-testid="scan-camera-*"` markers don't collide with any existing test-ids (verified by searching `tests/` for `scan-camera` matches before this slice — zero hits).
+- **No e2e walk added.** Same posture as SC1d. The toggle behaviour is JS-only with no scan output; an e2e walk that drove the click and asserted the surface revealed would test JS plumbing, not the slice's purpose. SC2c is the right place for the round-trip walk on a mobile-viewport Playwright run with a fake camera (`--use-fake-device-for-media-stream` + `--use-fake-ui-for-media-stream` Chromium flags); at that point there's a unique full-flow story (click toggle → start camera → simulate-scan → resolve → action picker) worth pinning end-to-end.
+- **Maintainability**: ~24 LoC of HTML + ~15 LoC of inline JS in `app/templates/scan.html`. Vanilla browser APIs, no framework. The IIFE pattern is the standard one for "feature-detect + progressively enhance"; a competent dev can read the slice in under 5 minutes. **Boring is good.**
+- **No CSRF concern.** No POSTs added; the camera disclosure is pure client-side reveal. `getUserMedia` (SC2b) is also client-side — no network call. The first network call from the camera path lands when the JS lib resolves a QR and submits the existing `/scan/resolve` form (which already has CSRF protection via the existing form's hidden `csrf_token`).
+- **`scan-camera-toggle` styled with the existing `class="button"` from `base.html`.** No new CSS. The button visually matches the existing "Find item" submit button + the action-link buttons on the resolved-item picker — visual consistency is free.
 
 ---
 

@@ -24,6 +24,29 @@
         </p>
     </form>
 
+    {# SC2a: camera scaffolding. The toggle button + surface are server-rendered
+       hidden; an inline JS feature-detect (at the bottom of this template)
+       reveals the button only when ``navigator.mediaDevices.getUserMedia`` is
+       available. SC2b will load html5-qrcode and inject a viewfinder into
+       ``scan-camera-viewfinder``; SC2b also writes status messages
+       ("permission denied" / "scanning…") into ``scan-camera-status``. #}
+    <section data-testid="scan-camera">
+        <button type="button"
+                class="button"
+                data-testid="scan-camera-toggle"
+                aria-expanded="false"
+                aria-controls="scan-camera-surface"
+                hidden>
+            Use camera
+        </button>
+        <section id="scan-camera-surface"
+                 data-testid="scan-camera-surface"
+                 hidden>
+            <p data-testid="scan-camera-status" aria-live="polite"></p>
+            <div data-testid="scan-camera-viewfinder"></div>
+        </section>
+    </section>
+
     {% if resolved_item %}
         <hr>
         <section data-testid="scan-resolved-item"
@@ -180,4 +203,28 @@
             {% endif %}
         </section>
     {% endif %}
+
+    <script data-testid="scan-camera-script">
+    (function () {
+        var btn = document.querySelector(
+            '[data-testid="scan-camera-toggle"]'
+        );
+        var surface = document.querySelector(
+            '[data-testid="scan-camera-surface"]'
+        );
+        if (!btn || !surface) { return; }
+        if (
+            !navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia
+        ) {
+            return;
+        }
+        btn.hidden = false;
+        btn.addEventListener('click', function () {
+            var willHide = !surface.hidden;
+            surface.hidden = willHide;
+            btn.setAttribute('aria-expanded', String(!willHide));
+        });
+    })();
+    </script>
 {% endblock %}

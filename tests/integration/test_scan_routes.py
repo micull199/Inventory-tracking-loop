@@ -1119,3 +1119,190 @@ class TestScanItemPageInlineFormSubmission:
             follow_redirects=False,
         )
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# SC2a: camera surface scaffolding + feature-detect + graceful degradation
+# ---------------------------------------------------------------------------
+
+
+class TestScanCameraSurface:
+    """Pin the server-rendered scaffolding that SC2b's camera library will
+    hook into. SC2a renders a hidden ``<button data-testid="scan-camera-toggle">``
+    + a hidden ``<section data-testid="scan-camera-surface">`` + an inline
+    feature-detect script. The button only becomes visible (in a real
+    browser) when ``navigator.mediaDevices.getUserMedia`` is available;
+    SC2a's tests pin the *server-rendered* HTML, not the JS behaviour
+    (which has no scan output yet — SC2b will add it).
+    """
+
+    def test_camera_block_rendered_on_scan_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        assert resp.status_code == 200
+        assert 'data-testid="scan-camera"' in resp.text
+        # Camera disclosure sits between the keyboard form and any resolved
+        # item: pinned by relative ordering of the markers.
+        form_pos = resp.text.find('data-testid="scan-form"')
+        camera_pos = resp.text.find('data-testid="scan-camera"')
+        assert form_pos >= 0
+        assert camera_pos > form_pos
+
+    def test_camera_block_rendered_on_scan_item_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        item = _make_item(db_session, sku="CAM-1", qr_code="CAM-Q1")
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/scan/item/{item.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="scan-camera"' in resp.text
+        # On a resolved-item page the camera disclosure sits *above* the
+        # ``scan-resolved-item`` block, so a user can scan the next code
+        # without scrolling past the action picker.
+        camera_pos = resp.text.find('data-testid="scan-camera"')
+        resolved_pos = resp.text.find('data-testid="scan-resolved-item"')
+        assert camera_pos >= 0
+        assert resolved_pos >= 0
+        assert camera_pos < resolved_pos
+
+    def test_camera_toggle_button_starts_hidden(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The toggle button renders with the ``hidden`` HTML attribute so
+        no-JS / no-camera devices don't see a "Use camera" affordance they
+        can't action. Inline JS removes ``hidden`` only when the browser
+        supports ``getUserMedia``.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-toggle"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<button", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        assert tag_start >= 0
+        assert tag_end > tag_start
+        tag = resp.text[tag_start : tag_end + 1]
+        assert " hidden" in tag or tag.endswith("hidden>")
+
+    def test_camera_surface_starts_hidden(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-surface"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<section", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        assert tag_start >= 0
+        assert tag_end > tag_start
+        tag = resp.text[tag_start : tag_end + 1]
+        assert " hidden" in tag or tag.endswith("hidden>")
+
+    def test_camera_toggle_has_aria_expanded_false(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-toggle"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<button", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        tag = resp.text[tag_start : tag_end + 1]
+        assert 'aria-expanded="false"' in tag
+
+    def test_camera_toggle_aria_controls_scan_camera_surface(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Button declares it controls the surface via ``aria-controls``;
+        the surface element exposes the matching ``id`` so the relationship
+        resolves in screen readers.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        # Button: aria-controls
+        btn_marker = resp.text.find('data-testid="scan-camera-toggle"')
+        btn_start = resp.text.rfind("<button", 0, btn_marker)
+        btn_end = resp.text.find(">", btn_marker)
+        btn_tag = resp.text[btn_start : btn_end + 1]
+        assert 'aria-controls="scan-camera-surface"' in btn_tag
+        # Surface: id matches.
+        sec_marker = resp.text.find('data-testid="scan-camera-surface"')
+        sec_start = resp.text.rfind("<section", 0, sec_marker)
+        sec_end = resp.text.find(">", sec_marker)
+        sec_tag = resp.text[sec_start : sec_end + 1]
+        assert 'id="scan-camera-surface"' in sec_tag
+
+    def test_camera_status_region_has_aria_live_polite(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Status region carries ``aria-live="polite"`` so SC2b's
+        ``getUserMedia`` progress / error messages reach screen-reader
+        users without interrupting other content.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-status"')
+        assert marker >= 0
+        tag_start = resp.text.rfind("<p", 0, marker)
+        tag_end = resp.text.find(">", marker)
+        tag = resp.text[tag_start : tag_end + 1]
+        assert 'aria-live="polite"' in tag
+
+    def test_camera_viewfinder_div_present(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC2b will inject the html5-qrcode viewfinder into this
+        container; SC2a renders it empty as a placeholder hook.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        assert 'data-testid="scan-camera-viewfinder"' in resp.text
+
+    def test_inline_camera_script_present(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """The inline feature-detect script is server-rendered and
+        contains the ``navigator.mediaDevices.getUserMedia`` check (the
+        guard that keeps the toggle button hidden on devices without
+        camera support) and an ``addEventListener('click', ...)`` call
+        (the toggle wiring).
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        marker = resp.text.find('data-testid="scan-camera-script"')
+        assert marker >= 0
+        # Walk to the closing </script> for the script block body.
+        block_end = resp.text.find("</script>", marker)
+        assert block_end > marker
+        block = resp.text[marker:block_end]
+        assert "navigator.mediaDevices" in block
+        assert "getUserMedia" in block
+        assert "addEventListener" in block
+
+    def test_no_external_scanning_lib_loaded_yet(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SC2a deliberately doesn't load an external scanning library;
+        SC2b will pick one (provisional: html5-qrcode) and add the
+        ``<script src="...">`` with an SRI hash. This test pins the
+        boundary so an accidental SC2b-flavoured edit in SC2a is caught.
+        """
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get("/scan")
+        body = resp.text.lower()
+        assert "html5-qrcode" not in body
+        assert "qrcode-scanner" not in body
+        assert "jsqr" not in body
+        assert "zxing" not in body
