@@ -215,6 +215,13 @@
                 {{ item.unit }}
                 <em>(changes via stock movements)</em>
             </p>
+            {% if not item.archived_at %}
+                <p>
+                    <a href="/admin/items/{{ item.id }}/in" data-testid="stock-in-link">
+                        Stock in &rarr;
+                    </a>
+                </p>
+            {% endif %}
             {% if item.tracking_mode.value == "unique" %}
                 <p>
                     <a href="/admin/items/{{ item.id }}/units" data-testid="manage-units">
