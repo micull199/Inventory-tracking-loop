@@ -3072,3 +3072,241 @@ class TestCommittedBadgeOnCompleted:
         body = resp.text
         assert 'data-committed="true"' in body
         assert 'data-testid="stock-take-line-committed"' in body
+
+
+# ---------------------------------------------------------------------------
+# CSV export (R5c) — DoD #7 polish
+# ---------------------------------------------------------------------------
+
+
+class TestStockTakesListCsvRoleEnforcement:
+    """``?format=csv`` inherits the same role gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+
+
+class TestStockTakesListCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="stock_takes_open.csv"' in cd
+
+    def test_content_disposition_completed_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv&show=completed")
+        cd = resp.headers["content-disposition"]
+        assert 'filename="stock_takes_completed.csv"' in cd
+
+
+class TestStockTakesListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == (
+            "id,scope,scheduled_for,status,created_by_email,created_at\r\n"
+        )
+
+    def test_one_stock_take_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        node = _make_node(db_session, name="Tools")
+        st = _make_stock_take(
+            db_session,
+            scope_node=node,
+            scheduled_for=date(2026, 6, 1),
+            created_by=mgr,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(st.id)
+        assert cells[1] == "Category: Tools"
+        assert cells[2] == "2026-06-01"
+        assert cells[3] == "scheduled"
+        assert cells[4] == "m@x.test"
+        # cells[5] is the created_at ISO timestamp.
+        assert cells[5].startswith("20")
+
+    def test_show_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        scheduled = _make_stock_take(db_session, created_by=mgr)
+        completed = _make_stock_take(
+            db_session,
+            created_by=mgr,
+            started_at=datetime(2026, 5, 1, 9, tzinfo=UTC),
+            completed_at=datetime(2026, 5, 1, 11, tzinfo=UTC),
+        )
+        _login_as(client, mgr)
+
+        # Default (open) → only the scheduled row.
+        resp = client.get("/admin/stock-takes?format=csv")
+        body = resp.text
+        assert f"\r\n{scheduled.id}," in body
+        assert f"\r\n{completed.id}," not in body
+
+        # show=completed → only the completed row.
+        resp = client.get("/admin/stock-takes?format=csv&show=completed")
+        body = resp.text
+        assert f"\r\n{completed.id}," in body
+        assert f"\r\n{scheduled.id}," not in body
+
+    def test_newest_first_ordering_in_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        old = _make_stock_take(
+            db_session, created_by=mgr, scheduled_for=date(2026, 5, 1)
+        )
+        new = _make_stock_take(
+            db_session, created_by=mgr, scheduled_for=date(2026, 7, 1)
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/stock-takes?format=csv")
+        body = resp.text
+        new_pos = body.index(f"\r\n{new.id},")
+        old_pos = body.index(f"\r\n{old.id},")
+        assert new_pos < old_pos
+
+    def test_deleted_creator_renders_empty_email_cell(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        st = _make_stock_take(db_session, created_by=None)
+        _login_as(client, mgr)
+        resp = client.get("/admin/stock-takes?format=csv")
+        body = resp.text
+        # Find the row for our stock take and confirm the email cell is empty.
+        for line in body.split("\r\n"):
+            if line.startswith(f"{st.id},"):
+                cells = line.split(",")
+                assert cells[4] == ""
+                break
+        else:  # pragma: no cover - guard against missing row
+            raise AssertionError("expected stock-take row not in CSV body")
+
+
+class TestStockTakesListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="stock-takes-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestStockTakesListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _make_stock_take(db_session, created_by=mgr)
+        before = len(_audit_rows(db_session))
+        _login_as(client, mgr)
+        resp = client.get("/admin/stock-takes?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestStockTakesListCsvLink:
+    def test_html_renders_csv_link_with_active_show_open(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="stock-takes-list-csv-link"' in body
+        assert "format=csv" in body
+        assert "show=open" in body
+
+    def test_html_renders_csv_link_with_active_show_completed(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/stock-takes?show=completed")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="stock-takes-list-csv-link"' in body
+        # The href preserves the active show value.
+        assert "show=completed" in body

@@ -25,6 +25,13 @@
         </a>
     </nav>
 
+    <p>
+        <a href="/admin/stock-takes?format=csv&show={{ show }}"
+           data-testid="stock-takes-list-csv-link">
+            Download CSV
+        </a>
+    </p>
+
     {% if rows %}
         <table data-testid="stock-takes-table">
             <thead>

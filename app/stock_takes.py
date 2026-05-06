@@ -44,6 +44,7 @@ from app.cost_engine import (
     consume_fifo,
     record_receipt,
 )
+from app.csv_export import csv_response
 from app.db import get_session
 from app.models import (
     CostLayer,
@@ -601,19 +602,58 @@ def _list_rows(db: Session, *, show: str) -> list[dict[str, Any]]:
     return rows
 
 
+_STOCK_TAKES_LIST_CSV_HEADERS: list[str] = [
+    "id",
+    "scope",
+    "scheduled_for",
+    "status",
+    "created_by_email",
+    "created_at",
+]
+
+
+def _csv_rows_for_stock_takes_list(
+    rows: list[dict[str, Any]],
+) -> list[list[Any]]:
+    """Map view-shaped stock-take rows to CSV cell values.
+
+    The ``created_by_email`` cell is empty (``None`` → ``""`` via
+    ``csv_response``'s coercion) when the creator was deleted (FK
+    ``ON DELETE SET NULL``), matching the ``—`` rendered in HTML.
+    """
+    return [
+        [
+            r["id"],
+            r["scope_label"],
+            r["scheduled_for"],
+            r["status"],
+            r["created_by_email"],
+            r["created_at"],
+        ]
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("")
 def list_stock_takes(
     request: Request,
+    format: str = "",
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     show = _coerce_show(request.query_params.get("show"))
     rows = _list_rows(db, show=show)
+    if format == "csv":
+        return csv_response(
+            filename=f"stock_takes_{show}.csv",
+            headers=_STOCK_TAKES_LIST_CSV_HEADERS,
+            rows=_csv_rows_for_stock_takes_list(rows),
+        )
     return templates.TemplateResponse(
         request,
         "stock_takes_list.html",
