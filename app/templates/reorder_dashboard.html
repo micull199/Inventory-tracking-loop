@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Reorder — UC Inventory{% endblock %}
+{% block content %}
+    <h1 data-testid="reorder-heading">Reorder</h1>
+    <p>
+        Items where current quantity is at or below the reorder threshold.
+        Grouped by supplier so you can see what to order from whom.
+    </p>
+
+    {% if groups %}
+        {% for group in groups %}
+            <section
+                data-testid="reorder-group"
+                data-supplier-id="{{ group.supplier_id if group.supplier_id is not none else 'none' }}"
+                {% if group.supplier_archived %}data-supplier-archived="true"{% endif %}>
+                <h2 data-testid="reorder-supplier-name">{{ group.supplier_label }}</h2>
+                <table data-testid="reorder-table">
+                    <thead>
+                        <tr>
+                            <th>SKU</th>
+                            <th>Name</th>
+                            <th>Unit</th>
+                            <th>Current qty</th>
+                            <th>Threshold</th>
+                            <th>Suggested reorder</th>
+                            <th>Deficit</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in group.rows %}
+                            {% set i = r.item %}
+                            <tr data-testid="reorder-row" data-item-id="{{ i.id }}">
+                                <td data-testid="reorder-item-sku">{{ i.sku }}</td>
+                                <td data-testid="reorder-item-name">{{ i.name }}</td>
+                                <td>{{ i.unit }}</td>
+                                <td data-testid="reorder-current-qty">{{ r.current_qty }}</td>
+                                <td data-testid="reorder-threshold">{{ r.threshold }}</td>
+                                <td data-testid="reorder-reorder-qty">{{ r.reorder_qty }}</td>
+                                <td data-testid="reorder-deficit">{{ r.deficit }}</td>
+                                <td>
+                                    <a href="/admin/items/{{ i.id }}/detail"
+                                       data-testid="reorder-detail-link">Details</a>
+                                    &middot;
+                                    <a href="/admin/items/{{ i.id }}/in"
+                                       data-testid="reorder-stock-in-link">Stock in</a>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        {% endfor %}
+    {% else %}
+        <p data-testid="reorder-empty">
+            Nothing to reorder right now — every active item is above its threshold.
+        </p>
+    {% endif %}
+{% endblock %}

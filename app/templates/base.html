@@ -124,6 +124,15 @@
                         </a>
                     </li>
                 {% endif %}
+                {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
+                    <li>
+                        <a href="/admin/reorder"
+                           data-testid="nav-reorder"
+                           {% if request.url.path.startswith("/admin/reorder") %}aria-current="page"{% endif %}>
+                            Reorder
+                        </a>
+                    </li>
+                {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>
                         <a href="/admin/users"
