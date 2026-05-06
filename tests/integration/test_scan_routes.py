@@ -205,7 +205,8 @@ class TestScanGetRender:
         assert marker >= 0
         tag_start = resp.text.rfind("<input", 0, marker)
         tag_end = resp.text.find(">", marker)
-        assert tag_start >= 0 and tag_end > tag_start
+        assert tag_start >= 0
+        assert tag_end > tag_start
         tag = resp.text[tag_start : tag_end + 1]
         assert "autofocus" in tag
         assert 'name="code"' in tag
