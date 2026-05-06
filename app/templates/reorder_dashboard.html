@@ -14,6 +14,26 @@
                 data-supplier-id="{{ group.supplier_id if group.supplier_id is not none else 'none' }}"
                 {% if group.supplier_archived %}data-supplier-archived="true"{% endif %}>
                 <h2 data-testid="reorder-supplier-name">{{ group.supplier_label }}</h2>
+                {% if group.supplier_id is none %}
+                    <p data-testid="reorder-draft-po-blocked-no-supplier">
+                        <em>Assign an active supplier on the item before drafting a PO.</em>
+                    </p>
+                {% elif group.supplier_archived %}
+                    <p data-testid="reorder-draft-po-blocked-archived">
+                        <em>Supplier is archived — unarchive it or move items to an active supplier first.</em>
+                    </p>
+                {% else %}
+                    <form method="post" action="/admin/reorder/draft-po"
+                          data-testid="reorder-draft-po-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="supplier_id" value="{{ group.supplier_id }}">
+                        <button type="submit"
+                                class="button"
+                                data-testid="reorder-draft-po-button">
+                            Draft PO from this supplier
+                        </button>
+                    </form>
+                {% endif %}
                 <table data-testid="reorder-table">
                     <thead>
                         <tr>

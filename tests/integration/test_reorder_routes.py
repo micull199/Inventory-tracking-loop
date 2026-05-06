@@ -581,6 +581,86 @@ class TestArchivedSupplierSurfacing:
 # ---------------------------------------------------------------------------
 
 
+class TestReorderDraftPOButton:
+    """PO2: each active-supplier group renders a "Draft PO" button.
+
+    Archived-supplier groups and the synthetic "(no supplier)" group instead
+    render a blocked-note explaining why no button is shown.
+    """
+
+    def test_active_supplier_group_renders_draft_po_button(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        sup = _make_supplier(db_session, name="Bullion Co")
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="DP-1",
+            current_qty=Decimal("0"),
+            threshold=Decimal("5"),
+            supplier=sup,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        assert 'data-testid="reorder-draft-po-form"' in resp.text
+        assert 'data-testid="reorder-draft-po-button"' in resp.text
+        # Hidden supplier_id field present.
+        assert f'name="supplier_id" value="{sup.id}"' in resp.text
+        # CSRF token present.
+        assert 'name="csrf_token"' in resp.text
+
+    def test_archived_supplier_group_renders_blocked_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        sup = _make_supplier(db_session, name="Old Co", archived=True)
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="DP-2",
+            current_qty=Decimal("0"),
+            threshold=Decimal("5"),
+            supplier=sup,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        assert 'data-testid="reorder-draft-po-blocked-archived"' in resp.text
+        # No active button for the archived supplier group.
+        # (We slice to that group section to be precise — the dashboard might
+        # have other sections in other tests.)
+        archived_section_idx = resp.text.find('data-supplier-archived="true"')
+        # No "draft-po-button" should appear within ~500 chars of the section
+        # opener.
+        assert "reorder-draft-po-button" not in resp.text[
+            archived_section_idx : archived_section_idx + 1500
+        ]
+
+    def test_no_supplier_group_renders_blocked_note(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="DP-3",
+            current_qty=Decimal("0"),
+            threshold=Decimal("5"),
+            supplier=None,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        assert (
+            'data-testid="reorder-draft-po-blocked-no-supplier"' in resp.text
+        )
+        # No button under "(no supplier)".
+        idx = resp.text.find('data-supplier-id="none"')
+        assert "reorder-draft-po-button" not in resp.text[idx : idx + 1500]
+
+
 class TestZeroThreshold:
     def test_zero_threshold_zero_qty_is_included(
         self, client: TestClient, db_session: Session

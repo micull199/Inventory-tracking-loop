@@ -829,6 +829,146 @@ class CostLayerConsumption(Base):
         )
 
 
+class POStatus(enum.StrEnum):
+    """Lifecycle of a purchase order (PO2+).
+
+    ``draft``              — created from the reorder dashboard; editable.
+    ``sent``               — emailed to the supplier (PO4); locked from edits.
+    ``partially_received`` — at least one line received but more is expected.
+    ``received``           — every line fully received.
+    ``cancelled``          — abandoned without receiving.
+
+    PO2 only writes ``draft``. The other values exist on the enum so PO3 (PDF),
+    PO4 (send), and PO5 (receive) don't need to alter the column.
+    """
+
+    DRAFT = "draft"
+    SENT = "sent"
+    PARTIALLY_RECEIVED = "partially_received"
+    RECEIVED = "received"
+    CANCELLED = "cancelled"
+
+
+class PurchaseOrder(Base):
+    """A purchase order grouped by supplier (PO2+).
+
+    Created in ``draft`` from the reorder dashboard. The supplier is FK-required
+    (every PO is *to* one supplier). ``created_by`` is FK SET NULL: a user
+    deletion (rare; the system uses soft-deletes) shouldn't cascade through PO
+    history. ``expected_date`` and ``notes`` are user-editable in PO2b's edit
+    form; in PO2 they're stored but not yet writable from the UI (so they're
+    NULL on every PO created in this slice).
+
+    Status transitions in v1 (out of PO2 scope but documented for context):
+    - draft → sent (PO4 send-by-email path)
+    - sent → partially_received | received (PO5 receive path)
+    - partially_received → received
+    - draft | sent → cancelled
+    """
+
+    __tablename__ = "purchase_orders"
+    __table_args__ = (
+        Index("ix_purchase_orders_supplier_id", "supplier_id"),
+        Index("ix_purchase_orders_status", "status"),
+        Index("ix_purchase_orders_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    supplier_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("suppliers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[POStatus] = mapped_column(
+        SAEnum(
+            POStatus,
+            name="purchase_order_status",
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+        default=POStatus.DRAFT,
+        server_default=POStatus.DRAFT.value,
+    )
+    expected_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<PurchaseOrder id={self.id} supplier_id={self.supplier_id} "
+            f"status={self.status}>"
+        )
+
+
+class PurchaseOrderLine(Base):
+    """A single line item on a purchase order (PO2+).
+
+    ``qty_ordered`` is the user's intent at draft time (or auto-derived from
+    the item's ``reorder_qty`` / deficit when the PO is drafted from the
+    reorder dashboard). ``qty_received`` is incremented on PO5 receive (full
+    or partial); ``expected_unit_cost`` is the planning estimate, NULL when
+    no prior cost layer was available to copy from. The **actual** unit cost
+    of received stock is recorded on the cost layer at receipt (MISSION §3),
+    not on this row — keeping expected vs. actual cleanly split.
+
+    No ``archived_at`` — lines are part of the PO and don't soft-delete
+    independently. Cancelling a PO sets its status to ``cancelled``; the lines
+    stay attached.
+    """
+
+    __tablename__ = "purchase_order_lines"
+    __table_args__ = (
+        Index("ix_purchase_order_lines_po_id", "po_id"),
+        Index("ix_purchase_order_lines_item_id", "item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    po_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("purchase_orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    qty_ordered: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    qty_received: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    expected_unit_cost: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 4), nullable=True
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<PurchaseOrderLine id={self.id} po_id={self.po_id} "
+            f"item_id={self.item_id} qty_ordered={self.qty_ordered}>"
+        )
+
+
 class AuditLog(Base):
     """Append-only record of every state-changing action.
 

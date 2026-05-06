@@ -13,6 +13,7 @@ from app import item_units as item_units_module
 from app import items as items_module
 from app import locations as locations_module
 from app import movements as movements_module
+from app import purchase_orders as purchase_orders_module
 from app import reorder as reorder_module
 from app import suppliers as suppliers_module
 from app import taxonomy as taxonomy_module
@@ -50,6 +51,8 @@ app.include_router(items_module.router)
 app.include_router(item_units_module.router)
 app.include_router(movements_module.router)
 app.include_router(reorder_module.router)
+app.include_router(purchase_orders_module.draft_router)
+app.include_router(purchase_orders_module.list_router)
 
 
 @app.get("/health")

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}PO #{{ po.id }} — UC Inventory{% endblock %}
+{% block content %}
+    <h1 data-testid="po-detail-heading">Purchase order #{{ po.id }}</h1>
+    <p>
+        <span data-testid="po-status-badge"
+              data-status="{{ po.status.value }}">{{ po.status.value.replace("_", " ") }}</span>
+    </p>
+    <dl>
+        <dt>Supplier</dt>
+        <dd data-testid="po-supplier-name">{{ supplier.name if supplier else "?" }}</dd>
+        <dt>Created by</dt>
+        <dd data-testid="po-created-by">{{ created_by_email or "(deleted user)" }}</dd>
+        <dt>Created</dt>
+        <dd data-testid="po-created-at">{{ po.created_at.isoformat() }}</dd>
+        <dt>Expected date</dt>
+        <dd data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</dd>
+        <dt>Notes</dt>
+        <dd data-testid="po-notes">{{ po.notes or "—" }}</dd>
+    </dl>
+
+    <h2>Lines</h2>
+    {% if lines %}
+        <table data-testid="po-lines-table">
+            <thead>
+                <tr>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>Unit</th>
+                    <th>Qty ordered</th>
+                    <th>Qty received</th>
+                    <th>Expected unit cost</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in lines %}
+                    <tr data-testid="po-line-row"
+                        data-line-id="{{ line.id }}"
+                        data-item-id="{{ line.item_id }}">
+                        <td data-testid="po-line-sku">{{ line.item_sku }}</td>
+                        <td data-testid="po-line-name">{{ line.item_name }}</td>
+                        <td>{{ line.item_unit }}</td>
+                        <td data-testid="po-line-qty-ordered">{{ line.qty_ordered }}</td>
+                        <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
+                        <td data-testid="po-line-expected-unit-cost">
+                            {% if line.expected_unit_cost is not none %}
+                                {{ line.expected_unit_cost }}
+                            {% else %}
+                                <span data-testid="po-line-cost-empty">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="po-detail-no-lines">No lines on this PO.</p>
+    {% endif %}
+
+    <p>
+        <a href="/admin/purchase-orders" data-testid="po-back-to-list">← Back to all POs</a>
+        &middot;
+        <a href="/admin/reorder" data-testid="po-back-to-reorder">Reorder dashboard</a>
+    </p>
+{% endblock %}

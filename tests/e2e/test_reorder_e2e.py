@@ -183,7 +183,45 @@ def test_manager_reorder_dashboard_walk(
         "10.0000"
     )
 
-    # Step 6: Click the stock-in link on the below-threshold row → land on
+    # Step 6 (PO2): The supplier group renders a Draft PO button. Click it →
+    # creates a draft PO with one line for RD-LOW + redirects to the detail page.
+    expect(mgr_page.get_by_test_id("reorder-draft-po-button")).to_be_visible()
+    mgr_page.get_by_test_id("reorder-draft-po-button").click()
+    # The redirect target is /admin/purchase-orders/{po_id}; we don't know the
+    # id yet, so wait on the heading.
+    expect(mgr_page.get_by_test_id("po-detail-heading")).to_be_visible()
+    # One line — the RD-LOW item.
+    expect(mgr_page.locator('[data-testid="po-line-row"]')).to_have_count(1)
+    expect(mgr_page.get_by_test_id("po-supplier-name")).to_have_text(
+        "Reorder Bullion Co"
+    )
+    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("draft")
+    expect(mgr_page.get_by_test_id("po-line-sku")).to_have_text("RD-LOW")
+    expect(mgr_page.get_by_test_id("po-line-qty-ordered")).to_have_text(
+        "100.0000"
+    )
+    # RD-LOW had no prior cost layer when the PO was drafted → empty marker.
+    expect(mgr_page.get_by_test_id("po-line-cost-empty")).to_be_visible()
+
+    # Visit the PO list to confirm the new PO is there.
+    mgr_page.get_by_test_id("nav-pos").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders")
+    expect(mgr_page.locator('[data-testid="po-row"]')).to_have_count(1)
+    expect(mgr_page.get_by_test_id("po-row-supplier")).to_have_text(
+        "Reorder Bullion Co"
+    )
+    expect(mgr_page.get_by_test_id("po-row-line-count")).to_have_text("1")
+
+    # Back to reorder dashboard via nav.
+    mgr_page.get_by_test_id("nav-reorder").click()
+    mgr_page.wait_for_url(f"{app_server}/admin/reorder")
+    # The PO doesn't change current_qty, so RD-LOW is still listed.
+    low_reorder_row = mgr_page.locator(
+        '[data-testid="reorder-row"]', has_text="RD-LOW"
+    )
+    expect(low_reorder_row).to_be_visible()
+
+    # Step 7: Click the stock-in link on the below-threshold row → land on
     # /admin/items/{id}/in for that item.
     low_reorder_row.get_by_test_id("reorder-stock-in-link").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items/{low_id}/in")
@@ -195,14 +233,16 @@ def test_manager_reorder_dashboard_walk(
     mgr_page.wait_for_url(f"{app_server}/admin/items/{low_id}/in")
     expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text("25.0000")
 
-    # Step 7: Back to the reorder dashboard via the nav link → empty state.
+    # Step 8: Back to the reorder dashboard via the nav link → empty state.
     mgr_page.get_by_test_id("nav-reorder").click()
     mgr_page.wait_for_url(f"{app_server}/admin/reorder")
     expect(mgr_page.get_by_test_id("reorder-empty")).to_be_visible()
     expect(mgr_page.locator('[data-testid="reorder-row"]')).to_have_count(0)
 
-    # Step 8: Cleanup — archive both items + the supplier + the category so
-    # downstream walks see clean active lists.
+    # Step 9: Cleanup — archive both items + the supplier + the category so
+    # downstream walks see clean active lists. (The draft PO created in step 6
+    # remains in the test DB; that's fine — each test session uses a fresh
+    # schema, and there's no cancel-PO route in PO2 yet.)
     mgr_page.goto(f"{app_server}/admin/items")
     for sku in ("RD-LOW", "RD-OK"):
         row = mgr_page.locator('[data-testid="item-row"]', has_text=sku)

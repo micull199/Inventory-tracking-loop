@@ -128,8 +128,15 @@
                     <li>
                         <a href="/admin/reorder"
                            data-testid="nav-reorder"
-                           {% if request.url.path.startswith("/admin/reorder") %}aria-current="page"{% endif %}>
+                           {% if request.url.path == "/admin/reorder" or request.url.path.startswith("/admin/reorder/") %}aria-current="page"{% endif %}>
                             Reorder
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/admin/purchase-orders"
+                           data-testid="nav-pos"
+                           {% if request.url.path.startswith("/admin/purchase-orders") %}aria-current="page"{% endif %}>
+                            POs
                         </a>
                     </li>
                 {% endif %}

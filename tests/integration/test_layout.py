@@ -347,6 +347,68 @@ class TestRoleAwareNav:
         snippet = resp.text[resp.text.find('data-testid="nav-reorder"') :]
         assert 'aria-current="page"' in snippet[:300]
 
+    def test_manager_nav_includes_pos_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """PO2: Manager + Office + Admin can reach the purchase orders list."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/")
+        assert 'data-testid="nav-pos"' in resp.text
+        assert 'href="/admin/purchase-orders"' in resp.text
+
+    def test_office_nav_includes_pos_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/")
+        assert 'data-testid="nav-pos"' in resp.text
+
+    def test_admin_nav_includes_pos_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="nav-pos"' in resp.text
+
+    def test_workshop_nav_excludes_pos_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Workshop cannot manage POs (MISSION §3)."""
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/")
+        assert 'data-testid="nav-pos"' not in resp.text
+
+    def test_aria_current_on_pos_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/purchase-orders")
+        snippet = resp.text[resp.text.find('data-testid="nav-pos"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
+    def test_reorder_aria_current_does_not_match_pos_path(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Both /admin/reorder/draft-po (PO2's POST target) and
+        /admin/reorder share a prefix with the reorder page; the nav-reorder
+        link's aria-current was tightened in PO2 to match exactly the
+        dashboard path so a future GET endpoint under /admin/reorder/* doesn't
+        accidentally light up the same nav state."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        # Visiting the PO list page should set aria-current on nav-pos but
+        # NOT on nav-reorder.
+        resp = client.get("/admin/purchase-orders")
+        nav_reorder_snippet = resp.text[
+            resp.text.find('data-testid="nav-reorder"') :
+        ][:300]
+        assert 'aria-current="page"' not in nav_reorder_snippet
+
 
 class TestFlashRegion:
     def test_no_flash_renders_nothing(

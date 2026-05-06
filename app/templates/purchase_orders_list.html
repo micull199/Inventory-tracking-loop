@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Purchase orders — UC Inventory{% endblock %}
+{% block content %}
+    <h1 data-testid="po-list-heading">Purchase orders</h1>
+
+    <form method="get" action="/admin/purchase-orders" data-testid="po-status-filter-form">
+        <label>
+            Status:
+            <select name="status_filter" data-testid="po-status-filter" onchange="this.form.submit()">
+                {% for s in status_options %}
+                    <option value="{{ s }}" {% if s == status_filter %}selected{% endif %}>
+                        {{ s.replace("_", " ") }}
+                    </option>
+                {% endfor %}
+            </select>
+        </label>
+        <noscript><button type="submit">Filter</button></noscript>
+    </form>
+
+    {% if rows %}
+        <table data-testid="po-list-table">
+            <thead>
+                <tr>
+                    <th>PO #</th>
+                    <th>Supplier</th>
+                    <th>Status</th>
+                    <th>Lines</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                    <tr data-testid="po-row" data-po-id="{{ r.id }}">
+                        <td>{{ r.id }}</td>
+                        <td data-testid="po-row-supplier">
+                            {{ r.supplier_name }}{% if r.supplier_archived %} (archived){% endif %}
+                        </td>
+                        <td data-testid="po-row-status" data-status="{{ r.status }}">
+                            {{ r.status.replace("_", " ") }}
+                        </td>
+                        <td data-testid="po-row-line-count">{{ r.line_count }}</td>
+                        <td data-testid="po-row-created-at">{{ r.created_at.isoformat() }}</td>
+                        <td>
+                            <a href="/admin/purchase-orders/{{ r.id }}"
+                               data-testid="po-row-detail-link">View</a>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="po-list-empty">No purchase orders yet.</p>
+    {% endif %}
+
+    <p><a href="/admin/reorder" data-testid="po-list-reorder-link">Reorder dashboard →</a></p>
+{% endblock %}
