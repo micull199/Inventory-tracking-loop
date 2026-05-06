@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Items — UC Inventory{% endblock %}
+{% block content %}
+    <h1>Items</h1>
+    <p>The things UC tracks. Each item belongs to a leaf category. Quantities change via stock movements (coming soon); use this page to add new items and edit their fields.</p>
+
+    <p>
+        <a class="button" href="/admin/items/new" data-testid="new-item">New item</a>
+    </p>
+
+    <nav aria-label="Filter items" data-testid="items-tabs" style="margin-bottom: 1rem;">
+        <a href="/admin/items?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        |
+        <a href="/admin/items?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if rows %}
+        <table data-testid="items-table">
+            <thead>
+                <tr>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>Category</th>
+                    <th>Unit</th>
+                    <th>Tracking</th>
+                    <th>Qty</th>
+                    <th>Threshold</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                    {% set i = r.item %}
+                    <tr data-testid="item-row" data-item-id="{{ i.id }}">
+                        <td data-testid="item-sku">{{ i.sku }}</td>
+                        <td data-testid="item-name">{{ i.name }}</td>
+                        <td data-testid="item-category">{{ r.category_label }}</td>
+                        <td>{{ i.unit }}</td>
+                        <td>{{ i.tracking_mode.value }}</td>
+                        <td>{{ i.current_qty }}</td>
+                        <td>{{ i.reorder_threshold }}</td>
+                        <td>
+                            <a href="/admin/items/{{ i.id }}/edit" data-testid="edit-item">Edit</a>
+                            {% if i.archived_at is none %}
+                                <form method="post" action="/admin/items/{{ i.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-item">Archive</button>
+                                </form>
+                            {% else %}
+                                <form method="post" action="/admin/items/{{ i.id }}/unarchive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="unarchive-item">Unarchive</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p data-testid="items-empty">
+            {% if show == "archived" %}No archived items.{% else %}No items yet. Create your first one above.{% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

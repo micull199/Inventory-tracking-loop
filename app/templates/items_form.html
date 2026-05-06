@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/items">&larr; Back to items</a></p>
+    <h1>{{ title }}</h1>
+
+    <form method="post" action="{{ action }}" data-testid="item-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <p>
+            <label for="sku">SKU <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="sku" name="sku" required
+                   value="{{ form.sku }}"
+                   data-testid="item-sku-input"
+                   maxlength="64">
+        </p>
+
+        <p>
+            <label for="name">Name <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="name" name="name" required
+                   value="{{ form.name }}"
+                   data-testid="item-name-input"
+                   maxlength="255">
+        </p>
+
+        <p>
+            <label for="taxonomy_node_id">Category <span aria-hidden="true">*</span></label><br>
+            <select id="taxonomy_node_id" name="taxonomy_node_id" required
+                    data-testid="item-category-input">
+                <option value="">— pick a category —</option>
+                {% for opt in leaf_options %}
+                    {% if opt.is_group %}
+                        <option disabled>── {{ opt.label }} (pick a sub-category) ──</option>
+                    {% else %}
+                        <option value="{{ opt.id }}"
+                                {% if form.taxonomy_node_id == (opt.id | string) %}selected{% endif %}>
+                            {{ opt.label }}
+                        </option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label for="unit">Unit <span aria-hidden="true">*</span></label><br>
+            <input type="text" id="unit" name="unit" required
+                   value="{{ form.unit }}"
+                   data-testid="item-unit-input"
+                   maxlength="32"
+                   placeholder="e.g. g, ml, ea">
+        </p>
+
+        <p>
+            <label for="tracking_mode">Tracking mode</label><br>
+            <select id="tracking_mode" name="tracking_mode"
+                    data-testid="item-tracking-mode-input">
+                {% for m in tracking_modes %}
+                    <option value="{{ m }}"
+                            {% if form.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label>
+                <input type="checkbox" name="requires_checkout" value="true"
+                       data-testid="item-requires-checkout-input"
+                       {% if form.requires_checkout %}checked{% endif %}>
+                Requires check-out (tools, moulds)
+            </label>
+        </p>
+
+        <p>
+            <label for="reorder_threshold">Reorder threshold</label><br>
+            <input type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
+                   value="{{ form.reorder_threshold }}"
+                   data-testid="item-reorder-threshold-input">
+        </p>
+
+        <p>
+            <label for="reorder_qty">Reorder quantity</label><br>
+            <input type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
+                   value="{{ form.reorder_qty }}"
+                   data-testid="item-reorder-qty-input">
+        </p>
+
+        <p>
+            <label for="supplier_id">Supplier</label><br>
+            <select id="supplier_id" name="supplier_id" data-testid="item-supplier-input">
+                <option value="">— none —</option>
+                {% for s in supplier_options %}
+                    <option value="{{ s.id }}"
+                            {% if form.supplier_id == (s.id | string) %}selected{% endif %}>
+                        {{ s.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label for="location_id">Location</label><br>
+            <select id="location_id" name="location_id" data-testid="item-location-input">
+                <option value="">— none —</option>
+                {% for l in location_options %}
+                    <option value="{{ l.id }}"
+                            {% if form.location_id == (l.id | string) %}selected{% endif %}>
+                        {{ l.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </p>
+
+        <p>
+            <label for="qr_code">QR code</label><br>
+            <input type="text" id="qr_code" name="qr_code"
+                   value="{{ form.qr_code }}"
+                   data-testid="item-qr-input"
+                   maxlength="128">
+        </p>
+
+        <p>
+            <label for="notes">Notes</label><br>
+            <textarea id="notes" name="notes"
+                      data-testid="item-notes-input"
+                      maxlength="2000"
+                      rows="4" cols="50">{{ form.notes }}</textarea>
+        </p>
+
+        {% if item %}
+            <p>
+                <strong>Current quantity:</strong>
+                <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+                {{ item.unit }}
+                <em>(changes via stock movements)</em>
+            </p>
+        {% endif %}
+
+        <p>
+            <button type="submit" class="button" data-testid="item-submit">
+                {% if item %}Save changes{% else %}Create item{% endif %}
+            </button>
+        </p>
+    </form>
+{% endblock %}

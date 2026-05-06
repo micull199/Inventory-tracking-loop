@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -17,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     func,
     text,
@@ -326,6 +328,121 @@ class TaxonomyFieldDef(Base):
             f"<TaxonomyFieldDef id={self.id} node_id={self.node_id} "
             f"name={self.name!r} key={self.key!r} type={self.type} "
             f"required={self.required} archived={self.archived_at is not None}>"
+        )
+
+
+class TrackingMode(enum.StrEnum):
+    """How an item's stock is counted.
+
+    ``qty`` items are counted in bulk (e.g. a box of polishing compound, grams
+    of silver wire). ``unique`` items are tracked one record per physical unit
+    (e.g. a specific tool, a specific mould) — the per-unit rows live in the
+    ``item_units`` table introduced in I3. For I1a there is no behavioural
+    difference between the two modes; the column exists so the future ``qty``
+    vs. ``unique`` split has a stable handle.
+    """
+
+    QTY = "qty"
+    UNIQUE = "unique"
+
+
+class Item(Base):
+    """A thing UC tracks: a stockable material, consumable, tool, or mould.
+
+    Each item belongs to exactly one *leaf* taxonomy node (top-level with no
+    active children, or any sub-category). The leaf invariant is enforced in
+    the application layer (see ``app/items.py``); the FK column allows any
+    taxonomy node so the schema doesn't need to know about the leaf rule.
+
+    ``current_qty`` is updated only by stock-movement processing (M1+). For
+    I1a it is read-only on the form, defaulting to 0; the column is here so
+    M1's first ``in`` movement has somewhere to land without a follow-up
+    migration.
+
+    Soft-deletable; never hard-deleted. ``sku`` is unique across active *and*
+    archived rows by design — same reasoning as Supplier/Location names: SKUs
+    appear on PO history and audit rows, and re-using one would silently let a
+    user point at the wrong row. ``qr_code`` is partial-unique (only when set)
+    so multiple items can share NULL while every printed label is one-to-one.
+    """
+
+    __tablename__ = "items"
+    __table_args__ = (
+        Index("uq_items_sku", "sku", unique=True),
+        Index(
+            "uq_items_qr_code",
+            "qr_code",
+            unique=True,
+            sqlite_where=text("qr_code IS NOT NULL"),
+            postgresql_where=text("qr_code IS NOT NULL"),
+        ),
+        Index("ix_items_taxonomy_node_id", "taxonomy_node_id"),
+        Index("ix_items_supplier_id", "supplier_id"),
+        Index("ix_items_location_id", "location_id"),
+        Index("ix_items_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sku: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    taxonomy_node_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    tracking_mode: Mapped[TrackingMode] = mapped_column(
+        SAEnum(
+            TrackingMode,
+            name="item_tracking_mode",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+        default=TrackingMode.QTY,
+    )
+    requires_checkout: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    current_qty: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    reorder_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    reorder_qty: Mapped[Decimal] = mapped_column(
+        Numeric(14, 4), nullable=False, default=Decimal("0"), server_default=text("0")
+    )
+    supplier_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("suppliers.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    location_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("locations.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    qr_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<Item id={self.id} sku={self.sku!r} name={self.name!r} "
+            f"node_id={self.taxonomy_node_id} archived={self.archived_at is not None}>"
         )
 
 

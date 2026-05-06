@@ -114,6 +114,13 @@
                             Taxonomy
                         </a>
                     </li>
+                    <li>
+                        <a href="/admin/items"
+                           data-testid="nav-items"
+                           {% if request.url.path.startswith("/admin/items") %}aria-current="page"{% endif %}>
+                            Items
+                        </a>
+                    </li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
                     <li>

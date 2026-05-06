@@ -256,6 +256,49 @@ class TestRoleAwareNav:
         snippet = resp.text[resp.text.find('data-testid="nav-taxonomy"') :]
         assert 'aria-current="page"' in snippet[:300]
 
+    def test_manager_nav_includes_items_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/")
+        assert 'data-testid="nav-items"' in resp.text
+        assert 'href="/admin/items"' in resp.text
+
+    def test_admin_nav_includes_items_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/")
+        assert 'data-testid="nav-items"' in resp.text
+
+    def test_workshop_nav_excludes_items_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, worker)
+        resp = client.get("/")
+        assert 'data-testid="nav-items"' not in resp.text
+
+    def test_office_nav_excludes_items_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Items are Manager-owned in I1a; I1b will surface them to Office."""
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get("/")
+        assert 'data-testid="nav-items"' not in resp.text
+
+    def test_aria_current_on_items_page(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items")
+        snippet = resp.text[resp.text.find('data-testid="nav-items"') :]
+        assert 'aria-current="page"' in snippet[:300]
+
 
 class TestFlashRegion:
     def test_no_flash_renders_nothing(
