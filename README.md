@@ -233,7 +233,31 @@ Scanning is the high-velocity workshop path — a Workshop user holds a labelled
 
 ### Running a stock take
 
-_TODO_
+A stock take is a count session that reconciles what's physically on the shelf against the system's `current_qty` per item. Variances are committed as **adjustment movements** through the same FIFO cost engine the rest of the app uses — positive variances need a unit cost and create a new cost layer, negative variances consume the oldest layers first. Stock takes are owned by **Office** staff per MISSION §3 (Manager and Admin also pass; Workshop cannot run stock takes).
+
+Stock takes move through three derived statuses: **scheduled** (created but not started — scope frozen) → **in_progress** (started; per-line counts being entered) → **completed** (committed; lines marked `Yes` in the Committed column). Each transition writes one audit row (`stock_take.created`, `stock_take.started`, `stock_take.counted`, `stock_take.committed`).
+
+**Schedule a stock take.**
+
+1. Sign in as an Office user (Manager or Admin also work).
+2. Click **Stock takes** in the top nav (or visit `/admin/stock-takes`).
+3. Click **New stock take**.
+4. Pick a **Scope**: **All items**, a **Category** (a leaf or non-leaf taxonomy node — sub-categories are listed prefixed with `↳`), or a **Location**. Limiting the scope keeps a count session short; running an "all items" take only makes sense for a full quarterly count.
+5. Pick a **Scheduled for** date (required) — the day you intend to actually run it. Notes are optional (max 2000 chars).
+6. Click **Schedule stock take**. The list page reappears with the new row in the **Open** tab. Use the **Completed** tab to browse history.
+
+**Start counting.** From the stock takes list, click **View →** on the row, then **Start counting**. The system snapshots the current `current_qty` for every active in-scope item into `StockTakeLine` rows — that snapshot is the baseline for variance, so a count that lags real movements stays internally consistent.
+
+**Enter counts.** The detail page now renders a count table. For every line, type the **Counted qty** you actually counted on the shelf. As you save, the **Variance** column derives `counted − system` (negative = stock missing; positive = stock found). Counts are sparse — re-saving with the same value is a no-op (no audit row written for unchanged lines). The progress summary at the top shows **Counted / Uncounted / With variance** so you can pause and resume without losing your place.
+
+**Commit the variances.** Once you have at least one line with non-zero variance, the **Commit** form appears below the count table.
+
+- **Positive variance** lines (the shelf had more than the system): a **Unit cost** input is required (defaults to the most recent receipt price for the item). Each commit creates one `ADJUSTMENT` movement plus a new FIFO cost layer at the entered cost — same posture as a manual stock-in.
+- **Negative variance** lines (the shelf had less than the system): the unit cost cell shows `—`; the cost engine consumes the oldest open FIFO layers automatically and records each `cost_layer_consumption` for the audit trail.
+
+Click **Commit count**. If any negative-variance line would underflow available stock (e.g. the snapshot lagged a fast-moving item), the whole commit is rolled back atomically — no movements are written, no layers are touched, the stock take stays `in_progress`, and the page re-renders with the typed unit costs preserved and an error block naming the offending SKU. Fix the count (or unarchive missing units), then re-commit.
+
+**Audit trail.** Every committed adjustment carries the stock take's id (`stock_take_id` FK on `StockMovement`) so the audit view at `/admin/audit` lets a Manager trace any adjustment back to the count session that produced it. The `stock_take.committed` audit row also records the per-movement snapshot for later review.
 
 ### Generating and sending a purchase order
 

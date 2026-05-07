@@ -206,3 +206,65 @@ class TestPrintingQrAndScanningSection:
         # name the behaviour so a workshop user scanning an old physical
         # label isn't surprised when the action forms are missing.
         assert "archived" in body.lower()
+
+
+class TestRunningAStockTakeSection:
+    """DOC5 — pin the stock-take walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Running a stock take")
+        assert "_TODO_" not in body, "stock-take section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "stock-take section looks unsubstantial"
+
+    def test_section_references_admin_stock_takes_route(self) -> None:
+        body = _section("Running a stock take")
+        # ``/admin/stock-takes`` is the list route mounted by
+        # ``app/stock_takes.py`` (router prefix). A future rename of
+        # the prefix fails this test and forces a docs update on the
+        # same PR.
+        assert "/admin/stock-takes" in body
+
+    def test_section_names_office_role(self) -> None:
+        body = _section("Running a stock take")
+        # MISSION §3.103 assigns stock takes to Office. DoD #5 names
+        # Office explicitly. The section must name the role so a
+        # future Office reader knows the page is for them.
+        assert "Office" in body
+
+    def test_section_names_scope_options(self) -> None:
+        body = _section("Running a stock take")
+        # ``_VALID_SCOPE_TYPES`` in ``app/stock_takes.py`` lists three
+        # scope types: ``all`` / ``node`` / ``location``. The section
+        # must surface all three so a user reading the docs can decide
+        # which scope to schedule. Use the user-facing labels rather
+        # than the wire values.
+        assert "Category" in body
+        assert "Location" in body
+        assert "All items" in body
+
+    def test_section_names_variance_and_commit_chain(self) -> None:
+        body = _section("Running a stock take")
+        # The variance → commit chain is the load-bearing semantic of
+        # ST3. A future PR that drops "variance" or "commit" from the
+        # docs would silently confuse readers about how a count
+        # actually changes inventory.
+        assert "variance" in body.lower()
+        assert "commit" in body.lower()
+
+    def test_section_names_fifo_engine_wiring(self) -> None:
+        body = _section("Running a stock take")
+        # MISSION §3 (Stock takes) calls out: "Positive adjustments
+        # require a unit cost (defaults to the most recent layer's
+        # cost) and create a new cost layer. Negative adjustments
+        # consume layers FIFO." The section must name the FIFO posture
+        # so a user understands why positive + negative variances are
+        # priced differently.
+        assert "FIFO" in body
+
+    def test_section_names_audit_trail_link(self) -> None:
+        body = _section("Running a stock take")
+        # A1's audit view at ``/admin/audit`` is the cross-cutting
+        # surface where stock-take adjustments become traceable. The
+        # section must name the audit trail so a Manager investigating
+        # a movement knows how to find the parent stock take.
+        assert "audit" in body.lower()
