@@ -1012,7 +1012,14 @@ No `archived_at` on any of the three. The engine maintains six invariants (docum
 
 ## Current slice
 
-*(none — P4+DOC9 shipped this iteration. See Completed slices log row I80 for the canonical record. DoD #12 ticked.)*
+**CI1 — GitHub Actions CI workflow with Postgres service container (DoD #11 ticking step; MISSION §5 "SQLite for local/test, Postgres for cloud. The data layer must work with both via SQLAlchemy."):**
+
+Scope:
+- `.github/workflows/ci.yml`: CI workflow triggered on push/PR to main. One job (`ci`) on `ubuntu-latest`. Steps: checkout → install uv (astral-sh/setup-uv@v4) → `uv sync` → install Playwright chromium (`playwright install chromium --with-deps`) → `make lint` → `make typecheck` → `make test` (SQLite default) → `make test` with `TEST_DATABASE_URL=postgresql+psycopg://test:test@localhost/test_uc` (Postgres parity smoke) → `make e2e`. Postgres service container: `postgres:16`, `POSTGRES_USER=test`, `POSTGRES_PASSWORD=test`, `POSTGRES_DB=test_uc`, port 5432, health-cmd `pg_isready`.
+- `tests/integration/test_ci_config.py`: 14 forcing-function tests reading `.github/workflows/ci.yml` from disk and asserting structural properties: file exists, triggers on push + pull_request to main, uses ubuntu-latest, has postgres service with `pg_isready` health check, sets `TEST_DATABASE_URL` with `postgresql+psycopg` URL, installs uv, installs playwright, runs `make lint` / `make typecheck` / `make test` / `make e2e`.
+- No `app/` changes. mypy source-file count stays at 30.
+
+DoD impact: **DoD #11 ticked** once this slice is committed — the workflow file is the evidence that the test suite runs against Postgres in CI (CONFTEST1+CONFTEST2 already proved the code is dialect-agnostic; the YAML is the CI gate). The "runs locally on SQLite via `make dev`" half is already true (every iteration verifies it). After CI1: all 12/12 DoD items ticked.
 
 <!-- P4+DOC9 plan (now shipped) — preserved for slice context.
 
