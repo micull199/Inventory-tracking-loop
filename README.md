@@ -261,7 +261,28 @@ Click **Commit count**. If any negative-variance line would underflow available 
 
 ### Generating and sending a purchase order
 
-_TODO_
+A purchase order (PO) tells a supplier what UC wants to buy. POs move through five statuses: **draft** (editable, never sent) → **sent** (emailed to the supplier; lines locked except for receipt) → **partially_received** / **received** (some or all qty has arrived; see _Receiving stock against a PO_ below). A draft can also be **cancelled** instead of sent. POs are owned by **Office** staff per MISSION §3 (Manager and Admin also pass; Workshop cannot manage POs at all). Each transition writes one audit row — `purchase_order.created`, `purchase_order.updated`, `purchase_order.sent`, `purchase_order.cancelled`, `purchase_order.received` — and the audit view at `/admin/audit` lets a Manager trace any PO state change to the actor and timestamp.
+
+**Drafting a PO from the reorder dashboard.** The reorder dashboard at `/admin/reorder` lists every active item whose `current_qty` is at or below its **Reorder threshold** (set on the item form — see _Creating an item_ above), grouped by **preferred supplier**. This is the normal entry point for restocking: low-stock items already know which supplier they belong to.
+
+1. Sign in as an Office user (Manager or Admin also work).
+2. Click **Reorder** in the top nav (or visit `/admin/reorder`).
+3. Find the supplier group you want to order from. Each group renders its own table of low-stock items with **SKU**, **Current qty**, **Threshold**, **Suggested reorder** (the item's **Reorder quantity**), and **Deficit**.
+4. Click **Draft PO from this supplier**. The button posts to `/admin/reorder/draft-po` and redirects to the new draft's detail page (`/admin/purchase-orders/{id}`) with status **draft** and one PO line per low-stock item, each pre-filled with its **Reorder quantity** and **Expected unit cost** seeded from the item's most recent received cost (blank if the item has never been stocked-in).
+5. **Blocker prose.** A supplier group whose preferred supplier is missing renders _"Assign an active supplier on the item before drafting a PO."_ A supplier group whose supplier is archived renders _"Supplier is archived — unarchive it or move items to an active supplier first."_ Either case hides the **Draft PO** button.
+
+**Editing the draft.** On the detail page, while `status == draft`, an inline edit form lets you change the **Expected date** and **Notes**, and per-line **Qty ordered** and **Expected unit cost**. Click **Save changes** to commit edits. **Expected unit cost** is what gets emailed to the supplier and printed on the PDF; it is **not** authoritative for stock valuation. The **actual unit cost** is entered at receipt time (see _Receiving stock against a PO_ below) and is what creates the FIFO cost layer per MISSION §3.
+
+**Cancelling a draft.** Click **Cancel this draft** to flip the PO to **cancelled** without sending. Cancelled POs are read-only and do not appear in receivable filters; their lines are preserved for the audit trail.
+
+**Downloading the PDF.** Click **Download PDF** on the detail page (visible on every status except cancelled) to render the PO as a PDF — UC letterhead, supplier block, line items with SKU + qty + unit + expected unit cost, and a grand total.
+
+**Sending the PO.**
+
+1. Confirm the supplier has an **email** address on its record (see _Adding a new supplier_ above). If not, the detail page renders _"This supplier has no email address — add one on the supplier record before sending."_ instead of the **Send** button.
+2. Click **Send to supplier**. The app builds an email with the PO PDF attached, sends it via the configured `EMAIL_BACKEND` (`console` in dev — prints the message to stdout — or `smtp` in prod), flips `status` to **sent**, records `sent_at`, and writes the `purchase_order.sent` audit row. Re-clicking **Send** is rejected (a sent PO can't be re-sent — corrections go via Cancel + new draft, or wait for receipt).
+
+**Browsing past POs.** Click **Purchase orders** in the top nav (or visit `/admin/purchase-orders`) for a newest-first list filterable by status (`all` / `draft` / `sent` / `partially_received` / `received` / `cancelled`). The list view also exposes a **Download CSV** link that respects the active filter (`purchase_orders_{status_filter}.csv`).
 
 ### Receiving stock against a PO
 

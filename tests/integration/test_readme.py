@@ -268,3 +268,68 @@ class TestRunningAStockTakeSection:
         # section must name the audit trail so a Manager investigating
         # a movement knows how to find the parent stock take.
         assert "audit" in body.lower()
+
+
+class TestGeneratingPurchaseOrderSection:
+    """DOC6 — pin the PO send walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        assert "_TODO_" not in body, "PO section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "PO section looks unsubstantial"
+
+    def test_section_references_admin_purchase_orders_route(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # ``/admin/purchase-orders`` is the list-and-detail prefix
+        # mounted by ``app/purchase_orders.py``'s ``list_router``.
+        # A future rename of the prefix fails this test and forces
+        # a docs update on the same PR.
+        assert "/admin/purchase-orders" in body
+
+    def test_section_references_reorder_dashboard_route(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # ``/admin/reorder`` is the entry point for drafting POs
+        # from low-stock items. A future rename of the prefix
+        # (currently mounted by ``app/purchase_orders.py``'s
+        # ``draft_router``) fails this test.
+        assert "/admin/reorder" in body
+
+    def test_section_names_office_role(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # MISSION §3.103 assigns POs to Office. DoD #6 names Office
+        # explicitly. The section must name the role so a future
+        # Office reader knows the page is for them.
+        assert "Office" in body
+
+    def test_section_names_po_statuses(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # ``app/models.py::POStatus`` enumerates: draft, sent,
+        # partially_received, received, cancelled. The section must
+        # name all five so a future PR that renames a status
+        # (e.g. ``partially_received`` → ``partial``) fails the
+        # suite and forces a docs update on the same PR.
+        assert "draft" in body.lower()
+        assert "sent" in body.lower()
+        assert "partially_received" in body
+        assert "received" in body.lower()
+        assert "cancelled" in body.lower()
+
+    def test_section_names_expected_vs_actual_cost(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # MISSION §3 (Reorder and POs / Cost tracking) calls out the
+        # expected-vs-actual unit-cost split: expected is what gets
+        # emailed; actual is recorded at receipt time and is what
+        # creates the FIFO cost layer. The section must name both
+        # halves so a user understands why the PO line cost isn't
+        # authoritative for stock valuation.
+        lower = body.lower()
+        assert "expected unit cost" in lower
+        assert "actual unit cost" in lower
+
+    def test_section_names_pdf_and_email(self) -> None:
+        body = _section("Generating and sending a purchase order")
+        # PO3 (PDF) + PO4 (email) are the two send-side artefacts.
+        # The section must name both so a future PR that drops
+        # either modality from the docs fails the suite.
+        assert "PDF" in body
+        assert "email" in body.lower()
