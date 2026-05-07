@@ -426,6 +426,77 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
     }
 
 
+_DEFAULT_KEYS_TO_FORM: dict[str, str] = {
+    "unit": "unit",
+    "tracking_mode": "tracking_mode",
+    "reorder_threshold": "reorder_threshold",
+    "reorder_qty": "reorder_qty",
+    "supplier_id": "supplier_id",
+    "location_id": "location_id",
+}
+
+
+def _apply_leaf_defaults(
+    form: dict[str, Any], leaf: TaxonomyNode | None
+) -> None:
+    """Pre-fill ``form`` with the leaf's ``defaults_json`` (in-place).
+
+    Only writes a key when the form's current value is "empty" (str
+    "" / False) — never overwrites a user-typed value already in the form.
+    The leaf-defaults feature is a UX accelerator on the create flow; on
+    edit the existing item's stored values are authoritative and this
+    helper isn't called.
+
+    Decimal-valued defaults (reorder_threshold / reorder_qty) round-trip
+    via str() so the form input renders the canonical string the user
+    typed when defining the default. Bool ``requires_checkout`` only
+    populates from the dict when explicitly True (matches the audit-diff
+    convention in ``app.taxonomy``).
+    """
+    if leaf is None or not leaf.defaults_json:
+        return
+    src = leaf.defaults_json
+    for src_key, form_key in _DEFAULT_KEYS_TO_FORM.items():
+        if src_key not in src:
+            continue
+        if form.get(form_key) in ("", None):
+            form[form_key] = str(src[src_key])
+    if src.get("requires_checkout") is True and not form.get("requires_checkout"):
+        form["requires_checkout"] = True
+
+
+def _generate_sku(db: Session, leaf: TaxonomyNode | None) -> str:
+    """Generate a unique, predictable SKU.
+
+    Format: ``<PREFIX>-<NNNN>`` where ``PREFIX`` is the first 3 alphanumeric
+    chars of the leaf's name uppercased (or ``ITM`` if no leaf is supplied
+    or the name yields no usable chars), and ``NNNN`` is a 4-digit
+    zero-padded sequence — the next number not already taken under that
+    prefix.
+
+    Linear-scan collision check is fine for v1 volumes (a small workshop's
+    item count is in the hundreds, not millions). If this ever needs to
+    scale, replace the loop with ``MAX(SUBSTR(sku, ...))`` plus a single
+    increment — the format keeps that path open.
+    """
+    if leaf is not None:
+        candidate_prefix = "".join(
+            ch for ch in leaf.name.upper() if ch.isalnum()
+        )[:3]
+        prefix = candidate_prefix or "ITM"
+    else:
+        prefix = "ITM"
+    n = 1
+    while True:
+        sku = f"{prefix}-{n:04d}"
+        if (
+            db.execute(select(Item.id).where(Item.sku == sku)).first()
+            is None
+        ):
+            return sku
+        n += 1
+
+
 def _leaf_options(
     db: Session, *, current_id: int | None = None
 ) -> list[dict[str, Any]]:
@@ -1056,13 +1127,17 @@ def new_item_form(
 ) -> HTMLResponse:
     form = _form_for_item(None)
     field_defs: list[TaxonomyFieldDef] = []
+    leaf: TaxonomyNode | None = None
     if node_id is not None:
         # Pre-fill the category if the URL specified one; the form still
         # re-validates on POST so an archived/non-leaf id here just means the
         # user sees their pick rejected. Also fetch the leaf's active field
-        # defs so the form renders custom inputs alongside the core fields.
+        # defs so the form renders custom inputs alongside the core fields,
+        # and apply any per-leaf defaults the manager configured.
         form["taxonomy_node_id"] = str(node_id)
         field_defs = _get_active_field_defs(db, node_id)
+        leaf = db.get(TaxonomyNode, node_id)
+        _apply_leaf_defaults(form, leaf)
     form["custom"] = _form_for_custom_fields(field_defs, {})
     return templates.TemplateResponse(
         request,
@@ -1088,26 +1163,32 @@ def new_item_form(
 def custom_fields_fragment(
     request: Request,
     taxonomy_node_id: str = "",
+    include_defaults: str = "",
     _user: User = Depends(
         require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
     ),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: custom-field inputs for the leaf identified by the picked
-    category.
+    category, plus optional out-of-band swap of per-leaf core defaults.
 
     Wired to the items form's ``<select name="taxonomy_node_id">`` via
     ``hx-get`` / ``hx-trigger="change"``. HTMX automatically includes the
     triggering element's ``name=value`` in the request query string, so this
-    route accepts ``taxonomy_node_id`` (matching the form field) rather than
-    a renamed ``node_id``. Returns the same partial the full form renders,
-    so server-side rendering on initial load and HTMX swap on category
-    change share one source of truth.
+    route accepts ``taxonomy_node_id`` (matching the form field).
 
-    Empty / unparseable / archived / non-leaf ids resolve to an empty body
-    (the partial renders nothing when ``field_defs`` is empty), which is
-    what the user should see — no fields to fill in. The POST handler
-    re-validates on submit, so a hostile id here can't sneak past.
+    ``include_defaults=1`` (set via ``hx-vals`` on the create form, omitted
+    on edit) tells the route to also emit ``hx-swap-oob`` elements for the
+    7 core item fields (unit / tracking_mode / requires_checkout /
+    reorder_threshold / reorder_qty / supplier_id / location_id) populated
+    from the leaf's ``defaults_json``. The edit form omits the flag so a
+    Manager re-classifying an item doesn't silently lose the existing
+    item's typed values.
+
+    Empty / unparseable / archived / non-leaf ids render the cf-container
+    empty and emit no defaults — the user sees no inputs (nothing to fill
+    in for an unselected category). The POST handler re-validates on
+    submit, so a hostile id here can't sneak past.
 
     Same role gating as the edit form (Manager + Office + Workshop). Office
     and Workshop see the form read-only, but ``hx-trigger="change"`` won't
@@ -1116,13 +1197,29 @@ def custom_fields_fragment(
     403 on the fragment.
     """
     field_defs: list[TaxonomyFieldDef] = []
+    leaf: TaxonomyNode | None = None
     try:
         parsed_id = int(taxonomy_node_id)
     except (TypeError, ValueError):
         parsed_id = 0
     if parsed_id > 0:
         field_defs = _get_active_field_defs(db, parsed_id)
-    form = {"custom": _form_for_custom_fields(field_defs, {})}
+        leaf = db.get(TaxonomyNode, parsed_id)
+    form = _form_for_item(None)
+    # Compute the set of keys to OOB-swap. Only emit a swap for keys the
+    # leaf actually sets a default for — otherwise an empty default would
+    # wipe out a value the user already typed (HTMX swap fires async, after
+    # the form is partially filled, so non-defaults must be left alone).
+    oob_keys: set[str] = set()
+    if include_defaults == "1":
+        _apply_leaf_defaults(form, leaf)
+        if leaf is not None and leaf.defaults_json:
+            oob_keys = {
+                k for k in _DEFAULT_KEYS_TO_FORM if k in leaf.defaults_json
+            }
+            if leaf.defaults_json.get("requires_checkout") is True:
+                oob_keys.add("requires_checkout")
+    form["custom"] = _form_for_custom_fields(field_defs, {})
     return templates.TemplateResponse(
         request,
         "items_form_custom_fields.html",
@@ -1130,6 +1227,10 @@ def custom_fields_fragment(
             "field_defs": field_defs,
             "form": form,
             "ro": False,
+            "oob_keys": oob_keys,
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
         },
     )
 
@@ -1152,6 +1253,16 @@ async def create_item(
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
+    # Auto-generate SKU when the form omits it. The form input was removed
+    # in the items-form-simplification slice; explicit POSTs (tests, the
+    # public API surface) can still pass their own SKU and override.
+    if not (sku or "").strip():
+        try:
+            leaf_int = int((taxonomy_node_id or "").strip())
+        except ValueError:
+            leaf_int = 0
+        leaf = db.get(TaxonomyNode, leaf_int) if leaf_int > 0 else None
+        sku = _generate_sku(db, leaf)
     fields = _normalise(
         db,
         sku=sku,

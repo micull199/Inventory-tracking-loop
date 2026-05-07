@@ -38,6 +38,7 @@ sibling role, not a subset, per MISSION §3 ("Office cannot manage the taxonomy"
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -50,7 +51,7 @@ from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.field_defs import has_active_field_defs
-from app.models import Role, TaxonomyNode, User
+from app.models import Location, Role, Supplier, TaxonomyNode, TrackingMode, User
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
@@ -63,7 +64,24 @@ router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
 # Fields tracked in audit diffs. ``parent_id`` is intentionally omitted in S3
 # because the routes never let the user change it — every node here is
 # top-level. When S4 lands, parent_id becomes part of the diff vocabulary.
-_FIELDS: tuple[str, ...] = ("name", "sort_order")
+# ``defaults_json`` is a dict whose change is captured atomically — the
+# audit row carries the whole before/after blob, which is the right grain
+# for "Manager set per-category defaults" given the dict is small.
+_FIELDS: tuple[str, ...] = ("name", "sort_order", "defaults_json")
+
+# Keys recognised inside ``defaults_json``. Matches the items create form's
+# field names so the values can be substituted verbatim into the form
+# context. Kept narrow on purpose — adding a key here only makes sense if
+# the items form learns to consume it.
+_DEFAULT_KEYS: tuple[str, ...] = (
+    "unit",
+    "tracking_mode",
+    "requires_checkout",
+    "reorder_threshold",
+    "reorder_qty",
+    "supplier_id",
+    "location_id",
+)
 
 # Step used when the user creates a top-level node without specifying
 # ``sort_order``. Stepping by 10 leaves room to insert a new node between two
@@ -87,6 +105,152 @@ def _normalise(name: str, sort_order: str) -> dict[str, Any]:
                 detail="sort_order must be a whole number",
             ) from exc
     return {"name": clean_name, "sort_order": sort_value}
+
+
+def _coerce_defaults(
+    db: Session,
+    *,
+    default_unit: str,
+    default_tracking_mode: str,
+    default_requires_checkout: bool,
+    default_reorder_threshold: str,
+    default_reorder_qty: str,
+    default_supplier_id: str,
+    default_location_id: str,
+) -> dict[str, Any] | None:
+    """Validate raw form values for the per-category defaults block.
+
+    Returns a dict containing only the keys the user actually set, or
+    ``None`` if every field is blank (which means "no defaults" and stores
+    SQL NULL rather than ``{}``). 400s on type / FK / range failures so the
+    user gets a clear error rather than a silent drop on save.
+
+    ``default_requires_checkout`` is a checkbox — always present (False when
+    unchecked). It only lands in the dict when True so the absence-vs-False
+    distinction (defaults silent vs explicit "off") doesn't pollute the
+    audit diff.
+    """
+    out: dict[str, Any] = {}
+
+    unit = (default_unit or "").strip()
+    if unit:
+        if len(unit) > 32:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default unit too long (max 32 chars)",
+            )
+        out["unit"] = unit
+
+    tm = (default_tracking_mode or "").strip()
+    if tm:
+        if tm not in {m.value for m in TrackingMode}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid default tracking_mode",
+            )
+        out["tracking_mode"] = tm
+
+    if default_requires_checkout:
+        out["requires_checkout"] = True
+
+    for key, raw in (
+        ("reorder_threshold", default_reorder_threshold),
+        ("reorder_qty", default_reorder_qty),
+    ):
+        v = (raw or "").strip()
+        if v:
+            try:
+                d = Decimal(v)
+            except InvalidOperation as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"default {key} must be a number",
+                ) from exc
+            if d < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"default {key} cannot be negative",
+                )
+            # Store as the canonical Decimal string so round-trips don't drift
+            # (Decimal("1.0") preserves trailing zero; float would lose it).
+            out[key] = str(d)
+
+    sid = (default_supplier_id or "").strip()
+    if sid:
+        try:
+            sid_int = int(sid)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default supplier_id must be an integer",
+            ) from exc
+        sup = db.get(Supplier, sid_int)
+        if sup is None or sup.archived_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default supplier not found or archived",
+            )
+        out["supplier_id"] = sid_int
+
+    lid = (default_location_id or "").strip()
+    if lid:
+        try:
+            lid_int = int(lid)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default location_id must be an integer",
+            ) from exc
+        loc = db.get(Location, lid_int)
+        if loc is None or loc.archived_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="default location not found or archived",
+            )
+        out["location_id"] = lid_int
+
+    return out if out else None
+
+
+def _defaults_form_view(
+    defaults: dict[str, Any] | None,
+) -> dict[str, str | bool]:
+    """Render-shape the stored defaults dict for the form template.
+
+    Each key gets a stable str / bool the template can drop into the form
+    inputs (``value=`` / ``selected`` / ``checked``). Missing keys render as
+    empty strings (or False) so the inputs render blank.
+    """
+    src = defaults or {}
+    return {
+        "unit": str(src.get("unit", "")),
+        "tracking_mode": str(src.get("tracking_mode", "")),
+        "requires_checkout": bool(src.get("requires_checkout", False)),
+        "reorder_threshold": str(src.get("reorder_threshold", "")),
+        "reorder_qty": str(src.get("reorder_qty", "")),
+        "supplier_id": str(src.get("supplier_id", "")),
+        "location_id": str(src.get("location_id", "")),
+    }
+
+
+def _supplier_options(db: Session) -> list[dict[str, Any]]:
+    """Active suppliers sorted by name, for the defaults `<select>`."""
+    rows = db.execute(
+        select(Supplier)
+        .where(Supplier.archived_at.is_(None))
+        .order_by(Supplier.name)
+    ).scalars().all()
+    return [{"id": s.id, "label": s.name} for s in rows]
+
+
+def _location_options(db: Session) -> list[dict[str, Any]]:
+    """Active locations sorted by name, for the defaults `<select>`."""
+    rows = db.execute(
+        select(Location)
+        .where(Location.archived_at.is_(None))
+        .order_by(Location.name)
+    ).scalars().all()
+    return [{"id": loc.id, "label": loc.name} for loc in rows]
 
 
 def _validate_name(name: str) -> str:
@@ -313,6 +477,7 @@ def list_taxonomy(
 def new_taxonomy_form(
     request: Request,
     _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
@@ -320,9 +485,16 @@ def new_taxonomy_form(
         {
             "current_user": _user,
             "node": None,
-            "form": {"name": "", "sort_order": ""},
+            "form": {
+                "name": "",
+                "sort_order": "",
+                "defaults": _defaults_form_view(None),
+            },
             "title": "New category",
             "action": "/admin/taxonomy",
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
         },
     )
 
@@ -332,6 +504,13 @@ def create_taxonomy(
     request: Request,
     name: str = Form(""),
     sort_order: str = Form(""),
+    default_unit: str = Form(""),
+    default_tracking_mode: str = Form(""),
+    default_requires_checkout: bool = Form(False),
+    default_reorder_threshold: str = Form(""),
+    default_reorder_qty: str = Form(""),
+    default_supplier_id: str = Form(""),
+    default_location_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -340,11 +519,22 @@ def create_taxonomy(
     _check_top_name_unique(db, fields["name"])
     if fields["sort_order"] is None:
         fields["sort_order"] = _next_top_sort_order(db)
+    fields["defaults_json"] = _coerce_defaults(
+        db,
+        default_unit=default_unit,
+        default_tracking_mode=default_tracking_mode,
+        default_requires_checkout=default_requires_checkout,
+        default_reorder_threshold=default_reorder_threshold,
+        default_reorder_qty=default_reorder_qty,
+        default_supplier_id=default_supplier_id,
+        default_location_id=default_location_id,
+    )
 
     node = TaxonomyNode(
         parent_id=None,
         name=fields["name"],
         sort_order=fields["sort_order"],
+        defaults_json=fields["defaults_json"],
     )
     db.add(node)
     db.flush()
@@ -360,6 +550,7 @@ def create_taxonomy(
             "name": node.name,
             "sort_order": node.sort_order,
             "parent_id": None,
+            "defaults_json": node.defaults_json,
         },
     )
     db.commit()
@@ -397,9 +588,13 @@ def edit_taxonomy_form(
             "form": {
                 "name": node.name,
                 "sort_order": str(node.sort_order),
+                "defaults": _defaults_form_view(node.defaults_json),
             },
             "title": f"Edit {node.name}",
             "action": f"/admin/taxonomy/{node.id}",
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
         },
     )
 
@@ -410,6 +605,13 @@ def update_taxonomy(
     node_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    default_unit: str = Form(""),
+    default_tracking_mode: str = Form(""),
+    default_requires_checkout: bool = Form(False),
+    default_reorder_threshold: str = Form(""),
+    default_reorder_qty: str = Form(""),
+    default_supplier_id: str = Form(""),
+    default_location_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -427,6 +629,16 @@ def update_taxonomy(
         # this the field would silently snap back to whatever default the form
         # carried (zero).
         fields["sort_order"] = node.sort_order
+    fields["defaults_json"] = _coerce_defaults(
+        db,
+        default_unit=default_unit,
+        default_tracking_mode=default_tracking_mode,
+        default_requires_checkout=default_requires_checkout,
+        default_reorder_threshold=default_reorder_threshold,
+        default_reorder_qty=default_reorder_qty,
+        default_supplier_id=default_supplier_id,
+        default_location_id=default_location_id,
+    )
 
     diff = _diff(node, fields)
     if diff is not None:
@@ -644,10 +856,17 @@ def new_sub_category_form(
             "current_user": _user,
             "node": None,
             "parent": parent,
-            "form": {"name": "", "sort_order": ""},
+            "form": {
+                "name": "",
+                "sort_order": "",
+                "defaults": _defaults_form_view(None),
+            },
             "title": f"New sub-category under {parent.name}",
             "action": f"/admin/taxonomy/{parent.id}/children",
             "back_url": f"/admin/taxonomy/{parent.id}/children",
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
         },
     )
 
@@ -658,6 +877,13 @@ def create_sub_category(
     parent_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    default_unit: str = Form(""),
+    default_tracking_mode: str = Form(""),
+    default_requires_checkout: bool = Form(False),
+    default_reorder_threshold: str = Form(""),
+    default_reorder_qty: str = Form(""),
+    default_supplier_id: str = Form(""),
+    default_location_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -682,11 +908,22 @@ def create_sub_category(
     _check_child_name_unique(db, parent_id=parent.id, name=fields["name"])
     if fields["sort_order"] is None:
         fields["sort_order"] = _next_child_sort_order(db, parent.id)
+    fields["defaults_json"] = _coerce_defaults(
+        db,
+        default_unit=default_unit,
+        default_tracking_mode=default_tracking_mode,
+        default_requires_checkout=default_requires_checkout,
+        default_reorder_threshold=default_reorder_threshold,
+        default_reorder_qty=default_reorder_qty,
+        default_supplier_id=default_supplier_id,
+        default_location_id=default_location_id,
+    )
 
     node = TaxonomyNode(
         parent_id=parent.id,
         name=fields["name"],
         sort_order=fields["sort_order"],
+        defaults_json=fields["defaults_json"],
     )
     db.add(node)
     db.flush()
@@ -702,6 +939,7 @@ def create_sub_category(
             "name": node.name,
             "sort_order": node.sort_order,
             "parent_id": parent.id,
+            "defaults_json": node.defaults_json,
         },
     )
     db.commit()
@@ -739,10 +977,14 @@ def edit_sub_category_form(
             "form": {
                 "name": node.name,
                 "sort_order": str(node.sort_order),
+                "defaults": _defaults_form_view(node.defaults_json),
             },
             "title": f"Edit {node.name}",
             "action": f"/admin/taxonomy/sub/{node.id}",
             "back_url": f"/admin/taxonomy/{parent.id}/children",
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
         },
     )
 
@@ -753,6 +995,13 @@ def update_sub_category(
     node_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    default_unit: str = Form(""),
+    default_tracking_mode: str = Form(""),
+    default_requires_checkout: bool = Form(False),
+    default_reorder_threshold: str = Form(""),
+    default_reorder_qty: str = Form(""),
+    default_supplier_id: str = Form(""),
+    default_location_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -766,6 +1015,16 @@ def update_sub_category(
     )
     if fields["sort_order"] is None:
         fields["sort_order"] = node.sort_order
+    fields["defaults_json"] = _coerce_defaults(
+        db,
+        default_unit=default_unit,
+        default_tracking_mode=default_tracking_mode,
+        default_requires_checkout=default_requires_checkout,
+        default_reorder_threshold=default_reorder_threshold,
+        default_reorder_qty=default_reorder_qty,
+        default_supplier_id=default_supplier_id,
+        default_location_id=default_location_id,
+    )
 
     diff = _diff(node, fields)
     if diff is not None:
