@@ -476,6 +476,203 @@ class TestGoogleCallback:
         assert resp.status_code == 503
         assert "not configured" in resp.text.lower()
 
+    # ----- Bootstrap-admin path through the route -----
+
+    def test_callback_promotes_bootstrap_admin_when_email_matches_and_no_admin_exists(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """First sign-in matching ``BOOTSTRAP_ADMIN_EMAIL`` (and no admin yet
+        seeded) seeds the very first admin via the OAuth route. Both the
+        ``user.created`` and ``user.bootstrap_admin_granted`` audit rows must
+        land — the unit tests pin this for the helper, this pins it through the
+        actual ``google_callback`` route boundary.
+        """
+        monkeypatch.setattr(auth_module.settings, "bootstrap_admin_email", "boss@uc.example")
+
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            return_value={
+                "userinfo": {
+                    "sub": "g-boss-1",
+                    "email": "boss@uc.example",
+                    "name": "Boss",
+                }
+            }
+        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 303
+
+        user = db_session.execute(
+            select(User).where(User.google_sub == "g-boss-1")
+        ).scalar_one()
+        assert user.role is Role.ADMIN
+        assert user.status is UserStatus.ACTIVE
+
+        created_rows = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user.id,
+                AuditLog.action == "user.created",
+            )
+        ).scalars().all()
+        assert len(created_rows) == 1
+
+        bootstrap_rows = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user.id,
+                AuditLog.action == "user.bootstrap_admin_granted",
+            )
+        ).scalars().all()
+        assert len(bootstrap_rows) == 1
+        bootstrap = bootstrap_rows[0]
+        assert bootstrap.before_json == {"role": None, "status": "pending"}
+        assert bootstrap.after_json == {"role": "admin", "status": "active"}
+
+    def test_callback_skips_bootstrap_when_admin_already_exists(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Bootstrap is a one-shot seed: once any admin exists, the route must
+        not promote even when the env var still names a matching email. The new
+        sign-in stays pending and no ``bootstrap_admin_granted`` row is written.
+        """
+        # Seed an admin via _make_user. This bypasses upsert_user_from_userinfo
+        # (so no user.created audit row exists for this seed user) but still
+        # makes the bootstrap-skip branch fire.
+        _make_user(
+            db_session,
+            email="existing-admin@uc.example",
+            role=Role.ADMIN,
+            status=UserStatus.ACTIVE,
+        )
+        monkeypatch.setattr(
+            auth_module.settings, "bootstrap_admin_email", "newcomer@uc.example"
+        )
+
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            return_value={
+                "userinfo": {
+                    "sub": "g-newcomer-1",
+                    "email": "newcomer@uc.example",
+                    "name": "Newcomer",
+                }
+            }
+        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 303
+
+        user = db_session.execute(
+            select(User).where(User.google_sub == "g-newcomer-1")
+        ).scalar_one()
+        assert user.role is None
+        assert user.status is UserStatus.PENDING
+
+        bootstrap_rows = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user.id,
+                AuditLog.action == "user.bootstrap_admin_granted",
+            )
+        ).scalars().all()
+        assert bootstrap_rows == []
+
+    def test_callback_skips_bootstrap_when_email_does_not_match(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``BOOTSTRAP_ADMIN_EMAIL`` is configured but the OAuth sign-in is for
+        someone else — the new user must stay pending and no bootstrap audit
+        row is written.
+        """
+        monkeypatch.setattr(
+            auth_module.settings, "bootstrap_admin_email", "owner@uc.example"
+        )
+
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            return_value={
+                "userinfo": {
+                    "sub": "g-stranger-1",
+                    "email": "someone-else@example.com",
+                    "name": "Stranger",
+                }
+            }
+        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 303
+
+        user = db_session.execute(
+            select(User).where(User.google_sub == "g-stranger-1")
+        ).scalar_one()
+        assert user.role is None
+        assert user.status is UserStatus.PENDING
+
+        bootstrap_rows = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user.id,
+                AuditLog.action == "user.bootstrap_admin_granted",
+            )
+        ).scalars().all()
+        assert bootstrap_rows == []
+
+    def test_callback_re_signin_does_not_emit_second_user_created_audit(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Re-signing in via the OAuth route must not emit a second
+        ``user.created`` row for the same user. The unit test_users.py pins the
+        helper-level idempotency; this pins it at the route boundary.
+        """
+        userinfo: dict[str, Any] = {
+            "sub": "g-returning-1",
+            "email": "returning-once@example.com",
+            "name": "Returning Once",
+        }
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(return_value={"userinfo": userinfo})
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
+
+        # First sign-in: creates the user + writes user.created.
+        resp1 = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp1.status_code == 303
+        client.cookies.clear()
+
+        # Second sign-in: same userinfo (same sub) → updates name/email but
+        # must NOT write another user.created row.
+        resp2 = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp2.status_code == 303
+
+        user = db_session.execute(
+            select(User).where(User.google_sub == "g-returning-1")
+        ).scalar_one()
+
+        created_rows = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.entity_type == "user",
+                AuditLog.entity_id == user.id,
+                AuditLog.action == "user.created",
+            )
+        ).scalars().all()
+        assert len(created_rows) == 1
+
 
 # ---------------------------------------------------------------------------
 # Logout
