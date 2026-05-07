@@ -1006,7 +1006,41 @@ No `archived_at` on any of the three. The engine maintains six invariants (docum
 
 ## Current slice
 
-*(none — R5j shipped this iteration. See Completed slices log row I72 for the canonical record. Plan content + cross-checks preserved below in commented form for slice context.)*
+**R5l — CSV export on the sub-category list view (`/admin/taxonomy/{parent_id}/children`) (DoD #7 polish step; MISSION §3 "Export any list view to CSV"):** smallest end-to-end slice that continues the established R5a-R5k CSV-export pattern. **Thirteenth and final** CSV-export surface (after variance trend, PO list, items list, stock-takes list, suppliers list, locations list, taxonomy list, checkouts admin list, AC1's audit list, R5i's admin users list, R5j's reorder dashboard, R5k's per-item movement timeline). After R5l the R5 backlog item ("CSV export on every list view") is fully closed. **No DoD ticked** (DoD #7 already ticked iter-57 / D7; this is polish that extends MISSION §3's "Export any list view to CSV" coverage).
+
+- **Note on URL drift**: PROGRESS.md "Next slice" prose called the route `/admin/taxonomy/{parent_id}/sub`. The real route is `/admin/taxonomy/{parent_id}/children` (verified by reading `app/taxonomy.py:545`). The slice targets the actual route shape; the prose was stale (the `/sub/` URL is used only for the per-sub-cat edit/archive/unarchive routes via `/admin/taxonomy/sub/{node_id}/...`).
+
+- **Scope** (`app/taxonomy.py` + `app/templates/taxonomy_children_list.html` + extension of `tests/integration/test_taxonomy_routes.py` only — no new modules; no new migrations; no new helpers): mechanical extension of `app/taxonomy.py::list_sub_categories` with a `?format=csv` query branch using R5e's `csv_branch` helper. Module-level `_SUB_CSV_HEADERS` constant + `_csv_rows_for_sub_categories(rows)` helper. Return type widens from `HTMLResponse` to `Response`; decorator simplified from `@router.get("/{parent_id}/children", response_class=HTMLResponse)` to `@router.get("/{parent_id}/children")`. mypy source-file count stays at 29.
+
+- **Three columns**: `id`, `sort_order`, `name`. Mirrors the top-level `_TAXONOMY_CSV_HEADERS` shape one-for-one (the list view is structurally identical — sub-cats and top-level cats share the same `TaxonomyNode` schema and the same HTML table columns: Order / Name). The parent context is encoded in the filename (`subcategories_parent_{parent_id}_{show}.csv`) rather than as a column — same posture as the top-level taxonomy CSV which encodes `show` in the filename. Including a `parent_id` cell on every row would be redundant since every row in the file shares the same parent.
+
+- **Filename `subcategories_parent_{parent_id}_{show}.csv`** (e.g. `subcategories_parent_5_active.csv`). The parent id is in the URL path so a downstream collator that exports many parents can keep the files distinct without renaming. The `show` partition matches the established taxonomy filename pattern.
+
+- **Role gate inherited**: existing `Depends(require_role(Role.MANAGER))` blocks every non-Manager / non-Admin role at the dependency layer — anon 401, pending / Workshop / Office 403, Manager / Admin 200. Same Manager-only gate as the top-level taxonomy list (taxonomy is Manager-owned per MISSION §3 — Office is a sibling, not a subset).
+
+- **404 / 400 preserved**: the existing `_get_top_level_parent` helper raises 404 for unknown parent and 400 for a parent_id that is itself a sub-category (depth limit). The CSV branch must run *after* this guard so an unknown parent CSV request 404s exactly like the HTML branch (otherwise a CSV would render with a header row and no rows for a non-existent parent — silently confusing).
+
+- **Template** `taxonomy_children_list.html`: new `<a data-testid="sub-csv-link" href="/admin/taxonomy/{{ parent.id }}/children?format=csv&show={{ show }}">Download CSV</a>` link block placed above the table, with `show` parameter so the link respects the active tab — visible whether or not there are sub-cats (a Manager auditing the empty state can still pull a header-only CSV as evidence; same posture as R5j's empty-state CSV link). Mirrors the top-level taxonomy list's `taxonomy-list-csv-link` shape.
+
+- **Tests** (~22 new in `tests/integration/test_taxonomy_routes.py`, mirroring R5k's structure):
+  - `TestSubCategoryListCsvRoleEnforcement` (5): anon CSV 401; pending CSV 403; Workshop CSV 403; Office CSV 403; Manager CSV 200; Admin CSV 200.
+  - `TestSubCategoryListCsvHeaders` (4): unknown parent CSV 404; sub-cat parent CSV 400; Content-Type carries `text/csv; charset=utf-8`; default filename `subcategories_parent_{id}_active.csv` carries the parent id; archived show: filename has `_archived` suffix.
+  - `TestSubCategoryListCsvBody` (5): empty children renders header-only CSV exact `f"{header}\r\n"` match; one sub-cat one data row carries id + sort_order + name cells; show=active filters to active only; show=archived filters to archived only; sort_order then name ordering; sub-cats under a different parent are excluded.
+  - `TestSubCategoryListCsvHtmlBranch` (2): blank format renders HTML; unknown `?format=garbage` renders HTML.
+  - `TestSubCategoryListCsvReadOnly` (1): GET-CSV writes no audit row.
+  - `TestSubCategoryListCsvLink` (2): HTML page renders the `sub-csv-link` with `format=csv` href + active show; archived tab CSV link includes `show=archived`.
+
+- **Why this shape, not a single combined `taxonomy.csv` with both levels**: the top-level `/admin/taxonomy?format=csv` already exports all top-level nodes; sub-cat exports are scoped per-parent at the route level, matching the HTML's per-parent listing. A "flat" combined CSV with `parent_id` and `level` columns would either duplicate existing data or hide it behind a different shape. The per-parent-CSV shape preserves the natural URL hierarchy (the CSV download lives at the same URL the HTML page lives) and matches every other CSV surface's "scope == route's scope" invariant.
+
+- **No `app/` change beyond `taxonomy.py`.** Pure route extension + template link + tests-only addition.
+
+- **Cross-checked every load-bearing claim against source before writing tests**: route at `app/taxonomy.py:545` is `@router.get("/{parent_id}/children", response_class=HTMLResponse)` mounted at `/admin/taxonomy` (router prefix at `:56`); role gate `Depends(require_role(Role.MANAGER))` at `:550` (Admin passes via `app/auth.py`'s blanket override; Office + Workshop blocked); `_get_top_level_parent` at `:166-184` 404s on unknown id and 400s when parent is itself a sub-category; ordering `_LIST_ORDER, sort_order, name` at `:563`; same `archived_at` filter shape as the top-level `list_taxonomy` route at `:260-265`. Existing top-level `_TAXONOMY_CSV_HEADERS` + `_csv_rows_for_taxonomy` at `:229-246` are the structural template.
+
+- **Manual sanity check** (no human required): the integration tests *are* the manual sanity check — they drive the actual route handler with TestClient + fixtures, and the assertions pin every observable byte of the CSV output. Run as part of `make test` which is part of `make check`.
+
+- **DoD impact**: **No DoD ticked.** DoD #7 already ticked iter-57 / D7 with the dashboard widgets + reports. R5l extends the CSV-export pattern to the last remaining list view, fully closing MISSION §3's "Export any list view to CSV" requirement. After R5l the R5 backlog item is closed; the next slice should target an unticked DoD (DoD #1 / #10 / #11 / #12-deploy).
+
+---
 
 <!-- R5j plan (now shipped — preserved for slice context).
 

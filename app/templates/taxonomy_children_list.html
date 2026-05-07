@@ -24,6 +24,11 @@
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
+    <p>
+        <a data-testid="sub-csv-link"
+           href="/admin/taxonomy/{{ parent.id }}/children?format=csv&amp;show={{ show }}">Download CSV</a>
+    </p>
+
     {% if nodes %}
         <table data-testid="sub-table">
             <thead>

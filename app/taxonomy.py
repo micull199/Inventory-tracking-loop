@@ -542,14 +542,33 @@ def unarchive_taxonomy(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{parent_id}/children", response_class=HTMLResponse)
+_SUB_CSV_HEADERS: list[str] = [
+    "id",
+    "sort_order",
+    "name",
+]
+
+
+def _csv_rows_for_sub_categories(rows: list[TaxonomyNode]) -> list[list[Any]]:
+    """Map sub-category ``TaxonomyNode`` rows to CSV cell values.
+
+    Mirrors ``_csv_rows_for_taxonomy``: three columns matching the HTML
+    table's "Order" + "Name" columns, with ``id`` at the front for joining.
+    Parent context is encoded in the filename, not as a per-row column —
+    every row in a given file shares the same parent.
+    """
+    return [[n.id, n.sort_order, n.name] for n in rows]
+
+
+@router.get("/{parent_id}/children")
 def list_sub_categories(
     request: Request,
     parent_id: int,
     show: str = "active",
+    format: str = "",
     _user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     parent = _get_top_level_parent(db, parent_id)
 
     if show not in {"active", "archived"}:
@@ -563,6 +582,17 @@ def list_sub_categories(
     stmt = stmt.order_by(_LIST_ORDER, TaxonomyNode.sort_order, TaxonomyNode.name)
 
     rows = list(db.execute(stmt).scalars().all())
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=f"subcategories_parent_{parent.id}_{show}.csv",
+            headers=_SUB_CSV_HEADERS,
+            rows=_csv_rows_for_sub_categories(rows),
+        )
+    ) is not None:
+        return resp
+
     return templates.TemplateResponse(
         request,
         "taxonomy_children_list.html",

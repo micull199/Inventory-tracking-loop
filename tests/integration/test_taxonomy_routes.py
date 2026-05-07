@@ -1998,3 +1998,308 @@ class TestTaxonomyListCsvLink:
         body = resp.text
         assert 'data-testid="taxonomy-list-csv-link"' in body
         assert "show=archived" in body
+
+
+# ===========================================================================
+# Sub-category list CSV export (R5l)
+# ===========================================================================
+
+
+class TestSubCategoryListCsvRoleEnforcement:
+    """``?format=csv`` inherits the same Manager-only gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        u = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.MANAGER,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, u)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 403
+
+    def test_office_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Taxonomy is Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
+        parent = _make_parent(db_session)
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 403
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        adm = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, adm)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+
+
+class TestSubCategoryListCsvHeaders:
+    def test_unknown_parent_csv_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy/9999/children?format=csv")
+        assert resp.status_code == 404
+
+    def test_sub_category_parent_csv_is_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Listing children of a sub-cat would imply a third level. 400."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = _make_parent(db_session)
+        sub = TaxonomyNode(name="Silver", parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{sub.id}/children?format=csv")
+        assert resp.status_code == 400
+
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_default_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert (
+            f'filename="subcategories_parent_{parent.id}_active.csv"' in cd
+        )
+
+    def test_content_disposition_archived_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/taxonomy/{parent.id}/children?format=csv&show=archived"
+        )
+        cd = resp.headers["content-disposition"]
+        assert (
+            f'filename="subcategories_parent_{parent.id}_archived.csv"' in cd
+        )
+
+
+class TestSubCategoryListCsvBody:
+    def test_empty_emits_only_header_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == "id,sort_order,name\r\n"
+
+    def test_one_sub_category_one_data_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        sub = TaxonomyNode(name="Silver", sort_order=10, parent_id=parent.id)
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+        lines = resp.text.split("\r\n")
+        assert len(lines) == 3  # header + 1 data + trailing empty
+        cells = lines[1].split(",")
+        assert cells[0] == str(sub.id)
+        assert cells[1] == "10"
+        assert cells[2] == "Silver"
+
+    def test_show_filter_applies_to_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        active = TaxonomyNode(name="Silver", sort_order=10, parent_id=parent.id)
+        archived = TaxonomyNode(
+            name="Old Silver",
+            sort_order=20,
+            parent_id=parent.id,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add_all([active, archived])
+        db_session.commit()
+        _login_as(client, mgr)
+
+        # Default (active) → only the active row.
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        body = resp.text
+        assert "Silver" in body
+        assert "Old Silver" not in body
+
+        # show=archived → only the archived row.
+        resp = client.get(
+            f"/admin/taxonomy/{parent.id}/children?format=csv&show=archived"
+        )
+        body = resp.text
+        assert "Old Silver" in body
+        assert body.count("Silver") == 1  # only the "Old Silver" mention
+
+    def test_sort_order_then_name_ordering(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Insert in non-natural order; route orders by sort_order then name.
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Zulu", parent_id=parent.id, sort_order=10),
+                TaxonomyNode(name="Alpha", parent_id=parent.id, sort_order=20),
+                TaxonomyNode(name="Bravo", parent_id=parent.id, sort_order=10),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        body = resp.text
+        idx_bravo = body.index("Bravo")
+        idx_zulu = body.index("Zulu")
+        idx_alpha = body.index("Alpha")
+        assert idx_bravo < idx_zulu < idx_alpha
+
+    def test_excludes_other_parents_children(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Sub-cats under a different parent must not leak into the CSV."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent_a = _make_parent(db_session, "Raw Materials")
+        parent_b = _make_parent(db_session, "Tools")
+        db_session.add_all(
+            [
+                TaxonomyNode(name="Silver", parent_id=parent_a.id),
+                TaxonomyNode(name="Hammer", parent_id=parent_b.id),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/taxonomy/{parent_a.id}/children?format=csv"
+        )
+        body = resp.text
+        assert "Silver" in body
+        assert "Hammer" not in body
+
+
+class TestSubCategoryListCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="sub-tabs"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/taxonomy/{parent.id}/children?format=garbage"
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestSubCategoryListCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        db_session.add(
+            TaxonomyNode(name="Silver", sort_order=10, parent_id=parent.id)
+        )
+        db_session.commit()
+        before = len(_audit_rows(db_session))
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children?format=csv")
+        assert resp.status_code == 200
+        after = len(_audit_rows(db_session))
+        assert after == before
+
+
+class TestSubCategoryListCsvLink:
+    def test_html_renders_csv_link_with_active_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{parent.id}/children")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="sub-csv-link"' in body
+        assert "format=csv" in body
+        assert "show=active" in body
+
+    def test_html_renders_csv_link_with_archived_show(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        parent = _make_parent(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/taxonomy/{parent.id}/children?show=archived"
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="sub-csv-link"' in body
+        assert "show=archived" in body
