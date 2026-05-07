@@ -32,6 +32,90 @@
             <small>Optional. Lower numbers appear first. Leave blank on a new entry to append it to the end (steps of 10).</small>
         </p>
 
+        {# Per-category defaults — pre-fill the items create form for items
+           that live on this leaf. All optional. Leaving everything blank
+           means "no defaults" (NULL in the DB). #}
+        <fieldset data-testid="taxonomy-defaults">
+            <legend>Defaults for new items</legend>
+            <p><small>Optional. Pre-fills the items create form when a Manager
+            adds an item under this category, so common values (unit, tracking
+            mode, supplier, etc.) only need to be typed once.</small></p>
+
+            <p>
+                <label for="default_unit">Unit</label><br>
+                <input type="text" id="default_unit" name="default_unit"
+                       value="{{ form.defaults.unit }}"
+                       data-testid="taxonomy-default-unit-input"
+                       maxlength="32"
+                       placeholder="e.g. g, ml, ea">
+            </p>
+
+            <p>
+                <label for="default_tracking_mode">Tracking mode</label><br>
+                <select id="default_tracking_mode" name="default_tracking_mode"
+                        data-testid="taxonomy-default-tracking-mode-input">
+                    <option value="">— no default —</option>
+                    {% for m in tracking_modes %}
+                        <option value="{{ m }}"
+                                {% if form.defaults.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
+                    {% endfor %}
+                </select>
+            </p>
+
+            <p>
+                <label>
+                    <input type="checkbox" name="default_requires_checkout" value="true"
+                           data-testid="taxonomy-default-requires-checkout-input"
+                           {% if form.defaults.requires_checkout %}checked{% endif %}>
+                    Requires check-out by default (tools, moulds)
+                </label>
+            </p>
+
+            <p>
+                <label for="default_reorder_threshold">Reorder threshold</label><br>
+                <input type="text" inputmode="decimal"
+                       id="default_reorder_threshold" name="default_reorder_threshold"
+                       value="{{ form.defaults.reorder_threshold }}"
+                       data-testid="taxonomy-default-reorder-threshold-input">
+            </p>
+
+            <p>
+                <label for="default_reorder_qty">Reorder quantity</label><br>
+                <input type="text" inputmode="decimal"
+                       id="default_reorder_qty" name="default_reorder_qty"
+                       value="{{ form.defaults.reorder_qty }}"
+                       data-testid="taxonomy-default-reorder-qty-input">
+            </p>
+
+            <p>
+                <label for="default_supplier_id">Supplier</label><br>
+                <select id="default_supplier_id" name="default_supplier_id"
+                        data-testid="taxonomy-default-supplier-input">
+                    <option value="">— no default —</option>
+                    {% for s in supplier_options %}
+                        <option value="{{ s.id }}"
+                                {% if form.defaults.supplier_id == (s.id | string) %}selected{% endif %}>
+                            {{ s.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </p>
+
+            <p>
+                <label for="default_location_id">Location</label><br>
+                <select id="default_location_id" name="default_location_id"
+                        data-testid="taxonomy-default-location-input">
+                    <option value="">— no default —</option>
+                    {% for l in location_options %}
+                        <option value="{{ l.id }}"
+                                {% if form.defaults.location_id == (l.id | string) %}selected{% endif %}>
+                            {{ l.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </p>
+        </fieldset>
+
         <p>
             <button type="submit" class="button" data-testid="taxonomy-submit">
                 {% if node %}Save changes{% else %}{% if parent %}Create sub-category{% else %}Create category{% endif %}{% endif %}

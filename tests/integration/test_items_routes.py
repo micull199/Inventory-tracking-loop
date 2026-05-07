@@ -602,7 +602,12 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.get("/admin/items/new")
         assert resp.status_code == 200
-        assert 'name="sku"' in resp.text
+        # SKU input is present on create but optional — form auto-generates
+        # when blank, power users can override with their own scheme.
+        assert 'data-testid="item-sku-input"' in resp.text
+        assert "auto-generate" in resp.text
+        # Notes was removed entirely.
+        assert 'data-testid="item-notes-input"' not in resp.text
         assert 'name="taxonomy_node_id"' in resp.text
         assert 'name="csrf_token"' in resp.text
         assert "Raw Materials" in resp.text
@@ -730,11 +735,14 @@ class TestItemCreate:
         assert row.after_json["taxonomy_node_id"] == leaf.id
         assert row.after_json["tracking_mode"] == "qty"
 
-    def test_create_empty_sku_400(
+    def test_create_blank_sku_is_auto_generated(
         self, client: TestClient, db_session: Session
     ) -> None:
+        # Behaviour change: SKU is auto-generated when the form omits it. The
+        # form input was removed; the route accepts a blank ``sku`` and fills
+        # it from ``_generate_sku(leaf)`` based on the leaf's name prefix.
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, "Raw Materials")
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
@@ -743,9 +751,9 @@ class TestItemCreate:
             ),
             follow_redirects=False,
         )
-        assert resp.status_code == 400
-        assert db_session.execute(select(Item)).first() is None
-        assert _audit_rows(db_session) == []
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalars().one()
+        assert item.sku == "RAW-0001"
 
     def test_create_empty_name_400(
         self, client: TestClient, db_session: Session
@@ -1078,13 +1086,16 @@ class TestItemCreate:
     def test_create_failure_writes_no_audit(
         self, client: TestClient, db_session: Session
     ) -> None:
+        # A blank-name submit is the simplest way to trigger a validation
+        # failure post the SKU auto-gen change. (Blank SKU now auto-generates
+        # rather than 400ing — see ``test_create_blank_sku_is_auto_generated``.)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
         client.post(
             "/admin/items",
             data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="", csrf=_csrf(client)
+                taxonomy_node_id=leaf.id, name="", csrf=_csrf(client)
             ),
             follow_redirects=False,
         )
@@ -2928,9 +2939,9 @@ class TestWorkshopReadOnlyView:
         assert resp.status_code == 200
         body = resp.text
         # Every named input/select/textarea should carry the ``disabled``
-        # attribute somewhere in its tag. We sample the most important ones.
+        # attribute somewhere in its tag. SKU was removed from the editable
+        # input set (read-only span on edit) and Notes was removed entirely.
         for tid in (
-            "item-sku-input",
             "item-name-input",
             "item-category-input",
             "item-unit-input",
@@ -2939,7 +2950,6 @@ class TestWorkshopReadOnlyView:
             "item-supplier-input",
             "item-location-input",
             "item-qr-input",
-            "item-notes-input",
         ):
             tag_start = body.find(f'data-testid="{tid}"')
             assert tag_start != -1, f"missing input {tid!r}"
@@ -3780,3 +3790,240 @@ class TestItemFormHtmxWiring:
         assert resp.status_code == 200
         assert 'hx-get="/admin/items/_custom-fields"' in resp.text
         assert 'id="cf-container"' in resp.text
+
+
+class TestSkuAutoGeneration:
+    """SKU is auto-generated on create when the form / payload omits it.
+
+    The create form's SKU input was removed in the items-form-simplification
+    slice; explicit POSTs (existing tests, the public API surface) can still
+    pass their own SKU and override the auto-gen.
+    """
+
+    def test_blank_sku_uses_leaf_name_prefix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Wax Injection Moulds")
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id, sku="", csrf=_csrf(client)
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalars().one()
+        # First 3 alphanumeric chars of leaf name uppercased + 4-digit seq.
+        assert item.sku == "WAX-0001"
+
+    def test_sequence_increments_within_a_prefix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Raw Materials")
+        _login_as(client, mgr)
+        for i, name in enumerate(("a", "b", "c"), start=1):
+            resp = client.post(
+                "/admin/items",
+                data=_create_payload(
+                    taxonomy_node_id=leaf.id,
+                    sku="",
+                    name=name,
+                    csrf=_csrf(client),
+                ),
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+            assert (
+                db_session.execute(
+                    select(Item).where(Item.name == name)
+                ).scalar_one().sku
+                == f"RAW-{i:04d}"
+            )
+
+    def test_explicit_sku_overrides_auto_gen(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                sku="MY-OWN-SKU",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert (
+            db_session.execute(select(Item)).scalars().one().sku
+            == "MY-OWN-SKU"
+        )
+
+    def test_no_leaf_falls_back_to_itm_prefix(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Even though the route 400s on missing taxonomy_node_id, the helper
+        # itself defends against a None leaf with the ITM prefix. Pin via a
+        # non-numeric name leaf so the prefix path is exercised.
+        from app.items import _generate_sku
+        sku = _generate_sku(db_session, None)
+        assert sku == "ITM-0001"
+
+    def test_leaf_with_non_alpha_name_uses_itm(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.items import _generate_sku
+        leaf = _make_leaf(db_session, "!@#$%^")
+        sku = _generate_sku(db_session, leaf)
+        assert sku == "ITM-0001"
+
+
+class TestItemsFormNotesRemoved:
+    """Notes field removed from both create and edit forms."""
+
+    def test_create_form_has_no_notes_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/new")
+        assert resp.status_code == 200
+        assert 'data-testid="item-notes-input"' not in resp.text
+        assert 'name="notes"' not in resp.text
+
+    def test_edit_form_has_no_notes_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'data-testid="item-notes-input"' not in resp.text
+
+
+class TestItemsFormSkuOnEdit:
+    """SKU is read-only on edit (auto-generated on create, immutable thereafter)."""
+
+    def test_edit_form_renders_sku_as_readonly(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf, sku="ABC-0042")
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        # The read-only display carries the SKU as text in a span.
+        assert 'data-testid="item-sku-readonly"' in resp.text
+        assert "ABC-0042" in resp.text
+        # No editable text input for SKU.
+        assert 'data-testid="item-sku-input"' not in resp.text
+
+
+class TestItemsFragmentDefaults:
+    """HTMX fragment OOB-swaps core defaults when ``include_defaults=1``."""
+
+    def test_fragment_with_defaults_includes_oob_for_set_keys(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        leaf.defaults_json = {"unit": "g", "tracking_mode": "qty"}
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields"
+            f"?taxonomy_node_id={leaf.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        # OOB swaps for the keys the leaf actually sets.
+        assert 'hx-swap-oob="true"' in resp.text
+        assert 'id="unit"' in resp.text
+        assert 'value="g"' in resp.text
+        assert 'id="tracking_mode"' in resp.text
+
+    def test_fragment_omits_oob_for_unset_keys(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        # Only unit set — tracking_mode / supplier / location etc. are absent.
+        leaf.defaults_json = {"unit": "g"}
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields"
+            f"?taxonomy_node_id={leaf.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        # ``unit`` does swap, ``tracking_mode`` doesn't (would erase user input).
+        assert 'id="unit"' in resp.text
+        assert 'id="tracking_mode"' not in resp.text
+        assert 'id="reorder_threshold"' not in resp.text
+        assert 'id="supplier_id"' not in resp.text
+
+    def test_fragment_without_include_defaults_emits_no_oob(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Edit form path: omits ``include_defaults`` so a Manager re-classifying
+        # an item doesn't silently lose the existing item's typed values.
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        leaf.defaults_json = {"unit": "g", "tracking_mode": "unique"}
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}"
+        )
+        assert resp.status_code == 200
+        assert 'hx-swap-oob' not in resp.text
+
+
+class TestItemsCreateFormPrefillsFromDefaults:
+    """``GET /admin/items/new?node_id=…`` server-side renders inputs with the
+    leaf's defaults_json values pre-filled."""
+
+    def test_unit_default_pre_fills_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        leaf.defaults_json = {"unit": "g"}
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        # The unit input renders with value="g" pre-filled.
+        body = resp.text
+        unit_idx = body.find('data-testid="item-unit-input"')
+        assert unit_idx != -1
+        # Look back to find the enclosing tag's opening
+        tag_start = body.rfind("<", 0, unit_idx)
+        tag_end = body.find(">", unit_idx)
+        tag = body[tag_start:tag_end]
+        assert 'value="g"' in tag
+
+    def test_no_node_id_no_defaults_applied(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        leaf.defaults_json = {"unit": "g"}
+        db_session.commit()
+        _login_as(client, mgr)
+        # Without ?node_id=, no leaf is identified — no defaults applied.
+        resp = client.get("/admin/items/new")
+        assert resp.status_code == 200
+        body = resp.text
+        unit_idx = body.find('data-testid="item-unit-input"')
+        tag_start = body.rfind("<", 0, unit_idx)
+        tag_end = body.find(">", unit_idx)
+        tag = body[tag_start:tag_end]
+        assert 'value=""' in tag or 'value' not in tag.split('data-testid')[0]

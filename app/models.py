@@ -215,6 +215,13 @@ class TaxonomyNode(Base):
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Per-category defaults for the items create form. Validated dict (or
+    # None). Keys mirror the items form's field names: ``unit``,
+    # ``tracking_mode``, ``requires_checkout``, ``reorder_threshold``,
+    # ``reorder_qty``, ``supplier_id``, ``location_id``. Absent / null keys
+    # mean "no default" — the form input renders blank. See
+    # ``app.taxonomy._coerce_defaults`` for the write-time validator.
+    defaults_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -151,7 +151,11 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
         mgr_page.get_by_test_id("item-custom-fields")
     ).not_to_be_visible()
 
-    mgr_page.get_by_test_id("item-sku-input").fill("RM-E2E-001")
+    # SKU input is optional — leaving blank triggers server auto-gen.
+    # Notes was removed entirely.
+    expect(mgr_page.get_by_test_id("item-sku-input")).to_be_visible()
+    expect(mgr_page.get_by_test_id("item-notes-input")).to_have_count(0)
+
     mgr_page.get_by_test_id("item-name-input").fill("Silver wire (e2e)")
     # Pick the leaf — HTMX fires on change, fetches the partial, swaps in
     # the custom-field inputs.
@@ -178,7 +182,7 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     # Flash and row both visible.
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Silver wire")
     item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="RM-E2E-001"
+        '[data-testid="item-row"]', has_text="ITE-0001"
     )
     expect(item_row).to_be_visible()
     expect(item_row.get_by_test_id("item-name")).to_have_text(
@@ -206,14 +210,14 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     item_row.get_by_test_id("archive-item").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
     expect(
-        mgr_page.locator('[data-testid="item-row"]', has_text="RM-E2E-001")
+        mgr_page.locator('[data-testid="item-row"]', has_text="ITE-0001")
     ).to_have_count(0)
 
     # Step 10: Switch to archived tab — RM-E2E-001 is there.
     mgr_page.get_by_test_id("tab-archived").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items?show=archived")
     archived_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="RM-E2E-001"
+        '[data-testid="item-row"]', has_text="ITE-0001"
     )
     expect(archived_row).to_be_visible()
 
@@ -221,7 +225,7 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     archived_row.get_by_test_id("unarchive-item").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
     restored_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="RM-E2E-001"
+        '[data-testid="item-row"]', has_text="ITE-0001"
     )
     expect(restored_row).to_be_visible()
 
@@ -238,7 +242,7 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
 
     # Reopen the edit form and follow the "Manage units" link.
     item_row_after = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="RM-E2E-001"
+        '[data-testid="item-row"]', has_text="ITE-0001"
     )
     item_row_after.get_by_test_id("edit-item").click()
     mgr_page.wait_for_url(
@@ -305,7 +309,7 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     # Bounce back to the items list for the cleanup step.
     mgr_page.goto(f"{app_server}/admin/items")
     restored_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="RM-E2E-001"
+        '[data-testid="item-row"]', has_text="ITE-0001"
     )
 
     # Step 12: Cleanup — archive the item *and* the taxonomy category so
@@ -375,7 +379,9 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
     # custom-field block renders and no required-field 400 fires.
     admin_page.get_by_test_id("new-item").click()
     admin_page.wait_for_url(f"{app_server}/admin/items/new")
-    admin_page.get_by_test_id("item-sku-input").fill("AD-E2E-001")
+    # SKU input is optional — leave blank to trigger server auto-gen
+    # ("ADM-0001" from "Admin Items E2E Cat").
+    expect(admin_page.get_by_test_id("item-sku-input")).to_be_visible()
     admin_page.get_by_test_id("item-name-input").fill("Admin item (e2e)")
     admin_page.get_by_test_id("item-category-input").select_option(
         label="Admin Items E2E Cat"
@@ -386,7 +392,7 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
 
     expect(admin_page.get_by_test_id("flash")).to_contain_text("Admin item")
     item_row = admin_page.locator(
-        '[data-testid="item-row"]', has_text="AD-E2E-001"
+        '[data-testid="item-row"]', has_text="ADM-0001"
     )
     expect(item_row).to_be_visible()
     expect(item_row.get_by_test_id("item-category")).to_have_text(
@@ -405,7 +411,7 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
     admin_page.wait_for_url(f"{app_server}/admin/items")
 
     item_row_after = admin_page.locator(
-        '[data-testid="item-row"]', has_text="AD-E2E-001"
+        '[data-testid="item-row"]', has_text="ADM-0001"
     )
     item_row_after.get_by_test_id("edit-item").click()
     admin_page.wait_for_url(
@@ -449,7 +455,7 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
     )
     admin_page.goto(f"{app_server}/admin/items")
     admin_page.locator(
-        '[data-testid="item-row"]', has_text="AD-E2E-001"
+        '[data-testid="item-row"]', has_text="ADM-0001"
     ).get_by_test_id("archive-item").click()
     admin_page.wait_for_url(f"{app_server}/admin/items")
     admin_page.goto(f"{app_server}/admin/taxonomy")

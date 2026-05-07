@@ -19,7 +19,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Role, TaxonomyNode, User, UserStatus
+from app.models import (
+    AuditLog,
+    Location,
+    Role,
+    Supplier,
+    TaxonomyNode,
+    User,
+    UserStatus,
+)
 
 
 def _make_user(
@@ -447,6 +455,7 @@ class TestTaxonomyCreate:
             "name": "Raw Materials",
             "sort_order": 5,
             "parent_id": None,
+            "defaults_json": None,
         }
 
     def test_create_validation_failure_writes_no_audit_row(
@@ -1327,6 +1336,7 @@ class TestSubCategoryCreate:
             "name": "Silver",
             "sort_order": 5,
             "parent_id": parent.id,
+            "defaults_json": None,
         }
 
 
@@ -2303,3 +2313,223 @@ class TestSubCategoryListCsvLink:
         body = resp.text
         assert 'data-testid="sub-csv-link"' in body
         assert "show=archived" in body
+
+
+class TestTaxonomyDefaults:
+    """Per-category core-field defaults — round-trip + validation matrix.
+
+    Each ``default_*`` form field is optional. Submitted values populate
+    ``taxonomy_nodes.defaults_json`` (a dict). Items created on the leaf
+    pre-fill these values into the items create form.
+    """
+
+    def _setup(self, db: Session) -> tuple[User, Supplier, Location]:
+        mgr = _make_user(db, email="m@x.test", role=Role.MANAGER)
+        sup = Supplier(name="Acme")
+        loc = Location(name="Bench")
+        db.add_all([sup, loc])
+        db.commit()
+        db.refresh(sup)
+        db.refresh(loc)
+        return mgr, sup, loc
+
+    def test_create_persists_full_defaults_dict(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, sup, loc = self._setup(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "Raw Materials",
+                "default_unit": "g",
+                "default_tracking_mode": "qty",
+                "default_requires_checkout": "true",
+                "default_reorder_threshold": "10",
+                "default_reorder_qty": "100",
+                "default_supplier_id": str(sup.id),
+                "default_location_id": str(loc.id),
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        node = db_session.execute(select(TaxonomyNode)).scalar_one()
+        assert node.defaults_json == {
+            "unit": "g",
+            "tracking_mode": "qty",
+            "requires_checkout": True,
+            "reorder_threshold": "10",
+            "reorder_qty": "100",
+            "supplier_id": sup.id,
+            "location_id": loc.id,
+        }
+
+    def test_create_blank_defaults_persist_as_null(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={"name": "Tools", "csrf_token": _csrf(client)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        node = db_session.execute(select(TaxonomyNode)).scalar_one()
+        # Blank everywhere → NULL in DB (not an empty dict).
+        assert node.defaults_json is None
+
+    def test_invalid_tracking_mode_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "X",
+                "default_tracking_mode": "bogus",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert db_session.execute(select(TaxonomyNode)).first() is None
+
+    def test_negative_reorder_threshold_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "X",
+                "default_reorder_threshold": "-5",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_garbage_decimal_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "X",
+                "default_reorder_qty": "not-a-number",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_supplier_id_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "X",
+                "default_supplier_id": "9999",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_archived_supplier_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, sup, _loc = self._setup(db_session)
+        sup.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/taxonomy",
+            data={
+                "name": "X",
+                "default_supplier_id": str(sup.id),
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_edit_form_pre_fills_defaults(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, sup, _loc = self._setup(db_session)
+        node = TaxonomyNode(
+            name="Raw Materials",
+            sort_order=10,
+            defaults_json={
+                "unit": "g",
+                "tracking_mode": "qty",
+                "supplier_id": sup.id,
+            },
+        )
+        db_session.add(node)
+        db_session.commit()
+        db_session.refresh(node)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{node.id}/edit")
+        assert resp.status_code == 200
+        body = resp.text
+        # Pre-filled inputs visible in the rendered form.
+        assert 'data-testid="taxonomy-default-unit-input"' in body
+        # Find the unit input and confirm it has value="g".
+        unit_idx = body.find('data-testid="taxonomy-default-unit-input"')
+        tag_start = body.rfind("<", 0, unit_idx)
+        tag_end = body.find(">", unit_idx)
+        assert 'value="g"' in body[tag_start:tag_end]
+        # Selected tracking mode in select.
+        tm_idx = body.find('id="default_tracking_mode"')
+        # Just check the option for "qty" is marked selected.
+        end_idx = body.find("</select>", tm_idx)
+        assert 'value="qty"' in body[tm_idx:end_idx]
+        assert "selected" in body[tm_idx:end_idx]
+        # Supplier select pre-fills the chosen id.
+        sup_section_idx = body.find('id="default_supplier_id"')
+        end_sup = body.find("</select>", sup_section_idx)
+        assert f'value="{sup.id}"' in body[sup_section_idx:end_sup]
+
+    def test_update_changes_defaults_and_audits(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr, _sup, _loc = self._setup(db_session)
+        node = TaxonomyNode(name="Raw", sort_order=10)
+        db_session.add(node)
+        db_session.commit()
+        db_session.refresh(node)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{node.id}",
+            data={
+                "name": "Raw",
+                "sort_order": "10",
+                "default_unit": "g",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.expire_all()
+        refreshed = db_session.get(TaxonomyNode, node.id)
+        assert refreshed.defaults_json == {"unit": "g"}
+        # Audit row carries the diff of just the changed field.
+        rows = db_session.execute(
+            select(AuditLog)
+            .where(AuditLog.entity_type == "taxonomy_node")
+            .where(AuditLog.action == "taxonomy_node.updated")
+        ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].before_json == {"defaults_json": None}
+        assert rows[0].after_json == {"defaults_json": {"unit": "g"}}
