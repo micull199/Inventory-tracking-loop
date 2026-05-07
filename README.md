@@ -306,7 +306,34 @@ Receiving is the **FIFO-cost-layer-creating** leg of the PO lifecycle. Each line
 
 ### Reading the audit trail for an item
 
-_TODO_
+The audit trail is the system's append-only memory of every state-changing action — every item create, stock movement, purchase-order transition, stock-take commit, checkout, role assignment, supplier or taxonomy edit. Per MISSION §9 the log cannot be edited or deleted, even by an Admin; corrections are made by recording new compensating movements with explanatory reasons rather than rewriting history. Reading the audit trail is **Manager** and **Admin** only — the **Audit** nav link is hidden from Office and Workshop, and the route returns a 403 if either role tries to navigate to `/admin/audit` directly.
+
+**Every state change writes one row.** Whenever a route changes the database — creating an item, recording a stock-out, sending a PO, committing a stock take, returning a tool — the same code path that writes the change also writes one audit row in the same transaction (so a successful change without an audit row is impossible). The cross-cutting `tests/integration/test_audit_coverage.py` sweep enforces this: every POST / PUT / PATCH / DELETE route in `app.routes` either calls `record_audit(...)` directly or appears in a small reviewer-audited exempt list with a one-line justification. Each row carries the **actor** (the signed-in user, or `(system)` for background events like the bootstrap-admin promotion), an ISO **timestamp**, the **action** wire-name (e.g. `item.created`, `stock_movement.out`, `purchase_order.received`), the **entity_type:entity_id** the action targeted, and **before** + **after** JSON dicts capturing what changed.
+
+**Browsing the log.**
+
+1. Sign in as a Manager (or Admin).
+2. Click **Audit** in the top nav (or visit `/admin/audit`).
+3. The page renders a newest-first paginated table of 50 rows per page with six columns: **Time** (ISO timestamp), **Actor** (the user's email, or `(system)`), **Action** (the wire-name like `item.created` or `stock_movement.in`), **Entity** (`<type>:<id>` like `item:42`, or just `<type>` for entity-less rows), **Before**, and **After**. The Before / After cells render an em-dash (—) for create rows (no prior state) and for entries with no resulting state; other rows show the JSON dict captured at write time.
+4. Use **Previous** / **Next** at the bottom to page through history. Going past the last page renders an empty table — page back to recover.
+
+**Finding entries for a specific item.** There is no per-item filter form in the v1 read view. Two paths in the meantime:
+
+- **Browser search.** Open `/admin/audit`, hit Cmd+F (Ctrl+F on Windows / Linux), and search for the item's SKU, name, or `item:<id>` token. Page through the table if the entry isn't on the current page.
+- **CSV export.** Click **Download CSV** at the top of the page (or visit `/admin/audit?format=csv` directly) to download `audit_log.csv` with **every** row — the CSV branch ignores pagination so the snapshot is complete. The CSV has eight columns: `id`, `created_at`, `actor_email`, `action`, `entity_type`, `entity_id`, `before_json`, `after_json`. Open it in a spreadsheet and filter on `entity_type=item` plus `entity_id=<n>`, or on `entity_type=stock_movement` and grep the JSON cells for `"item_id":<n>` if you want every movement against the item.
+
+A filter form for actor / entity / date range is queued as a future slice (`A1b` in the backlog).
+
+**Action vocabulary.** A few canonical action wire-names you can grep or filter on:
+
+- **Items:** `item.created`, `item.updated`, `item.archived`, `item.unarchived`
+- **Stock movements:** `stock_movement.in`, `stock_movement.out`, `stock_movement.adjustment`, `stock_movement.transfer`
+- **Stock takes:** `stock_take.created`, `stock_take.started`, `stock_take.counted`, `stock_take.committed`
+- **Purchase orders:** `purchase_order.created`, `purchase_order.updated`, `purchase_order.sent`, `purchase_order.cancelled`, `purchase_order.received`
+- **Checkouts:** `checkout.created`, `checkout.returned`
+- Plus actions on `supplier`, `location`, `taxonomy_node`, `taxonomy_field_def`, `user`, and `item_unit`.
+
+**Immutability.** The `audit_log` table has DB-level UPDATE and DELETE triggers (SQLite + Postgres) that reject any modification — even if a buggy code path or a direct DB session tries to rewrite a row, the database refuses. The log is **append-only** and **cannot be edited**. If a recorded row turns out to be wrong (say a stock-out qty was a typo), record a compensating adjustment movement with a reason that names the original movement; the original row stays as-is and the new row sits next to it in the timeline.
 
 ---
 

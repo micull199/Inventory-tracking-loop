@@ -417,3 +417,109 @@ class TestReceivingStockAgainstPOSection:
         # available.
         assert "received" in body.lower()
         assert "partially_received" in body
+
+
+class TestReadingAuditTrailSection:
+    """DOC8 — pin the audit-trail read walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        assert "_TODO_" not in body, (
+            "audit-trail section still has _TODO placeholder"
+        )
+        assert len(body.strip()) > 400, (
+            "audit-trail section looks unsubstantial"
+        )
+
+    def test_section_references_admin_audit_route(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # ``/admin/audit`` is the prefix mounted by
+        # ``app/audit_routes.py``'s router. A future rename of the
+        # prefix fails this test and forces a docs update on the same
+        # PR.
+        assert "/admin/audit" in body
+
+    def test_section_names_manager_and_admin_roles(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # The role gate at ``app/audit_routes.py:94`` is
+        # ``Depends(require_role(Role.MANAGER))``; Admin passes via
+        # ``app/auth.py``'s blanket admin override. Office and
+        # Workshop both 403 (and the nav link is hidden from them
+        # at ``app/templates/base.html:175-183``). The section must
+        # name both allowed roles so a future Office or Workshop
+        # reader knows the page isn't for them.
+        assert "Manager" in body
+        assert "Admin" in body
+
+    def test_section_names_csv_export(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # AC1's CSV branch at ``app/audit_routes.py:105-125`` exports
+        # every row (ignores pagination). The section must name the
+        # literal ``?format=csv`` path so a future PR that drops the
+        # CSV link or renames the query param fails this test.
+        assert "/admin/audit?format=csv" in body
+
+    def test_section_names_audit_columns(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # The HTML table at ``app/templates/admin_audit.html:25-30``
+        # renders six columns: Time / Actor / Action / Entity /
+        # Before / After. The section must name the four
+        # load-bearing labels (the entity column is implicit in
+        # the entity_type:entity_id discussion). Time / Actor /
+        # Action are case-sensitive (exact column-header
+        # vocabulary); before + after are case-insensitive because
+        # they appear both as column labels and as JSON-dict prose.
+        assert "Time" in body
+        assert "Actor" in body
+        assert "Action" in body
+        lower = body.lower()
+        assert "before" in lower
+        assert "after" in lower
+
+    def test_section_names_immutability_invariant(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # MISSION §9: "Do not delete the audit log. Do not provide
+        # a way to edit it." Backed by ``apply_immutability_triggers``
+        # at ``app/audit.py:128`` (SQLite + Postgres UPDATE + DELETE
+        # triggers). The section must name the invariant explicitly
+        # — both halves: append-only and cannot-be-edited — so a
+        # future PR that softens the docs to "the audit log is
+        # mostly read-only" fails this test.
+        lower = body.lower()
+        assert "append-only" in lower
+        assert "cannot be edited" in lower
+
+    def test_section_names_canonical_audit_actions(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # The action wire-names are the developer-facing vocabulary
+        # the Action column renders verbatim. Pinning a sample of
+        # canonical names (one per top-level domain — items, stock
+        # movements, purchase orders, stock takes) catches a future
+        # rename of any action enum (e.g. ``item.create`` instead
+        # of ``item.created``, or ``stock_movement.IN`` capitalised).
+        # Sourced via ``grep -rEn 'action="(item|stock_movement|
+        # purchase_order|stock_take|checkout)\.'`` against ``app/``.
+        assert "item.created" in body
+        assert "stock_movement.in" in body
+        assert "purchase_order.received" in body
+        assert "stock_take.committed" in body
+
+    def test_section_explains_no_item_filter_limitation(self) -> None:
+        body = _section("Reading the audit trail for an item")
+        # The v1 read view has no per-item filter form — A1b is
+        # queued in the backlog. The section must call out the
+        # limitation explicitly + name the two workaround paths
+        # (browser search + CSV filter) so a Manager hunting for an
+        # item's history isn't surprised by the missing filter.
+        # Same posture as DOC4's ``test_section_explains_archived
+        # _item_resolves`` (a load-bearing limitation that needs a
+        # forcing function so it can't get silently removed).
+        lower = body.lower()
+        assert "filter" in lower
+        assert "CSV" in body
+        # At least one of the three keyboard-search tokens must
+        # appear so the section directs users to a concrete
+        # workaround rather than leaving them to discover it.
+        assert (
+            "cmd+f" in lower or "ctrl+f" in lower or "cmd-f" in lower
+        )
