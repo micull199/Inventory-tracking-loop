@@ -1,181 +1,250 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}PO #{{ po.id }} — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="po-detail-heading">Purchase order #{{ po.id }}</h1>
-    <p>
-        <span data-testid="po-status-badge"
-              data-status="{{ po.status.value }}">{{ po.status.value.replace("_", " ") }}</span>
-    </p>
-    <dl>
-        <dt>Supplier</dt>
-        <dd data-testid="po-supplier-name">{{ supplier.name if supplier else "?" }}</dd>
-        <dt>Created by</dt>
-        <dd data-testid="po-created-by">{{ created_by_email or "(deleted user)" }}</dd>
-        <dt>Created</dt>
-        <dd data-testid="po-created-at">{{ po.created_at.isoformat() }}</dd>
-    </dl>
+    {%- set status_variant_map = {
+        "draft": "",
+        "sent": "accent",
+        "partially_received": "warn",
+        "received": "success",
+        "cancelled": "danger",
+    } -%}
+    {%- set status_variant = status_variant_map.get(po.status.value, "") -%}
 
-    {% if is_draft %}
-        <form method="post" action="/admin/purchase-orders/{{ po.id }}"
-              data-testid="po-edit-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.page_header(
+        "Purchase order #" ~ po.id,
+        heading_testid="po-detail-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/purchase-orders" data-testid="po-back-to-list">&larr; Back</a>
+    {% endcall %}
 
-            <p>
-                <label for="expected_date">Expected date</label><br>
-                <input type="date" id="expected_date" name="expected_date"
-                       value="{{ po.expected_date.isoformat() if po.expected_date else '' }}"
-                       data-testid="po-edit-expected-date-input">
-            </p>
+    <div class="uc-stack-4 uc-mb-6">
+        {% call c.card("Overview") %}
+            <div class="uc-grid-2">
+                <div>
+                    <div class="uc-label">Status</div>
+                    <div>
+                        <span class="uc-pill{% if status_variant %} uc-pill--{{ status_variant }}{% endif %}"
+                              data-testid="po-status-badge"
+                              data-status="{{ po.status.value }}">{{ po.status.value.replace("_", " ") }}</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="uc-label">Supplier</div>
+                    <div class="uc-strong">
+                        <span data-testid="po-supplier-name">{{ supplier.name if supplier else "?" }}</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="uc-label">Created by</div>
+                    <div>
+                        <span data-testid="po-created-by">{{ created_by_email or "(deleted user)" }}</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="uc-label">Created</div>
+                    <div class="uc-num">
+                        <span data-testid="po-created-at">{{ po.created_at.isoformat() }}</span>
+                    </div>
+                </div>
+                {% if not is_draft %}
+                    <div>
+                        <div class="uc-label">Expected date</div>
+                        <div class="uc-num">
+                            <span data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="uc-label">Notes</div>
+                        <div>
+                            <span data-testid="po-notes">{{ po.notes or "—" }}</span>
+                        </div>
+                    </div>
+                {% endif %}
+            </div>
+        {% endcall %}
 
-            <p>
-                <label for="notes">Notes</label><br>
-                <textarea id="notes" name="notes" rows="3" cols="60"
-                          maxlength="2000"
-                          data-testid="po-edit-notes-input">{{ po.notes or "" }}</textarea>
-            </p>
+        {% if is_draft %}
+            <form method="post" action="/admin/purchase-orders/{{ po.id }}"
+                  data-testid="po-edit-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            <h2>Lines</h2>
-            {% if lines %}
-                <table data-testid="po-lines-table">
-                    <thead>
-                        <tr>
-                            <th>SKU</th>
-                            <th>Name</th>
-                            <th>Unit</th>
-                            <th>Qty ordered</th>
-                            <th>Qty received</th>
-                            <th>Expected unit cost</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for line in lines %}
-                            <tr data-testid="po-line-row"
-                                data-line-id="{{ line.id }}"
-                                data-item-id="{{ line.item_id }}">
-                                <td data-testid="po-line-sku">{{ line.item_sku }}</td>
-                                <td data-testid="po-line-name">{{ line.item_name }}</td>
-                                <td>{{ line.item_unit }}</td>
-                                <td>
-                                    <input type="text" inputmode="decimal"
-                                           name="qty_ordered_{{ line.id }}"
-                                           value="{{ line.qty_ordered }}"
-                                           data-testid="po-edit-qty-input"
-                                           data-line-id="{{ line.id }}"
-                                           required>
-                                </td>
-                                <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
-                                <td>
-                                    <input type="text" inputmode="decimal"
-                                           name="expected_unit_cost_{{ line.id }}"
-                                           value="{{ line.expected_unit_cost if line.expected_unit_cost is not none else '' }}"
-                                           data-testid="po-edit-cost-input"
-                                           data-line-id="{{ line.id }}"
-                                           placeholder="(optional)">
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% else %}
-                <p data-testid="po-detail-no-lines">No lines on this PO.</p>
+                {% call c.card("Edit") %}
+                    <div class="uc-field">
+                        <label class="uc-label" for="expected_date">Expected date</label>
+                        <input class="uc-input" type="date" id="expected_date" name="expected_date"
+                               value="{{ po.expected_date.isoformat() if po.expected_date else '' }}"
+                               data-testid="po-edit-expected-date-input">
+                    </div>
+
+                    <div class="uc-field">
+                        <label class="uc-label" for="notes">Notes</label>
+                        <textarea class="uc-textarea" id="notes" name="notes" rows="3"
+                                  maxlength="2000"
+                                  data-testid="po-edit-notes-input">{{ po.notes or "" }}</textarea>
+                    </div>
+                {% endcall %}
+
+                {% if lines %}
+                    {% call c.card("Lines", flush=true) %}
+                        <div class="uc-table-wrap" style="border:0; border-radius:0; box-shadow:none;">
+                            <table class="uc-table" data-testid="po-lines-table">
+                                <thead>
+                                    <tr>
+                                        <th>SKU</th>
+                                        <th>Name</th>
+                                        <th>Unit</th>
+                                        <th>Qty ordered</th>
+                                        <th class="uc-right">Qty received</th>
+                                        <th>Expected unit cost</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for line in lines %}
+                                        <tr data-testid="po-line-row"
+                                            data-line-id="{{ line.id }}"
+                                            data-item-id="{{ line.item_id }}">
+                                            <td class="uc-num uc-strong" data-testid="po-line-sku">{{ line.item_sku }}</td>
+                                            <td data-testid="po-line-name">{{ line.item_name }}</td>
+                                            <td>{{ line.item_unit }}</td>
+                                            <td>
+                                                <input class="uc-input" type="text" inputmode="decimal"
+                                                       name="qty_ordered_{{ line.id }}"
+                                                       value="{{ line.qty_ordered }}"
+                                                       data-testid="po-edit-qty-input"
+                                                       data-line-id="{{ line.id }}"
+                                                       required
+                                                       style="height:32px;">
+                                            </td>
+                                            <td class="uc-num uc-right" data-testid="po-line-qty-received">{{ line.qty_received }}</td>
+                                            <td>
+                                                <input class="uc-input" type="text" inputmode="decimal"
+                                                       name="expected_unit_cost_{{ line.id }}"
+                                                       value="{{ line.expected_unit_cost if line.expected_unit_cost is not none else '' }}"
+                                                       data-testid="po-edit-cost-input"
+                                                       data-line-id="{{ line.id }}"
+                                                       placeholder="(optional)"
+                                                       style="height:32px;">
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% endcall %}
+                {% else %}
+                    {% call c.card("Lines") %}
+                        <div class="uc-empty" data-testid="po-detail-no-lines">
+                            <span class="uc-empty-title">No lines</span>
+                            No lines on this PO.
+                        </div>
+                    {% endcall %}
+                {% endif %}
+
+                {% call c.form_actions() %}
+                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="po-edit-submit">
+                        Save changes
+                    </button>
+                    <a class="uc-btn uc-btn--secondary" href="/admin/purchase-orders">Cancel</a>
+                {% endcall %}
+            </form>
+
+            {% call c.card("Actions") %}
+                <div class="uc-row-2" style="flex-wrap:wrap;">
+                    {% if supplier and supplier.email %}
+                        <form method="post" action="/admin/purchase-orders/{{ po.id }}/send"
+                              data-testid="po-send-form" style="display:inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button class="uc-btn uc-btn--secondary" type="submit" data-testid="po-send-submit">
+                                Send to supplier
+                            </button>
+                        </form>
+                    {% else %}
+                        <span class="uc-muted" data-testid="po-send-blocked-no-email">
+                            This supplier has no email address — add one on the supplier record before sending.
+                        </span>
+                    {% endif %}
+
+                    <form method="post" action="/admin/purchase-orders/{{ po.id }}/cancel"
+                          data-testid="po-cancel-form" style="display:inline;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="uc-btn uc-btn--danger" type="submit" data-testid="po-cancel-submit">
+                            Cancel this draft
+                        </button>
+                    </form>
+                </div>
+            {% endcall %}
+        {% else %}
+            <div class="uc-flash" data-testid="po-readonly-banner">
+                This PO is {{ po.status.value.replace("_", " ") }}; it cannot be edited.
+            </div>
+
+            {% if is_receivable %}
+                <div data-testid="po-receive-link-block">
+                    <a class="uc-btn uc-btn--primary"
+                       href="/admin/purchase-orders/{{ po.id }}/receive"
+                       data-testid="po-receive-link">Receive against this PO &rarr;</a>
+                </div>
             {% endif %}
 
-            <p>
-                <button type="submit" class="button" data-testid="po-edit-submit">
-                    Save changes
-                </button>
-            </p>
-        </form>
-
-        {% if supplier and supplier.email %}
-            <form method="post" action="/admin/purchase-orders/{{ po.id }}/send"
-                  data-testid="po-send-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit" data-testid="po-send-submit">
-                    Send to supplier
-                </button>
-            </form>
-        {% else %}
-            <p data-testid="po-send-blocked-no-email">
-                <em>This supplier has no email address — add one on the supplier record before sending.</em>
-            </p>
+            {% if lines %}
+                {% call c.card("Lines", flush=true) %}
+                    <div class="uc-table-wrap" style="border:0; border-radius:0; box-shadow:none;">
+                        <table class="uc-table" data-testid="po-lines-table">
+                            <thead>
+                                <tr>
+                                    <th>SKU</th>
+                                    <th>Name</th>
+                                    <th>Unit</th>
+                                    <th class="uc-right">Qty ordered</th>
+                                    <th class="uc-right">Qty received</th>
+                                    <th class="uc-right">Expected unit cost</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for line in lines %}
+                                    <tr data-testid="po-line-row"
+                                        data-line-id="{{ line.id }}"
+                                        data-item-id="{{ line.item_id }}">
+                                        <td class="uc-num uc-strong" data-testid="po-line-sku">{{ line.item_sku }}</td>
+                                        <td data-testid="po-line-name">{{ line.item_name }}</td>
+                                        <td>{{ line.item_unit }}</td>
+                                        <td class="uc-num uc-right" data-testid="po-line-qty-ordered">{{ line.qty_ordered }}</td>
+                                        <td class="uc-num uc-right" data-testid="po-line-qty-received">{{ line.qty_received }}</td>
+                                        <td class="uc-num uc-right" data-testid="po-line-expected-unit-cost">
+                                            {% if line.expected_unit_cost is not none %}
+                                                {{ line.expected_unit_cost }}
+                                            {% else %}
+                                                <span data-testid="po-line-cost-empty">—</span>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endcall %}
+            {% else %}
+                {% call c.card("Lines") %}
+                    <div class="uc-empty" data-testid="po-detail-no-lines">
+                        <span class="uc-empty-title">No lines</span>
+                        No lines on this PO.
+                    </div>
+                {% endcall %}
+            {% endif %}
         {% endif %}
 
-        <form method="post" action="/admin/purchase-orders/{{ po.id }}/cancel"
-              data-testid="po-cancel-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit" data-testid="po-cancel-submit">
-                Cancel this draft
-            </button>
-        </form>
-    {% else %}
-        <p data-testid="po-readonly-banner">
-            <em>This PO is {{ po.status.value.replace("_", " ") }}; it cannot be edited.</em>
-        </p>
-
-        {% if is_receivable %}
-            <p data-testid="po-receive-link-block">
-                <a href="/admin/purchase-orders/{{ po.id }}/receive"
-                   data-testid="po-receive-link">Receive against this PO &rarr;</a>
-            </p>
-        {% endif %}
-
-        <dl>
-            <dt>Expected date</dt>
-            <dd data-testid="po-expected-date">{{ po.expected_date.isoformat() if po.expected_date else "—" }}</dd>
-            <dt>Notes</dt>
-            <dd data-testid="po-notes">{{ po.notes or "—" }}</dd>
-        </dl>
-
-        <h2>Lines</h2>
-        {% if lines %}
-            <table data-testid="po-lines-table">
-                <thead>
-                    <tr>
-                        <th>SKU</th>
-                        <th>Name</th>
-                        <th>Unit</th>
-                        <th>Qty ordered</th>
-                        <th>Qty received</th>
-                        <th>Expected unit cost</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for line in lines %}
-                        <tr data-testid="po-line-row"
-                            data-line-id="{{ line.id }}"
-                            data-item-id="{{ line.item_id }}">
-                            <td data-testid="po-line-sku">{{ line.item_sku }}</td>
-                            <td data-testid="po-line-name">{{ line.item_name }}</td>
-                            <td>{{ line.item_unit }}</td>
-                            <td data-testid="po-line-qty-ordered">{{ line.qty_ordered }}</td>
-                            <td data-testid="po-line-qty-received">{{ line.qty_received }}</td>
-                            <td data-testid="po-line-expected-unit-cost">
-                                {% if line.expected_unit_cost is not none %}
-                                    {{ line.expected_unit_cost }}
-                                {% else %}
-                                    <span data-testid="po-line-cost-empty">—</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p data-testid="po-detail-no-lines">No lines on this PO.</p>
-        {% endif %}
-    {% endif %}
-
-    <p>
-        {% if po.status.value != "cancelled" %}
-            <a href="/admin/purchase-orders/{{ po.id }}/pdf"
-               target="_blank"
-               rel="noopener"
-               data-testid="po-pdf-link">Download PDF</a>
-            &middot;
-        {% endif %}
-        <a href="/admin/purchase-orders" data-testid="po-back-to-list">← Back to all POs</a>
-        &middot;
-        <a href="/admin/reorder" data-testid="po-back-to-reorder">Reorder dashboard</a>
-    </p>
+        {% call c.card("Links") %}
+            <div class="uc-row-2" style="flex-wrap:wrap;">
+                {% if po.status.value != "cancelled" %}
+                    <a class="uc-btn uc-btn--secondary"
+                       href="/admin/purchase-orders/{{ po.id }}/pdf"
+                       target="_blank"
+                       rel="noopener"
+                       data-testid="po-pdf-link">Download PDF</a>
+                {% endif %}
+                <a class="uc-btn uc-btn--ghost" href="/admin/reorder" data-testid="po-back-to-reorder">Reorder dashboard</a>
+            </div>
+        {% endcall %}
+    </div>
 {% endblock %}

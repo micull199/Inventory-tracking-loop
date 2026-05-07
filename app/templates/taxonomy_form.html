@@ -1,125 +1,131 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="{{ back_url|default('/admin/taxonomy') }}" data-testid="taxonomy-back">&larr; Back</a></p>
-    <h1>{{ title }}</h1>
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="{{ back_url|default('/admin/taxonomy') }}" data-testid="taxonomy-back">&larr; Back</a>
+    {% endcall %}
 
     {% if parent %}
-        <p data-testid="taxonomy-parent-context">
+        <p data-testid="taxonomy-parent-context" class="uc-muted uc-mb-4">
             Parent category:
             <strong>{{ parent.name }}</strong>
         </p>
     {% endif %}
 
-    <form method="post" action="{{ action }}" data-testid="taxonomy-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="taxonomy-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="name">Name <span aria-hidden="true">*</span></label><br>
-            <input type="text" id="name" name="name" required
-                   value="{{ form.name }}"
-                   data-testid="taxonomy-name-input"
-                   maxlength="255">
-        </p>
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="name" name="name" required
+                           value="{{ form.name }}"
+                           data-testid="taxonomy-name-input"
+                           maxlength="255">
+                </div>
 
-        <p>
-            <label for="sort_order">Sort order</label><br>
-            <input type="number" id="sort_order" name="sort_order"
-                   value="{{ form.sort_order }}"
-                   data-testid="taxonomy-sort-order-input"
-                   step="1">
-            <br>
-            <small>Optional. Lower numbers appear first. Leave blank on a new entry to append it to the end (steps of 10).</small>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="sort_order">Sort order</label>
+                    <input class="uc-input" type="number" id="sort_order" name="sort_order"
+                           value="{{ form.sort_order }}"
+                           data-testid="taxonomy-sort-order-input"
+                           step="1">
+                    <small class="uc-helper">Optional. Lower numbers appear first. Leave blank on a new entry to append it to the end (steps of 10).</small>
+                </div>
+            </section>
 
-        {# Per-category defaults — pre-fill the items create form for items
-           that live on this leaf. All optional. Leaving everything blank
-           means "no defaults" (NULL in the DB). #}
-        <fieldset data-testid="taxonomy-defaults">
-            <legend>Defaults for new items</legend>
-            <p><small>Optional. Pre-fills the items create form when a Manager
-            adds an item under this category, so common values (unit, tracking
-            mode, supplier, etc.) only need to be typed once.</small></p>
+            {# Per-category defaults — pre-fill the items create form for items
+               that live on this leaf. All optional. Leaving everything blank
+               means "no defaults" (NULL in the DB). #}
+            <section class="uc-section" data-testid="taxonomy-defaults">
+                <h3 class="uc-section-title">Defaults for new items</h3>
+                <p class="uc-helper uc-mb-4">Optional. Pre-fills the items create form when a Manager
+                adds an item under this category, so common values (unit, tracking
+                mode, supplier, etc.) only need to be typed once.</p>
 
-            <p>
-                <label for="default_unit">Unit</label><br>
-                <input type="text" id="default_unit" name="default_unit"
-                       value="{{ form.defaults.unit }}"
-                       data-testid="taxonomy-default-unit-input"
-                       maxlength="32"
-                       placeholder="e.g. g, ml, ea">
-            </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_unit">Unit</label>
+                    <input class="uc-input" type="text" id="default_unit" name="default_unit"
+                           value="{{ form.defaults.unit }}"
+                           data-testid="taxonomy-default-unit-input"
+                           maxlength="32"
+                           placeholder="e.g. g, ml, ea">
+                </div>
 
-            <p>
-                <label for="default_tracking_mode">Tracking mode</label><br>
-                <select id="default_tracking_mode" name="default_tracking_mode"
-                        data-testid="taxonomy-default-tracking-mode-input">
-                    <option value="">— no default —</option>
-                    {% for m in tracking_modes %}
-                        <option value="{{ m }}"
-                                {% if form.defaults.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
-                    {% endfor %}
-                </select>
-            </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_tracking_mode">Tracking mode</label>
+                    <select class="uc-select" id="default_tracking_mode" name="default_tracking_mode"
+                            data-testid="taxonomy-default-tracking-mode-input">
+                        <option value="">— no default —</option>
+                        {% for m in tracking_modes %}
+                            <option value="{{ m }}"
+                                    {% if form.defaults.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
 
-            <p>
-                <label>
-                    <input type="checkbox" name="default_requires_checkout" value="true"
-                           data-testid="taxonomy-default-requires-checkout-input"
-                           {% if form.defaults.requires_checkout %}checked{% endif %}>
-                    Requires check-out by default (tools, moulds)
-                </label>
-            </p>
+                <div class="uc-field">
+                    <label class="uc-check">
+                        <input type="checkbox" name="default_requires_checkout" value="true"
+                               data-testid="taxonomy-default-requires-checkout-input"
+                               {% if form.defaults.requires_checkout %}checked{% endif %}>
+                        Requires check-out by default (tools, moulds)
+                    </label>
+                </div>
 
-            <p>
-                <label for="default_reorder_threshold">Reorder threshold</label><br>
-                <input type="text" inputmode="decimal"
-                       id="default_reorder_threshold" name="default_reorder_threshold"
-                       value="{{ form.defaults.reorder_threshold }}"
-                       data-testid="taxonomy-default-reorder-threshold-input">
-            </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_reorder_threshold">Reorder threshold</label>
+                    <input class="uc-input" type="text" inputmode="decimal"
+                           id="default_reorder_threshold" name="default_reorder_threshold"
+                           value="{{ form.defaults.reorder_threshold }}"
+                           data-testid="taxonomy-default-reorder-threshold-input">
+                </div>
 
-            <p>
-                <label for="default_reorder_qty">Reorder quantity</label><br>
-                <input type="text" inputmode="decimal"
-                       id="default_reorder_qty" name="default_reorder_qty"
-                       value="{{ form.defaults.reorder_qty }}"
-                       data-testid="taxonomy-default-reorder-qty-input">
-            </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_reorder_qty">Reorder quantity</label>
+                    <input class="uc-input" type="text" inputmode="decimal"
+                           id="default_reorder_qty" name="default_reorder_qty"
+                           value="{{ form.defaults.reorder_qty }}"
+                           data-testid="taxonomy-default-reorder-qty-input">
+                </div>
 
-            <p>
-                <label for="default_supplier_id">Supplier</label><br>
-                <select id="default_supplier_id" name="default_supplier_id"
-                        data-testid="taxonomy-default-supplier-input">
-                    <option value="">— no default —</option>
-                    {% for s in supplier_options %}
-                        <option value="{{ s.id }}"
-                                {% if form.defaults.supplier_id == (s.id | string) %}selected{% endif %}>
-                            {{ s.label }}
-                        </option>
-                    {% endfor %}
-                </select>
-            </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_supplier_id">Supplier</label>
+                    <select class="uc-select" id="default_supplier_id" name="default_supplier_id"
+                            data-testid="taxonomy-default-supplier-input">
+                        <option value="">— no default —</option>
+                        {% for s in supplier_options %}
+                            <option value="{{ s.id }}"
+                                    {% if form.defaults.supplier_id == (s.id | string) %}selected{% endif %}>
+                                {{ s.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
 
-            <p>
-                <label for="default_location_id">Location</label><br>
-                <select id="default_location_id" name="default_location_id"
-                        data-testid="taxonomy-default-location-input">
-                    <option value="">— no default —</option>
-                    {% for l in location_options %}
-                        <option value="{{ l.id }}"
-                                {% if form.defaults.location_id == (l.id | string) %}selected{% endif %}>
-                            {{ l.label }}
-                        </option>
-                    {% endfor %}
-                </select>
-            </p>
-        </fieldset>
+                <div class="uc-field">
+                    <label class="uc-label" for="default_location_id">Location</label>
+                    <select class="uc-select" id="default_location_id" name="default_location_id"
+                            data-testid="taxonomy-default-location-input">
+                        <option value="">— no default —</option>
+                        {% for l in location_options %}
+                            <option value="{{ l.id }}"
+                                    {% if form.defaults.location_id == (l.id | string) %}selected{% endif %}>
+                                {{ l.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </section>
 
-        <p>
-            <button type="submit" class="button" data-testid="taxonomy-submit">
-                {% if node %}Save changes{% else %}{% if parent %}Create sub-category{% else %}Create category{% endif %}{% endif %}
-            </button>
-        </p>
-    </form>
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="taxonomy-submit">
+                    {% if node %}Save changes{% else %}{% if parent %}Create sub-category{% else %}Create category{% endif %}{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="{{ back_url|default('/admin/taxonomy') }}">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
 {% endblock %}

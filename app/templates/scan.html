@@ -1,212 +1,240 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Scan — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="scan-heading">Scan</h1>
-    <p data-testid="scan-instructions">
-        Scan an item's QR code or type its SKU and press Enter.
-    </p>
+    {% call c.page_header(
+        "Scan",
+        subtitle="Scan an item's QR code or type its SKU and press Enter.",
+        heading_testid="scan-heading"
+    ) %}{% endcall %}
+    <span data-testid="scan-instructions" hidden>Scan an item's QR code or type its SKU and press Enter.</span>
 
-    <form method="post" action="/scan/resolve" data-testid="scan-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="/scan/resolve" data-testid="scan-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="scan-code">Code</label><br>
-            <input type="text" id="scan-code" name="code"
-                   data-testid="scan-code-input"
-                   autocomplete="off" autofocus required
-                   maxlength="255">
-        </p>
+            <div class="uc-field">
+                <label class="uc-label" for="scan-code">Code</label>
+                <input class="uc-input uc-num"
+                       type="text" id="scan-code" name="code"
+                       data-testid="scan-code-input"
+                       autocomplete="off" autofocus required
+                       maxlength="255"
+                       style="font-size:18px; height:48px;">
+            </div>
 
-        <p>
-            <button type="submit" class="button" data-testid="scan-submit">
-                Find item
+            <div class="uc-form-actions">
+                <button type="submit" class="uc-btn uc-btn--primary" data-testid="scan-submit">
+                    Find item
+                </button>
+            </div>
+        </form>
+
+        {# SC2a + SC2b: camera scaffolding + html5-qrcode integration. The toggle
+           button + surface are server-rendered hidden; the inline glue script
+           (at the bottom of this template) feature-detects ``getUserMedia`` and
+           only reveals the button when the browser supports it. On click,
+           ``Html5Qrcode("scan-camera-viewfinder").start({facingMode:"environment"}…)``
+           streams the back camera into the viewfinder div; on a successful
+           decode, the value is written into the keyboard ``<input name="code">``
+           and the scan-form is submitted. The status ``<p>`` carries
+           ``aria-live="polite"`` so progress / error messages reach
+           screen-readers. #}
+        <section data-testid="scan-camera" class="uc-mt-4">
+            <button type="button"
+                    class="uc-btn uc-btn--secondary"
+                    data-testid="scan-camera-toggle"
+                    aria-expanded="false"
+                    aria-controls="scan-camera-surface"
+                    hidden>
+                Use camera
             </button>
-        </p>
-    </form>
-
-    {# SC2a + SC2b: camera scaffolding + html5-qrcode integration. The toggle
-       button + surface are server-rendered hidden; the inline glue script
-       (at the bottom of this template) feature-detects ``getUserMedia`` and
-       only reveals the button when the browser supports it. On click,
-       ``Html5Qrcode("scan-camera-viewfinder").start({facingMode:"environment"}…)``
-       streams the back camera into the viewfinder div; on a successful
-       decode, the value is written into the keyboard ``<input name="code">``
-       and the scan-form is submitted. The status ``<p>`` carries
-       ``aria-live="polite"`` so progress / error messages reach
-       screen-readers. #}
-    <section data-testid="scan-camera">
-        <button type="button"
-                class="button"
-                data-testid="scan-camera-toggle"
-                aria-expanded="false"
-                aria-controls="scan-camera-surface"
-                hidden>
-            Use camera
-        </button>
-        <section id="scan-camera-surface"
-                 data-testid="scan-camera-surface"
-                 hidden>
-            <p data-testid="scan-camera-status" aria-live="polite"></p>
-            <div id="scan-camera-viewfinder"
-                 data-testid="scan-camera-viewfinder"></div>
+            <section id="scan-camera-surface"
+                     data-testid="scan-camera-surface"
+                     hidden
+                     class="uc-mt-4">
+                <p class="uc-muted" data-testid="scan-camera-status" aria-live="polite"></p>
+                <div id="scan-camera-viewfinder"
+                     data-testid="scan-camera-viewfinder"></div>
+            </section>
         </section>
-    </section>
+    {% endcall %}
 
     {% if resolved_item %}
-        <hr>
-        <section data-testid="scan-resolved-item"
-                 data-item-id="{{ resolved_item.id }}">
-            <h2 data-testid="scan-resolved-heading">
-                <strong>{{ resolved_item.sku }}</strong> —
-                {{ resolved_item.name }}
-                {% if resolved_item.archived_at %}
-                    <span data-testid="scan-resolved-archived-badge">archived</span>
-                {% endif %}
-            </h2>
-            <p>
-                <strong>Current quantity:</strong>
-                <span data-testid="scan-resolved-qty">{{ resolved_item.current_qty }}</span>
-                {{ resolved_item.unit }}
-            </p>
-
-            {% if resolved_item.archived_at %}
+        <div class="uc-mt-6"></div>
+        {% call c.card() %}
+            <section data-testid="scan-resolved-item"
+                     data-item-id="{{ resolved_item.id }}">
+                <div class="uc-row-4" style="margin-bottom:var(--s-4);">
+                    <h2 data-testid="scan-resolved-heading" style="margin:0;">
+                        <span class="uc-strong uc-num">{{ resolved_item.sku }}</span>
+                        — {{ resolved_item.name }}
+                    </h2>
+                    {% if resolved_item.archived_at %}
+                        <span data-testid="scan-resolved-archived-badge">{{ c.pill("archived", variant="warn") }}</span>
+                    {% endif %}
+                </div>
                 <p>
-                    <em data-testid="scan-resolved-archived-note">
+                    <span class="uc-stat-label">Current quantity</span>
+                    <span class="uc-strong uc-num" data-testid="scan-resolved-qty">{{ resolved_item.current_qty }}</span>
+                    {{ resolved_item.unit }}
+                </p>
+
+                {% if resolved_item.archived_at %}
+                    <p class="uc-muted" data-testid="scan-resolved-archived-note">
                         This item is archived; record movements via the
                         items list instead.
-                    </em>
-                </p>
-            {% else %}
+                    </p>
+                {% endif %}
+            </section>
+        {% endcall %}
+
+        {% if not resolved_item.archived_at %}
+            <div class="uc-mt-6"></div>
+            {% call c.card("Stock out") %}
                 <section data-testid="scan-out-form">
-                    <h3>Stock out</h3>
                     <form method="post"
                           action="/admin/items/{{ resolved_item.id }}/out">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
                         <input type="hidden" name="next"
                                value="/scan/item/{{ resolved_item.id }}">
-                        <p>
-                            <label for="scan-out-qty">Quantity</label>
-                            <input type="text" id="scan-out-qty" name="qty"
+                        <div class="uc-field">
+                            <label class="uc-label" for="scan-out-qty">Quantity</label>
+                            <input class="uc-input uc-num"
+                                   type="text" id="scan-out-qty" name="qty"
                                    data-testid="scan-out-qty-input"
                                    inputmode="decimal" required
                                    autocomplete="off"
                                    placeholder="qty">
-                            <em>{{ resolved_item.unit }} (FIFO oldest cost layer
-                                consumed first)</em>
-                        </p>
-                        <p>
-                            <button type="submit" class="button"
+                            <small class="uc-helper">{{ resolved_item.unit }} (FIFO oldest cost layer consumed first)</small>
+                        </div>
+                        <div class="uc-form-actions">
+                            <button type="submit" class="uc-btn uc-btn--primary"
                                     data-testid="scan-out-submit">
                                 Stock out
                             </button>
-                        </p>
+                        </div>
                     </form>
                 </section>
+            {% endcall %}
 
+            <div class="uc-mt-6"></div>
+            {% call c.card("Stock in") %}
                 <section data-testid="scan-in-form">
-                    <h3>Stock in</h3>
                     <form method="post"
                           action="/admin/items/{{ resolved_item.id }}/in">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
                         <input type="hidden" name="next"
                                value="/scan/item/{{ resolved_item.id }}">
-                        <p>
-                            <label for="scan-in-qty">Quantity</label>
-                            <input type="text" id="scan-in-qty" name="qty"
-                                   data-testid="scan-in-qty-input"
-                                   inputmode="decimal" required
-                                   autocomplete="off"
-                                   placeholder="qty">
-                            <em>{{ resolved_item.unit }}</em>
-                        </p>
-                        <p>
-                            <label for="scan-in-unit-cost">Unit cost</label>
-                            <input type="text" id="scan-in-unit-cost"
-                                   name="unit_cost"
-                                   data-testid="scan-in-unit-cost-input"
-                                   inputmode="decimal" required
-                                   autocomplete="off"
-                                   placeholder="0.00">
-                            <em>per {{ resolved_item.unit }} (zero allowed
-                                for sample / gifted stock)</em>
-                        </p>
-                        <p>
-                            <button type="submit" class="button"
+                        <div class="uc-field-row">
+                            <div class="uc-field">
+                                <label class="uc-label" for="scan-in-qty">Quantity</label>
+                                <input class="uc-input uc-num"
+                                       type="text" id="scan-in-qty" name="qty"
+                                       data-testid="scan-in-qty-input"
+                                       inputmode="decimal" required
+                                       autocomplete="off"
+                                       placeholder="qty">
+                                <small class="uc-helper">{{ resolved_item.unit }}</small>
+                            </div>
+                            <div class="uc-field">
+                                <label class="uc-label" for="scan-in-unit-cost">Unit cost</label>
+                                <input class="uc-input uc-num"
+                                       type="text" id="scan-in-unit-cost"
+                                       name="unit_cost"
+                                       data-testid="scan-in-unit-cost-input"
+                                       inputmode="decimal" required
+                                       autocomplete="off"
+                                       placeholder="0.00">
+                                <small class="uc-helper">per {{ resolved_item.unit }} (zero allowed for sample / gifted stock)</small>
+                            </div>
+                        </div>
+                        <div class="uc-form-actions">
+                            <button type="submit" class="uc-btn uc-btn--primary"
                                     data-testid="scan-in-submit">
                                 Stock in
                             </button>
-                        </p>
+                        </div>
                     </form>
                 </section>
+            {% endcall %}
 
+            <div class="uc-mt-6"></div>
+            {% call c.card("Adjust") %}
                 <section data-testid="scan-adjust-form">
-                    <h3>Adjust</h3>
                     <form method="post"
                           action="/admin/items/{{ resolved_item.id }}/adjust">
                         <input type="hidden" name="csrf_token"
                                value="{{ csrf_token }}">
                         <input type="hidden" name="next"
                                value="/scan/item/{{ resolved_item.id }}">
-                        <p>
-                            <label for="scan-adjust-direction">Direction</label>
-                            <select id="scan-adjust-direction" name="direction"
-                                    data-testid="scan-adjust-direction-input"
-                                    required>
-                                <option value="">— pick one —</option>
-                                <option value="increase">increase</option>
-                                <option value="decrease">decrease</option>
-                            </select>
-                        </p>
-                        <p>
-                            <label for="scan-adjust-qty">Quantity</label>
-                            <input type="text" id="scan-adjust-qty" name="qty"
-                                   data-testid="scan-adjust-qty-input"
-                                   inputmode="decimal" required
-                                   autocomplete="off"
-                                   placeholder="qty">
-                            <em>{{ resolved_item.unit }}</em>
-                        </p>
-                        <p>
-                            <label for="scan-adjust-unit-cost">Unit cost</label>
-                            <input type="text" id="scan-adjust-unit-cost"
+                        <div class="uc-field-row">
+                            <div class="uc-field">
+                                <label class="uc-label" for="scan-adjust-direction">Direction</label>
+                                <select class="uc-select"
+                                        id="scan-adjust-direction" name="direction"
+                                        data-testid="scan-adjust-direction-input"
+                                        required>
+                                    <option value="">— pick one —</option>
+                                    <option value="increase">increase</option>
+                                    <option value="decrease">decrease</option>
+                                </select>
+                            </div>
+                            <div class="uc-field">
+                                <label class="uc-label" for="scan-adjust-qty">Quantity</label>
+                                <input class="uc-input uc-num"
+                                       type="text" id="scan-adjust-qty" name="qty"
+                                       data-testid="scan-adjust-qty-input"
+                                       inputmode="decimal" required
+                                       autocomplete="off"
+                                       placeholder="qty">
+                                <small class="uc-helper">{{ resolved_item.unit }}</small>
+                            </div>
+                        </div>
+                        <div class="uc-field">
+                            <label class="uc-label" for="scan-adjust-unit-cost">Unit cost</label>
+                            <input class="uc-input uc-num"
+                                   type="text" id="scan-adjust-unit-cost"
                                    name="unit_cost"
                                    data-testid="scan-adjust-unit-cost-input"
                                    inputmode="decimal"
                                    autocomplete="off"
                                    placeholder="0.00">
-                            <em>required for increases; ignored for decreases</em>
-                        </p>
-                        <p>
-                            <label for="scan-adjust-reason">Reason</label>
-                            <input type="text" id="scan-adjust-reason"
+                            <small class="uc-helper">required for increases; ignored for decreases</small>
+                        </div>
+                        <div class="uc-field">
+                            <label class="uc-label" for="scan-adjust-reason">Reason</label>
+                            <input class="uc-input"
+                                   type="text" id="scan-adjust-reason"
                                    name="reason"
                                    data-testid="scan-adjust-reason-input"
                                    required maxlength="255"
                                    autocomplete="off"
                                    placeholder="e.g. stock-take variance">
-                        </p>
-                        <p>
-                            <button type="submit" class="button"
+                        </div>
+                        <div class="uc-form-actions">
+                            <button type="submit" class="uc-btn uc-btn--primary"
                                     data-testid="scan-adjust-submit">
                                 Adjust
                             </button>
-                        </p>
+                        </div>
                     </form>
                 </section>
+            {% endcall %}
 
-                {% if resolved_item.requires_checkout %}
-                    <p>
-                        <a href="/admin/items/{{ resolved_item.id }}/checkout"
-                           class="button"
-                           data-testid="scan-action-checkout">
-                            Check out &rarr;
-                        </a>
-                    </p>
-                {% endif %}
+            {% if resolved_item.requires_checkout %}
+                <div class="uc-mt-6"></div>
+                {% call c.card("Check out") %}
+                    <a href="/admin/items/{{ resolved_item.id }}/checkout"
+                       class="uc-btn uc-btn--secondary"
+                       data-testid="scan-action-checkout">
+                        Check out &rarr;
+                    </a>
+                {% endcall %}
             {% endif %}
-        </section>
+        {% endif %}
     {% endif %}
 
     <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"

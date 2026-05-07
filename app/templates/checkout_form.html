@@ -1,11 +1,15 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Check out — {{ item.name }} — UC Inventory{% endblock %}
 {% block content %}
-    <p>
-        <a href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
-    </p>
-    <h1 data-testid="checkout-form-heading">Check out: {{ item.name }}</h1>
-    <p>
+    {% call c.page_header(
+        "Check out: " ~ item.name,
+        heading_testid="checkout-form-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    {% endcall %}
+
+    <p class="uc-muted uc-mb-4">
         <strong>SKU:</strong> {{ item.sku }} &middot;
         <strong>Current quantity:</strong>
         <span data-testid="item-current-qty">{{ item.current_qty }}</span>
@@ -14,117 +18,126 @@
     </p>
 
     {% if open_checkouts %}
-        <section data-testid="checkout-status-block">
-            <h2>Currently checked out</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Unit</th>
-                        <th>Holder</th>
-                        <th>Out since</th>
-                        <th>Due back</th>
-                        <th>Check in</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for co in open_checkouts %}
-                        <tr data-testid="checkout-open-row" data-checkout-id="{{ co.id }}">
-                            <td data-testid="checkout-open-unit">
-                                {% if co.unit_label %}{{ co.unit_label }}{% else %}—{% endif %}
-                            </td>
-                            <td data-testid="checkout-open-actor">
-                                {{ co.actor_email or "(deleted user)" }}
-                            </td>
-                            <td data-testid="checkout-open-since">
-                                {{ co.checked_out_at.strftime("%Y-%m-%d %H:%M") }}
-                            </td>
-                            <td>
-                                {% if co.expected_return %}
-                                    {{ co.expected_return.strftime("%Y-%m-%d") }}
-                                {% else %}
-                                    —
-                                {% endif %}
-                            </td>
-                            <td>
-                                <form method="post"
-                                      action="/admin/items/checkouts/{{ co.id }}/return"
-                                      data-testid="checkout-return-form"
-                                      data-checkout-id="{{ co.id }}">
-                                    <input type="hidden" name="csrf_token"
-                                           value="{{ csrf_token }}">
-                                    <details>
-                                        <summary>Add return note (optional)</summary>
-                                        <textarea name="condition_note"
-                                                  rows="2" cols="40" maxlength="2000"
-                                                  data-testid="checkout-return-note-input"></textarea>
-                                    </details>
-                                    <button type="submit" class="button"
-                                            data-testid="checkout-return-submit">
-                                        Check in
-                                    </button>
-                                </form>
-                            </td>
+        <section class="uc-card uc-mb-6" data-testid="checkout-status-block" aria-labelledby="open-checkouts-heading">
+            <header class="uc-card-header">
+                <h2 id="open-checkouts-heading">Currently checked out</h2>
+            </header>
+            <div class="uc-card-body uc-card-body--flush">
+                <table class="uc-table">
+                    <thead>
+                        <tr>
+                            <th>Unit</th>
+                            <th>Holder</th>
+                            <th>Out since</th>
+                            <th>Due back</th>
+                            <th class="uc-right">Check in</th>
                         </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        {% for co in open_checkouts %}
+                            <tr data-testid="checkout-open-row" data-checkout-id="{{ co.id }}">
+                                <td data-testid="checkout-open-unit">
+                                    {% if co.unit_label %}{{ co.unit_label }}{% else %}—{% endif %}
+                                </td>
+                                <td data-testid="checkout-open-actor">
+                                    {{ co.actor_email or "(deleted user)" }}
+                                </td>
+                                <td data-testid="checkout-open-since">
+                                    {{ co.checked_out_at.strftime("%Y-%m-%d %H:%M") }}
+                                </td>
+                                <td>
+                                    {% if co.expected_return %}
+                                        {{ co.expected_return.strftime("%Y-%m-%d") }}
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                                <td class="uc-actions">
+                                    <form method="post"
+                                          action="/admin/items/checkouts/{{ co.id }}/return"
+                                          data-testid="checkout-return-form"
+                                          data-checkout-id="{{ co.id }}">
+                                        <input type="hidden" name="csrf_token"
+                                               value="{{ csrf_token }}">
+                                        <details>
+                                            <summary>Add return note (optional)</summary>
+                                            <textarea class="uc-textarea" name="condition_note"
+                                                      rows="2" maxlength="2000"
+                                                      data-testid="checkout-return-note-input"></textarea>
+                                        </details>
+                                        <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                                                data-testid="checkout-return-submit">
+                                            Check in
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </section>
     {% endif %}
 
-    <form method="post" action="/admin/items/{{ item.id }}/checkout"
-          data-testid="checkout-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="/admin/items/{{ item.id }}/checkout"
+              data-testid="checkout-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        {% if is_unique %}
-            <p>
-                <label for="item_unit_id">Unit <span aria-hidden="true">*</span></label><br>
-                <select id="item_unit_id" name="item_unit_id" required
-                        data-testid="checkout-unit-input">
-                    <option value="">— pick a unit —</option>
-                    {% for u in available_units %}
-                        <option value="{{ u.id }}" data-unit-id="{{ u.id }}"
-                                {% if form.item_unit_id == (u.id | string) %}selected{% endif %}>
-                            {{ u.serial_or_label }}
-                        </option>
-                    {% endfor %}
-                </select>
-                {% if not available_units %}
-                    <em>no units are available right now</em>
+            <section class="uc-section">
+                {% if is_unique %}
+                    <div class="uc-field">
+                        <label class="uc-label" for="item_unit_id">Unit <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="item_unit_id" name="item_unit_id" required
+                                data-testid="checkout-unit-input">
+                            <option value="">— pick a unit —</option>
+                            {% for u in available_units %}
+                                <option value="{{ u.id }}" data-unit-id="{{ u.id }}"
+                                        {% if form.item_unit_id == (u.id | string) %}selected{% endif %}>
+                                    {{ u.serial_or_label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        {% if not available_units %}
+                            <small class="uc-helper">no units are available right now</small>
+                        {% endif %}
+                    </div>
                 {% endif %}
-            </p>
-        {% endif %}
 
-        <p>
-            <label for="expected_return">Expected return</label><br>
-            <input type="date" id="expected_return" name="expected_return"
-                   value="{{ form.expected_return }}"
-                   data-testid="checkout-expected-return-input">
-            <em>optional — leave blank if not known</em>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="expected_return">Expected return</label>
+                    <input class="uc-input" type="date" id="expected_return" name="expected_return"
+                           value="{{ form.expected_return }}"
+                           data-testid="checkout-expected-return-input">
+                    <small class="uc-helper">optional — leave blank if not known</small>
+                </div>
 
-        <p>
-            <label for="condition_note">Condition note</label><br>
-            <textarea id="condition_note" name="condition_note"
-                      rows="3" cols="50" maxlength="2000"
-                      data-testid="checkout-note-input">{{ form.condition_note }}</textarea>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="condition_note">Condition note</label>
+                    <textarea class="uc-textarea" id="condition_note" name="condition_note"
+                              rows="3" maxlength="2000"
+                              data-testid="checkout-note-input">{{ form.condition_note }}</textarea>
+                </div>
+            </section>
 
-        {% if can_submit %}
-            <p>
-                <button type="submit" class="button" data-testid="checkout-submit">
-                    Record check-out
-                </button>
-            </p>
-        {% else %}
-            <p>
-                <em data-testid="checkout-no-submit-note">
-                    {% if is_unique %}
-                        No units available to check out right now.
-                    {% else %}
-                        This item is already checked out.
-                    {% endif %}
-                </em>
-            </p>
-        {% endif %}
-    </form>
+            {% if can_submit %}
+                {% call c.form_actions() %}
+                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="checkout-submit">
+                        Record check-out
+                    </button>
+                    <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/edit">Cancel</a>
+                {% endcall %}
+            {% else %}
+                <p class="uc-muted uc-mt-4">
+                    <em data-testid="checkout-no-submit-note">
+                        {% if is_unique %}
+                            No units available to check out right now.
+                        {% else %}
+                            This item is already checked out.
+                        {% endif %}
+                    </em>
+                </p>
+            {% endif %}
+        </form>
+    {% endcall %}
 {% endblock %}

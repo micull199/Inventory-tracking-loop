@@ -1,97 +1,110 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Items — UC Inventory{% endblock %}
 {% block content %}
-    <h1>Items</h1>
-    <p>The things UC tracks. Each item belongs to a leaf category. Quantities change via stock movements (coming soon); use this page to add new items and edit their fields.</p>
+    {% call c.page_header(
+        "Items",
+        subtitle="The things UC tracks. Each item belongs to a leaf category. Quantities change via stock movements.",
+        heading_testid="items-heading"
+    ) %}
+        {% if can_create %}
+            {{ c.button("+ New item", href="/admin/items/new", testid="new-item") }}
+        {% endif %}
+    {% endcall %}
 
-    {% if can_create %}
-        <p>
-            <a class="button" href="/admin/items/new" data-testid="new-item">New item</a>
-        </p>
-    {% endif %}
-
-    <nav aria-label="Filter items" data-testid="items-tabs" style="margin-bottom: 1rem;">
+    <nav class="uc-tabs" aria-label="Filter items" data-testid="items-tabs">
         <a href="/admin/items?show=active"
            data-testid="tab-active"
            {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
-        |
         <a href="/admin/items?show=archived"
            data-testid="tab-archived"
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
-    <nav aria-label="Filter by checkout flag" data-testid="items-checkout-filter" style="margin-bottom: 1rem;">
-        <a href="/admin/items?show={{ show }}"
-           data-testid="filter-all"
-           {% if not requires_checkout_filter %}aria-current="page"{% endif %}>All items</a>
-        |
-        <a href="/admin/items?show={{ show }}&amp;requires_checkout=yes"
-           data-testid="filter-requires-checkout"
-           {% if requires_checkout_filter %}aria-current="page"{% endif %}>Requires checkout</a>
-    </nav>
-
-    {% if can_csv %}
-        <p>
-            <a href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}"
+    <div class="uc-toolbar">
+        <nav class="uc-row-2" aria-label="Filter by checkout flag" data-testid="items-checkout-filter">
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               href="/admin/items?show={{ show }}"
+               data-testid="filter-all"
+               {% if not requires_checkout_filter %}aria-current="page"{% endif %}>All items</a>
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               href="/admin/items?show={{ show }}&amp;requires_checkout=yes"
+               data-testid="filter-requires-checkout"
+               {% if requires_checkout_filter %}aria-current="page"{% endif %}>Requires checkout</a>
+        </nav>
+        <span class="uc-toolbar-spacer"></span>
+        {% if can_csv %}
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}"
                data-testid="items-list-csv-link">Download CSV</a>
-        </p>
-    {% endif %}
+        {% endif %}
+    </div>
 
     {% if rows %}
-        <table data-testid="items-table">
-            <thead>
-                <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>Category</th>
-                    <th>Unit</th>
-                    <th>Tracking</th>
-                    <th>Qty</th>
-                    <th>Threshold</th>
-                    <th>Checkout?</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in rows %}
-                    {% set i = r.item %}
-                    <tr data-testid="item-row" data-item-id="{{ i.id }}">
-                        <td data-testid="item-sku">{{ i.sku }}</td>
-                        <td data-testid="item-name">{{ i.name }}</td>
-                        <td data-testid="item-category">{{ r.category_label }}</td>
-                        <td>{{ i.unit }}</td>
-                        <td>{{ i.tracking_mode.value }}</td>
-                        <td>{{ i.current_qty }}</td>
-                        <td>{{ i.reorder_threshold }}</td>
-                        <td data-testid="item-requires-checkout">{% if i.requires_checkout %}Yes{% else %}—{% endif %}</td>
-                        <td>
-                            <a href="/admin/items/{{ i.id }}/detail" data-testid="detail-link">Details</a>
-                            {% if can_edit_item %}
-                                <a href="/admin/items/{{ i.id }}/edit" data-testid="edit-item">Edit</a>
-                            {% else %}
-                                <a href="/admin/items/{{ i.id }}/edit" data-testid="view-item">View</a>
-                            {% endif %}
-                            {% if can_archive %}
-                                {% if i.archived_at is none %}
-                                    <form method="post" action="/admin/items/{{ i.id }}/archive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="archive-item">Archive</button>
-                                    </form>
-                                {% else %}
-                                    <form method="post" action="/admin/items/{{ i.id }}/unarchive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="unarchive-item">Unarchive</button>
-                                    </form>
-                                {% endif %}
-                            {% endif %}
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="items-table">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Unit</th>
+                        <th>Tracking</th>
+                        <th class="uc-right">Qty</th>
+                        <th class="uc-right">Threshold</th>
+                        <th>Checkout?</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        {% set i = r.item %}
+                        <tr data-testid="item-row" data-item-id="{{ i.id }}">
+                            <td class="uc-num uc-strong" data-testid="item-sku">{{ i.sku }}</td>
+                            <td data-testid="item-name">
+                                {{ i.name }}
+                                {% if i.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td data-testid="item-category">{{ r.category_label }}</td>
+                            <td>{{ i.unit }}</td>
+                            <td>{{ i.tracking_mode.value }}</td>
+                            <td class="uc-num uc-right">{{ i.current_qty }}</td>
+                            <td class="uc-num uc-right">{{ i.reorder_threshold }}</td>
+                            <td data-testid="item-requires-checkout">{% if i.requires_checkout %}Yes{% else %}—{% endif %}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/items/{{ i.id }}/detail" data-testid="detail-link">Details</a>
+                                {% if can_edit_item %}
+                                    <a href="/admin/items/{{ i.id }}/edit" data-testid="edit-item">Edit</a>
+                                {% else %}
+                                    <a href="/admin/items/{{ i.id }}/edit" data-testid="view-item">View</a>
+                                {% endif %}
+                                {% if can_archive %}
+                                    {% if i.archived_at is none %}
+                                        <form method="post" action="/admin/items/{{ i.id }}/archive" style="display:inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit" data-testid="archive-item">Archive</button>
+                                        </form>
+                                    {% else %}
+                                        <form method="post" action="/admin/items/{{ i.id }}/unarchive" style="display:inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit" data-testid="unarchive-item">Unarchive</button>
+                                        </form>
+                                    {% endif %}
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="items-empty">
-            {% if show == "archived" %}No archived items.{% else %}No items yet. Create your first one above.{% endif %}
-        </p>
+        <div data-testid="items-empty">
+            {{ c.empty_state(
+                "No archived items" if show == "archived" else "No items yet",
+                "" if show == "archived" else "Create your first item above to get started."
+            ) }}
+        </div>
     {% endif %}
 {% endblock %}

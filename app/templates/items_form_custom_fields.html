@@ -21,7 +21,7 @@
 {% set oob = oob_keys if oob_keys is defined else [] %}
 
 {% if "unit" in oob %}
-    <input type="text" id="unit" name="unit" required
+    <input class="uc-input" type="text" id="unit" name="unit" required
            value="{{ form.unit }}"
            data-testid="item-unit-input"
            maxlength="32"
@@ -30,7 +30,7 @@
 {% endif %}
 
 {% if "tracking_mode" in oob %}
-    <select id="tracking_mode" name="tracking_mode"
+    <select class="uc-select" id="tracking_mode" name="tracking_mode"
             data-testid="item-tracking-mode-input"
             hx-swap-oob="true">
         {% for m in tracking_modes %}
@@ -48,21 +48,21 @@
 {% endif %}
 
 {% if "reorder_threshold" in oob %}
-    <input type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
+    <input class="uc-input" type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
            value="{{ form.reorder_threshold }}"
            data-testid="item-reorder-threshold-input"
            hx-swap-oob="true">
 {% endif %}
 
 {% if "reorder_qty" in oob %}
-    <input type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
+    <input class="uc-input" type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
            value="{{ form.reorder_qty }}"
            data-testid="item-reorder-qty-input"
            hx-swap-oob="true">
 {% endif %}
 
 {% if "supplier_id" in oob %}
-    <select id="supplier_id" name="supplier_id" data-testid="item-supplier-input"
+    <select class="uc-select" id="supplier_id" name="supplier_id" data-testid="item-supplier-input"
             hx-swap-oob="true">
         <option value="">— none —</option>
         {% for s in supplier_options %}
@@ -75,7 +75,7 @@
 {% endif %}
 
 {% if "location_id" in oob %}
-    <select id="location_id" name="location_id" data-testid="item-location-input"
+    <select class="uc-select" id="location_id" name="location_id" data-testid="item-location-input"
             hx-swap-oob="true">
         <option value="">— none —</option>
         {% for l in location_options %}
@@ -88,26 +88,26 @@
 {% endif %}
 
 {% if field_defs %}
-    <fieldset data-testid="item-custom-fields">
-        <legend>Category fields</legend>
+    <fieldset class="uc-section" data-testid="item-custom-fields" style="border:0; padding:0; margin:0;">
+        <legend class="uc-section-title">Category fields</legend>
         {% for fd in field_defs %}
             {% set fkey = fd.key %}
             {% set fname = "cf_" ~ fkey %}
             {% set fid = "cf-" ~ fkey %}
             {% set tid_base = "item-cf-" ~ fkey %}
-            <p data-testid="item-cf-row" data-cf-key="{{ fkey }}">
+            <div class="uc-field" data-testid="item-cf-row" data-cf-key="{{ fkey }}">
                 {% if fd.type.value == "boolean" %}
-                    <label>
+                    <label class="uc-check">
                         <input type="checkbox" id="{{ fid }}" name="{{ fname }}"
                                value="true"
                                data-testid="{{ tid_base }}-input"
                                {% if form.custom[fkey] %}checked{% endif %}
                                {% if ro %}disabled{% endif %}>
-                        {{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}
+                        {{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}
                     </label>
                 {% elif fd.type.value == "select" %}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <select id="{{ fid }}" name="{{ fname }}"
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <select class="uc-select" id="{{ fid }}" name="{{ fname }}"
                             {% if fd.required %}required{% endif %}
                             data-testid="{{ tid_base }}-input"
                             {% if ro %}disabled{% endif %}>
@@ -118,8 +118,8 @@
                         {% endfor %}
                     </select>
                 {% elif fd.type.value == "multiselect" %}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <select id="{{ fid }}" name="{{ fname }}" multiple
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <select class="uc-select" id="{{ fid }}" name="{{ fname }}" multiple
                             {% if fd.required %}required{% endif %}
                             data-testid="{{ tid_base }}-input"
                             {% if ro %}disabled{% endif %}>
@@ -129,36 +129,36 @@
                         {% endfor %}
                     </select>
                 {% elif fd.type.value == "number" %}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <input type="number" step="1" id="{{ fid }}" name="{{ fname }}"
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <input class="uc-input" type="number" step="1" id="{{ fid }}" name="{{ fname }}"
                            value="{{ form.custom[fkey] }}"
                            {% if fd.required %}required{% endif %}
                            data-testid="{{ tid_base }}-input"
                            {% if ro %}disabled{% endif %}>
                 {% elif fd.type.value == "decimal" %}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <input type="text" inputmode="decimal" id="{{ fid }}" name="{{ fname }}"
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <input class="uc-input" type="text" inputmode="decimal" id="{{ fid }}" name="{{ fname }}"
                            value="{{ form.custom[fkey] }}"
                            {% if fd.required %}required{% endif %}
                            data-testid="{{ tid_base }}-input"
                            {% if ro %}disabled{% endif %}>
                 {% elif fd.type.value == "date" %}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <input type="date" id="{{ fid }}" name="{{ fname }}"
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <input class="uc-input" type="date" id="{{ fid }}" name="{{ fname }}"
                            value="{{ form.custom[fkey] }}"
                            {% if fd.required %}required{% endif %}
                            data-testid="{{ tid_base }}-input"
                            {% if ro %}disabled{% endif %}>
                 {% else %}
                     {# Default: text. #}
-                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
-                    <input type="text" id="{{ fid }}" name="{{ fname }}"
+                    <label class="uc-label" for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+                    <input class="uc-input" type="text" id="{{ fid }}" name="{{ fname }}"
                            value="{{ form.custom[fkey] }}"
                            {% if fd.required %}required{% endif %}
                            data-testid="{{ tid_base }}-input"
                            {% if ro %}disabled{% endif %}>
                 {% endif %}
-            </p>
+            </div>
         {% endfor %}
     </fieldset>
 {% endif %}

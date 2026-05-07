@@ -1,68 +1,74 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="{{ back_url }}" data-testid="field-def-back">&larr; Back</a></p>
-    <h1>{{ title }}</h1>
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="{{ back_url }}" data-testid="field-def-back">&larr; Back</a>
+    {% endcall %}
 
-    <p data-testid="field-def-node-context">
+    <p data-testid="field-def-node-context" class="uc-muted uc-mb-4">
         On node: <strong>{{ node.name }}</strong>
         {% if parent %}(sub-category of {{ parent.name }}){% endif %}
     </p>
 
-    <form method="post" action="{{ action }}" data-testid="field-def-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="field-def-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="name">Name <span aria-hidden="true">*</span></label><br>
-            <input type="text" id="name" name="name" required
-                   value="{{ form.name }}"
-                   data-testid="field-def-name-input"
-                   maxlength="255">
-        </p>
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="name" name="name" required
+                           value="{{ form.name }}"
+                           data-testid="field-def-name-input"
+                           maxlength="255">
+                </div>
 
-        <p>
-            <label for="type">Type</label><br>
-            {# HTMX wiring: swap the options textarea in/out based on the
-               picked type. Server-side validation still rejects options
-               on non-select fields (defence in depth). #}
-            <select id="type" name="type" data-testid="field-def-type-input"
-                    hx-get="/admin/taxonomy/fields/_options-partial"
-                    hx-trigger="change"
-                    hx-target="#fd-options-container"
-                    hx-swap="innerHTML">
-                {% for t in field_types %}
-                    <option value="{{ t }}" {% if form.type == t %}selected{% endif %}>{{ t }}</option>
-                {% endfor %}
-            </select>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="type">Type</label>
+                    {# HTMX wiring: swap the options textarea in/out based on the
+                       picked type. Server-side validation still rejects options
+                       on non-select fields (defence in depth). #}
+                    <select class="uc-select" id="type" name="type" data-testid="field-def-type-input"
+                            hx-get="/admin/taxonomy/fields/_options-partial"
+                            hx-trigger="change"
+                            hx-target="#fd-options-container"
+                            hx-swap="innerHTML">
+                        {% for t in field_types %}
+                            <option value="{{ t }}" {% if form.type == t %}selected{% endif %}>{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
 
-        <div id="fd-options-container">
-            {% include "taxonomy_field_def_options_partial.html" %}
-        </div>
+                <div id="fd-options-container">
+                    {% include "taxonomy_field_def_options_partial.html" %}
+                </div>
 
-        <p>
-            <label>
-                <input type="checkbox" name="required" value="true"
-                       data-testid="field-def-required-input"
-                       {% if form.required %}checked{% endif %}>
-                Required
-            </label>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-check">
+                        <input type="checkbox" name="required" value="true"
+                               data-testid="field-def-required-input"
+                               {% if form.required %}checked{% endif %}>
+                        Required
+                    </label>
+                </div>
 
-        <p>
-            <label for="sort_order">Sort order</label><br>
-            <input type="number" id="sort_order" name="sort_order"
-                   value="{{ form.sort_order }}"
-                   data-testid="field-def-sort-order-input"
-                   step="1">
-            <br>
-            <small>Optional. Lower numbers appear first. Leave blank on a new field to append it (steps of 10).</small>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="sort_order">Sort order</label>
+                    <input class="uc-input" type="number" id="sort_order" name="sort_order"
+                           value="{{ form.sort_order }}"
+                           data-testid="field-def-sort-order-input"
+                           step="1">
+                    <small class="uc-helper">Optional. Lower numbers appear first. Leave blank on a new field to append it (steps of 10).</small>
+                </div>
+            </section>
 
-        <p>
-            <button type="submit" class="button" data-testid="field-def-submit">
-                {% if field %}Save changes{% else %}Create field{% endif %}
-            </button>
-        </p>
-    </form>
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="field-def-submit">
+                    {% if field %}Save changes{% else %}Create field{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="{{ back_url }}">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
 {% endblock %}

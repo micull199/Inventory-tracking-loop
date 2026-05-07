@@ -1,83 +1,97 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Reorder — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="reorder-heading">Reorder</h1>
-    <p>
-        Items where current quantity is at or below the reorder threshold.
-        Grouped by supplier so you can see what to order from whom.
-    </p>
-
-    <p>
-        <a href="/admin/reorder?format=csv" data-testid="reorder-csv-link">Download CSV</a>
-    </p>
+    {% call c.page_header(
+        "Reorder",
+        subtitle="Items where current quantity is at or below the reorder threshold. Grouped by supplier so you can see what to order from whom.",
+        heading_testid="reorder-heading"
+    ) %}
+        <a class="uc-btn uc-btn--secondary"
+           href="/admin/reorder?format=csv"
+           data-testid="reorder-csv-link">Download CSV</a>
+    {% endcall %}
 
     {% if groups %}
         {% for group in groups %}
-            <section
+            <section class="uc-card uc-mb-6"
                 data-testid="reorder-group"
                 data-supplier-id="{{ group.supplier_id if group.supplier_id is not none else 'none' }}"
                 {% if group.supplier_archived %}data-supplier-archived="true"{% endif %}>
-                <h2 data-testid="reorder-supplier-name">{{ group.supplier_label }}</h2>
-                {% if group.supplier_id is none %}
-                    <p data-testid="reorder-draft-po-blocked-no-supplier">
-                        <em>Assign an active supplier on the item before drafting a PO.</em>
-                    </p>
-                {% elif group.supplier_archived %}
-                    <p data-testid="reorder-draft-po-blocked-archived">
-                        <em>Supplier is archived — unarchive it or move items to an active supplier first.</em>
-                    </p>
-                {% else %}
-                    <form method="post" action="/admin/reorder/draft-po"
-                          data-testid="reorder-draft-po-form">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="supplier_id" value="{{ group.supplier_id }}">
-                        <button type="submit"
-                                class="button"
-                                data-testid="reorder-draft-po-button">
-                            Draft PO from this supplier
-                        </button>
-                    </form>
-                {% endif %}
-                <table data-testid="reorder-table">
-                    <thead>
-                        <tr>
-                            <th>SKU</th>
-                            <th>Name</th>
-                            <th>Unit</th>
-                            <th>Current qty</th>
-                            <th>Threshold</th>
-                            <th>Suggested reorder</th>
-                            <th>Deficit</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for r in group.rows %}
-                            {% set i = r.item %}
-                            <tr data-testid="reorder-row" data-item-id="{{ i.id }}">
-                                <td data-testid="reorder-item-sku">{{ i.sku }}</td>
-                                <td data-testid="reorder-item-name">{{ i.name }}</td>
-                                <td>{{ i.unit }}</td>
-                                <td data-testid="reorder-current-qty">{{ r.current_qty }}</td>
-                                <td data-testid="reorder-threshold">{{ r.threshold }}</td>
-                                <td data-testid="reorder-reorder-qty">{{ r.reorder_qty }}</td>
-                                <td data-testid="reorder-deficit">{{ r.deficit }}</td>
-                                <td>
-                                    <a href="/admin/items/{{ i.id }}/detail"
-                                       data-testid="reorder-detail-link">Details</a>
-                                    &middot;
-                                    <a href="/admin/items/{{ i.id }}/in"
-                                       data-testid="reorder-stock-in-link">Stock in</a>
-                                </td>
+                <header class="uc-card-header">
+                    <h2 data-testid="reorder-supplier-name">{{ group.supplier_label }}</h2>
+                    {% if group.supplier_archived %}
+                        {{ c.pill("archived", variant="warn") }}
+                    {% endif %}
+                    <div class="uc-card-actions">
+                        {% if group.supplier_id is none %}
+                            <span class="uc-muted" data-testid="reorder-draft-po-blocked-no-supplier">
+                                Assign an active supplier on the item before drafting a PO.
+                            </span>
+                        {% elif group.supplier_archived %}
+                            <span class="uc-muted" data-testid="reorder-draft-po-blocked-archived">
+                                Supplier is archived — unarchive it or move items to an active supplier first.
+                            </span>
+                        {% else %}
+                            <form method="post" action="/admin/reorder/draft-po"
+                                  data-testid="reorder-draft-po-form">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="supplier_id" value="{{ group.supplier_id }}">
+                                <button type="submit"
+                                        class="uc-btn uc-btn--primary uc-btn--sm"
+                                        data-testid="reorder-draft-po-button">
+                                    Draft PO from this supplier
+                                </button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </header>
+                <div class="uc-card-body uc-card-body--flush">
+                    <table class="uc-table" data-testid="reorder-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th>Name</th>
+                                <th>Unit</th>
+                                <th class="uc-right">Current qty</th>
+                                <th class="uc-right">Threshold</th>
+                                <th class="uc-right">Suggested reorder</th>
+                                <th class="uc-right">Deficit</th>
+                                <th class="uc-right">Actions</th>
                             </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {% for r in group.rows %}
+                                {% set i = r.item %}
+                                <tr data-testid="reorder-row" data-item-id="{{ i.id }}">
+                                    <td class="uc-num uc-strong" data-testid="reorder-item-sku">{{ i.sku }}</td>
+                                    <td data-testid="reorder-item-name">{{ i.name }}</td>
+                                    <td>{{ i.unit }}</td>
+                                    <td class="uc-num uc-right" data-testid="reorder-current-qty">{{ r.current_qty }}</td>
+                                    <td class="uc-num uc-right" data-testid="reorder-threshold">{{ r.threshold }}</td>
+                                    <td class="uc-num uc-right" data-testid="reorder-reorder-qty">{{ r.reorder_qty }}</td>
+                                    <td class="uc-num uc-right" data-testid="reorder-deficit">{{ r.deficit }}</td>
+                                    <td class="uc-actions">
+                                        <a href="/admin/items/{{ i.id }}/detail"
+                                           data-testid="reorder-detail-link">Details</a>
+                                        <a href="/admin/items/{{ i.id }}/in"
+                                           data-testid="reorder-stock-in-link">Stock in</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </section>
         {% endfor %}
     {% else %}
-        <p data-testid="reorder-empty">
-            Nothing to reorder right now — every active item is above its threshold.
-        </p>
+        {% call c.card() %}
+            <div data-testid="reorder-empty">
+                {{ c.empty_state(
+                    "Nothing to reorder",
+                    "Every active item is above its threshold."
+                ) }}
+            </div>
+        {% endcall %}
     {% endif %}
 {% endblock %}

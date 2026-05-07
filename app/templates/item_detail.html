@@ -1,164 +1,183 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ item.name }} — UC Inventory{% endblock %}
 {% block content %}
     <p>
         <a href="/admin/items">&larr; Back to items</a>
     </p>
 
-    <h1 data-testid="item-detail-heading">{{ item.name }}</h1>
-    <p>
-        <strong>SKU:</strong> <span data-testid="item-detail-sku">{{ item.sku }}</span>
-        {% if item.archived_at %}
-            &middot; <em data-testid="item-detail-archived">archived</em>
-        {% endif %}
-    </p>
-    <p>
-        <strong>Current quantity:</strong>
-        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
-        {{ item.unit }}
-        &middot;
-        <strong>Open value:</strong>
-        <span data-testid="item-open-value">{{ open_value }}</span>
-        &middot;
-        <strong>Reorder threshold:</strong>
-        <span data-testid="item-detail-threshold">{{ item.reorder_threshold }}</span>
-    </p>
-
-    <p>
+    {% call c.page_header(
+        item.name,
+        subtitle="SKU " ~ item.sku ~ (" — archived" if item.archived_at else ""),
+        heading_testid="item-detail-heading"
+    ) %}
         {% if can_edit_item %}
-            <a href="/admin/items/{{ item.id }}/edit" data-testid="edit-item-link">
-                Edit item &rarr;
-            </a>
-            {% if not item.archived_at %}&middot;{% endif %}
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/edit"
+               data-testid="edit-item-link">Edit item</a>
         {% endif %}
         {% if not item.archived_at %}
-            <a href="/admin/items/{{ item.id }}/in" data-testid="stock-in-link">
-                Stock in &rarr;
-            </a>
-            &middot;
-            <a href="/admin/items/{{ item.id }}/out" data-testid="stock-out-link">
-                Stock out &rarr;
-            </a>
-            &middot;
-            <a href="/admin/items/{{ item.id }}/adjust" data-testid="stock-adjust-link">
-                Adjust &rarr;
-            </a>
-            &middot;
-            <a href="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-link">
-                Transfer &rarr;
-            </a>
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/in"
+               data-testid="stock-in-link">Stock in</a>
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/out"
+               data-testid="stock-out-link">Stock out</a>
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/adjust"
+               data-testid="stock-adjust-link">Adjust</a>
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/transfer"
+               data-testid="stock-transfer-link">Transfer</a>
             {% if item.requires_checkout %}
-                &middot;
-                <a href="/admin/items/{{ item.id }}/checkout" data-testid="checkout-link">
-                    Check out &rarr;
-                </a>
+                <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/checkout"
+                   data-testid="checkout-link">Check out</a>
             {% endif %}
             {% if item.tracking_mode.value == "unique" %}
-                &middot;
-                <a href="/admin/items/{{ item.id }}/units" data-testid="manage-units">
-                    Manage units &rarr;
-                </a>
+                <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/units"
+                   data-testid="manage-units">Manage units</a>
             {% endif %}
         {% endif %}
-    </p>
+    {% endcall %}
 
-    <h2>Open cost layers</h2>
-    {% if layers %}
-        <table data-testid="cost-layers-table">
-            <thead>
-                <tr>
-                    <th>Received</th>
-                    <th>Qty received</th>
-                    <th>Qty remaining</th>
-                    <th>Unit cost</th>
-                    <th>Source</th>
-                    <th>Movement</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for layer in layers %}
-                    <tr data-testid="cost-layer-row" data-layer-id="{{ layer.id }}">
-                        <td>{{ layer.received_at.strftime("%Y-%m-%d %H:%M") }}</td>
-                        <td>{{ layer.qty_received }}</td>
-                        <td data-testid="cost-layer-qty-remaining">{{ layer.qty_remaining }}</td>
-                        <td data-testid="cost-layer-unit-cost">{{ layer.unit_cost }}</td>
-                        <td data-testid="cost-layer-source">{{ layer.source }}</td>
-                        <td>#{{ layer.source_movement_id }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% else %}
-        <p data-testid="cost-layers-empty">No open cost layers.</p>
+    {% if item.archived_at %}
+        <span data-testid="item-detail-archived" hidden>archived</span>
     {% endif %}
 
-    <h2>Movement history</h2>
-    <p>
-        <a href="/admin/items/{{ item.id }}/detail?format=csv"
-           data-testid="movements-csv-link">Download CSV &rarr;</a>
-    </p>
-    {% if movements %}
-        <table data-testid="movements-timeline">
-            <thead>
-                <tr>
-                    <th>When</th>
-                    <th>Type</th>
-                    <th>Qty</th>
-                    <th>Total cost</th>
-                    <th>Actor</th>
-                    <th>Reason</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for m in movements %}
-                    <tr data-testid="timeline-row" data-movement-id="{{ m.id }}" data-direction="{{ m.direction }}">
-                        <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
-                        <td>{{ m.type }}</td>
-                        <td data-testid="timeline-qty">{{ m.direction }}{{ m.qty }}</td>
-                        <td data-testid="timeline-total-cost">{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
-                        <td>{{ m.actor_email or "—" }}</td>
-                        <td>{{ m.reason or "" }}</td>
-                    </tr>
-                    {% if m.breakdown %}
-                        <tr data-testid="layer-breakdown" data-movement-id="{{ m.id }}">
-                            <td colspan="6">
-                                <ul data-testid="layer-breakdown-list">
-                                    {% for c in m.breakdown %}
-                                        <li data-testid="layer-breakdown-row" data-layer-id="{{ c.layer_id }}">
-                                            {{ c.qty_consumed }} &times; {{ c.unit_cost_at_consumption }}
-                                            from layer received {{ c.layer_received_at.strftime("%Y-%m-%d %H:%M") }}
-                                        </li>
-                                    {% endfor %}
-                                </ul>
-                            </td>
+    {% call c.card("Details") %}
+        <div class="uc-grid-2">
+            <div>
+                <span class="uc-stat-label">SKU</span>
+                <span class="uc-strong uc-num" data-testid="item-detail-sku">{{ item.sku }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Unit</span>
+                <span class="uc-strong">{{ item.unit }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Current quantity</span>
+                <span class="uc-strong uc-num" data-testid="item-current-qty">{{ item.current_qty }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Open value</span>
+                <span class="uc-strong uc-num" data-testid="item-open-value">{{ open_value }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Reorder threshold</span>
+                <span class="uc-strong uc-num" data-testid="item-detail-threshold">{{ item.reorder_threshold }}</span>
+            </div>
+        </div>
+    {% endcall %}
+
+    <div class="uc-mt-6"></div>
+
+    {% call c.card("Open cost layers", flush=true) %}
+        {% if layers %}
+            <div class="uc-table-wrap" style="border:0; border-radius:0; box-shadow:none;">
+                <table class="uc-table" data-testid="cost-layers-table">
+                    <thead>
+                        <tr>
+                            <th>Received</th>
+                            <th class="uc-right">Qty received</th>
+                            <th class="uc-right">Qty remaining</th>
+                            <th class="uc-right">Unit cost</th>
+                            <th>Source</th>
+                            <th>Movement</th>
                         </tr>
-                    {% endif %}
-                {% endfor %}
-            </tbody>
-        </table>
+                    </thead>
+                    <tbody>
+                        {% for layer in layers %}
+                            <tr data-testid="cost-layer-row" data-layer-id="{{ layer.id }}">
+                                <td class="uc-num">{{ layer.received_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                                <td class="uc-num uc-right">{{ layer.qty_received }}</td>
+                                <td class="uc-num uc-right" data-testid="cost-layer-qty-remaining">{{ layer.qty_remaining }}</td>
+                                <td class="uc-num uc-right" data-testid="cost-layer-unit-cost">{{ layer.unit_cost }}</td>
+                                <td data-testid="cost-layer-source">{{ layer.source }}</td>
+                                <td class="uc-num">#{{ layer.source_movement_id }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            {{ c.empty_state("No open cost layers.", "", testid="cost-layers-empty") }}
+        {% endif %}
+    {% endcall %}
 
-        <nav aria-label="Movement history pagination" data-testid="pagination">
-            {% if pagination.page_count <= 1 %}
-                <p data-testid="pagination-single-page">
-                    Page {{ pagination.page }} of {{ pagination.page_count }}
-                    ({{ pagination.total }} total)
-                </p>
+    <div class="uc-mt-6"></div>
+
+    <section class="uc-card" aria-labelledby="movements-heading">
+        <header class="uc-card-header">
+            <h2 id="movements-heading">Movement history</h2>
+            <div class="uc-card-actions">
+                <a class="uc-btn uc-btn--secondary uc-btn--sm"
+                   href="/admin/items/{{ item.id }}/detail?format=csv"
+                   data-testid="movements-csv-link">Download CSV</a>
+            </div>
+        </header>
+        <div class="uc-card-body uc-card-body--flush">
+            {% if movements %}
+                <table class="uc-table" data-testid="movements-timeline">
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Type</th>
+                            <th class="uc-right">Qty</th>
+                            <th class="uc-right">Total cost</th>
+                            <th>Actor</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for m in movements %}
+                            <tr data-testid="timeline-row" data-movement-id="{{ m.id }}" data-direction="{{ m.direction }}">
+                                <td class="uc-num">{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                                <td>{{ m.type }}</td>
+                                <td class="uc-num uc-right" data-testid="timeline-qty">{{ m.direction }}{{ m.qty }}</td>
+                                <td class="uc-num uc-right" data-testid="timeline-total-cost">{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
+                                <td>{{ m.actor_email or "—" }}</td>
+                                <td>{{ m.reason or "" }}</td>
+                            </tr>
+                            {% if m.breakdown %}
+                                <tr data-testid="layer-breakdown" data-movement-id="{{ m.id }}">
+                                    <td colspan="6">
+                                        <ul data-testid="layer-breakdown-list" class="uc-muted" style="margin:0; padding-left:var(--s-5);">
+                                            {% for c in m.breakdown %}
+                                                <li data-testid="layer-breakdown-row" data-layer-id="{{ c.layer_id }}">
+                                                    {{ c.qty_consumed }} &times; {{ c.unit_cost_at_consumption }}
+                                                    from layer received {{ c.layer_received_at.strftime("%Y-%m-%d %H:%M") }}
+                                                </li>
+                                            {% endfor %}
+                                        </ul>
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
             {% else %}
-                <p data-testid="pagination-info">
-                    Page {{ pagination.page }} of {{ pagination.page_count }}
-                    ({{ pagination.total }} total)
-                </p>
-                {% if pagination.has_prev %}
-                    <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page - 1 }}"
-                       data-testid="pagination-prev">&larr; Previous</a>
-                {% endif %}
-                {% if pagination.has_next %}
-                    <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page + 1 }}"
-                       data-testid="pagination-next">Next &rarr;</a>
-                {% endif %}
+                {{ c.empty_state("No movements yet for this item.", "", testid="movements-timeline-empty") }}
             {% endif %}
-        </nav>
-    {% else %}
-        <p data-testid="movements-timeline-empty">No movements yet for this item.</p>
-    {% endif %}
+        </div>
+        {% if movements %}
+            <div class="uc-card-body" style="border-top:1px solid var(--border);">
+                <nav aria-label="Movement history pagination" data-testid="pagination" class="uc-row-4">
+                    {% if pagination.page_count <= 1 %}
+                        <span class="uc-muted" data-testid="pagination-single-page">
+                            Page {{ pagination.page }} of {{ pagination.page_count }}
+                            ({{ pagination.total }} total)
+                        </span>
+                    {% else %}
+                        <span class="uc-muted" data-testid="pagination-info">
+                            Page {{ pagination.page }} of {{ pagination.page_count }}
+                            ({{ pagination.total }} total)
+                        </span>
+                        {% if pagination.has_prev %}
+                            <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page - 1 }}"
+                               data-testid="pagination-prev">&larr; Previous</a>
+                        {% endif %}
+                        {% if pagination.has_next %}
+                            <a href="/admin/items/{{ item.id }}/detail?page={{ pagination.page + 1 }}"
+                               data-testid="pagination-next">Next &rarr;</a>
+                        {% endif %}
+                    {% endif %}
+                </nav>
+            </div>
+        {% endif %}
+    </section>
 {% endblock %}

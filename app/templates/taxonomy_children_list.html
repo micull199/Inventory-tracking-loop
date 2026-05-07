@@ -1,71 +1,87 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ parent.name }} — Sub-categories — UC Inventory{% endblock %}
 {% block content %}
     <p><a href="/admin/taxonomy" data-testid="taxonomy-back">&larr; Back to categories</a></p>
-    <h1>Sub-categories of {{ parent.name }}</h1>
+
+    {% call c.page_header(
+        "Sub-categories of " ~ parent.name,
+        subtitle="Manage the leaf categories nested under " ~ parent.name ~ ".",
+        heading_testid="sub-heading"
+    ) %}
+        {% if not parent.archived_at %}
+            {{ c.button("+ New sub-category", href="/admin/taxonomy/" ~ parent.id ~ "/children/new", testid="new-sub-category") }}
+        {% endif %}
+    {% endcall %}
 
     {% if parent.archived_at %}
-        <p data-testid="parent-archived-note">
+        <p data-testid="parent-archived-note" class="uc-muted">
             <em>This category is archived. Existing sub-categories remain editable, but new ones cannot be added.</em>
-        </p>
-    {% else %}
-        <p>
-            <a class="button" href="/admin/taxonomy/{{ parent.id }}/children/new" data-testid="new-sub-category">New sub-category</a>
         </p>
     {% endif %}
 
-    <nav aria-label="Filter sub-categories" data-testid="sub-tabs" style="margin-bottom: 1rem;">
+    <nav class="uc-tabs" aria-label="Filter sub-categories" data-testid="sub-tabs">
         <a href="/admin/taxonomy/{{ parent.id }}/children?show=active"
            data-testid="sub-tab-active"
            {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
-        |
         <a href="/admin/taxonomy/{{ parent.id }}/children?show=archived"
            data-testid="sub-tab-archived"
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
-    <p>
-        <a data-testid="sub-csv-link"
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="sub-csv-link"
            href="/admin/taxonomy/{{ parent.id }}/children?format=csv&amp;show={{ show }}">Download CSV</a>
-    </p>
+    </div>
 
     {% if nodes %}
-        <table data-testid="sub-table">
-            <thead>
-                <tr>
-                    <th>Order</th>
-                    <th>Name</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for n in nodes %}
-                    <tr data-testid="sub-row" data-node-id="{{ n.id }}">
-                        <td data-testid="sub-sort-order">{{ n.sort_order }}</td>
-                        <td data-testid="sub-name">{{ n.name }}</td>
-                        <td>
-                            <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-sub-fields">Fields</a>
-                            |
-                            <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-sub">Edit</a>
-                            {% if n.archived_at is none %}
-                                <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/archive" style="display:inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" data-testid="archive-sub">Archive</button>
-                                </form>
-                            {% else %}
-                                <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/unarchive" style="display:inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" data-testid="unarchive-sub">Unarchive</button>
-                                </form>
-                            {% endif %}
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="sub-table">
+                <thead>
+                    <tr>
+                        <th class="uc-right">Order</th>
+                        <th>Name</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for n in nodes %}
+                        <tr data-testid="sub-row" data-node-id="{{ n.id }}">
+                            <td class="uc-num uc-right" data-testid="sub-sort-order">{{ n.sort_order }}</td>
+                            <td data-testid="sub-name">
+                                {{ n.name }}
+                                {% if n.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-actions">
+                                <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-sub-fields">Fields</a>
+                                <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-sub">Edit</a>
+                                {% if n.archived_at is none %}
+                                    <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-sub">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-sub">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="sub-empty">
-            {% if show == "archived" %}No archived sub-categories.{% else %}No sub-categories yet.{% endif %}
-        </p>
+        <div data-testid="sub-empty">
+            {{ c.empty_state(
+                "No archived sub-categories" if show == "archived" else "No sub-categories yet",
+                "" if show == "archived" else "Create your first sub-category above to get started."
+            ) }}
+        </div>
     {% endif %}
 {% endblock %}

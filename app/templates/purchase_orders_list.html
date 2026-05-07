@@ -1,60 +1,78 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Purchase orders — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="po-list-heading">Purchase orders</h1>
+    {% call c.page_header(
+        "Purchase orders",
+        heading_testid="po-list-heading"
+    ) %}
+        {{ c.button("Reorder dashboard", variant="secondary", href="/admin/reorder", testid="po-list-reorder-link") }}
+    {% endcall %}
 
-    <form method="get" action="/admin/purchase-orders" data-testid="po-status-filter-form">
-        <label>
-            Status:
-            <select name="status_filter" data-testid="po-status-filter" onchange="this.form.submit()">
+    {% set _po_variant_map = {
+        "draft": "accent",
+        "sent": "accent",
+        "partially_received": "warn",
+        "received": "success",
+        "cancelled": "danger",
+    } %}
+
+    <div class="uc-toolbar">
+        <form method="get" action="/admin/purchase-orders" data-testid="po-status-filter-form" class="uc-row-2">
+            <label class="uc-label" for="status_filter" style="margin:0;">Status</label>
+            <select class="uc-select" id="status_filter" name="status_filter"
+                    data-testid="po-status-filter"
+                    onchange="this.form.submit()"
+                    style="height:32px; width:auto;">
                 {% for s in status_options %}
                     <option value="{{ s }}" {% if s == status_filter %}selected{% endif %}>
                         {{ s.replace("_", " ") }}
                     </option>
                 {% endfor %}
             </select>
-        </label>
-        <noscript><button type="submit">Filter</button></noscript>
-        <a href="/admin/purchase-orders?format=csv&status_filter={{ status_filter }}"
-           data-testid="po-list-csv-link"
-           style="margin-left:0.75rem;">Download CSV</a>
-    </form>
+            <noscript><button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm">Filter</button></noscript>
+        </form>
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           href="/admin/purchase-orders?format=csv&status_filter={{ status_filter }}"
+           data-testid="po-list-csv-link">Download CSV</a>
+    </div>
 
     {% if rows %}
-        <table data-testid="po-list-table">
-            <thead>
-                <tr>
-                    <th>PO #</th>
-                    <th>Supplier</th>
-                    <th>Status</th>
-                    <th>Lines</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for r in rows %}
-                    <tr data-testid="po-row" data-po-id="{{ r.id }}">
-                        <td>{{ r.id }}</td>
-                        <td data-testid="po-row-supplier">
-                            {{ r.supplier_name }}{% if r.supplier_archived %} (archived){% endif %}
-                        </td>
-                        <td data-testid="po-row-status" data-status="{{ r.status }}">
-                            {{ r.status.replace("_", " ") }}
-                        </td>
-                        <td data-testid="po-row-line-count">{{ r.line_count }}</td>
-                        <td data-testid="po-row-created-at">{{ r.created_at.isoformat() }}</td>
-                        <td>
-                            <a href="/admin/purchase-orders/{{ r.id }}"
-                               data-testid="po-row-detail-link">View</a>
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="po-list-table">
+                <thead>
+                    <tr>
+                        <th>PO #</th>
+                        <th>Supplier</th>
+                        <th>Status</th>
+                        <th class="uc-right">Lines</th>
+                        <th>Created</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        <tr data-testid="po-row" data-po-id="{{ r.id }}">
+                            <td class="uc-num uc-strong">{{ r.id }}</td>
+                            <td data-testid="po-row-supplier">
+                                {{ r.supplier_name }}{% if r.supplier_archived %} {{ c.pill("archived") }}{% endif %}
+                            </td>
+                            <td data-testid="po-row-status" data-status="{{ r.status }}">
+                                {{ c.pill(r.status.replace("_", " "), variant=_po_variant_map.get(r.status, "")) }}
+                            </td>
+                            <td class="uc-num uc-right" data-testid="po-row-line-count">{{ r.line_count }}</td>
+                            <td data-testid="po-row-created-at">{{ r.created_at.isoformat() }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/purchase-orders/{{ r.id }}"
+                                   data-testid="po-row-detail-link">View</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="po-list-empty">No purchase orders yet.</p>
+        {{ c.empty_state("No purchase orders yet.", "", testid="po-list-empty") }}
     {% endif %}
-
-    <p><a href="/admin/reorder" data-testid="po-list-reorder-link">Reorder dashboard →</a></p>
 {% endblock %}

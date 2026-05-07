@@ -1,20 +1,29 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Sign in — UC Inventory{% endblock %}
 {% block content %}
     {% if not current_user %}
-        <h1>UC Inventory</h1>
-        <p>Sign in with your UC Google account to continue.</p>
-        <p><a class="button" href="/auth/google/login" data-testid="sign-in">Sign in with Google</a></p>
+        {% call c.page_header("UC Inventory") %}{% endcall %}
+        {% call c.card() %}
+            <p>Sign in with your UC Google account to continue.</p>
+            <p>
+                <a class="uc-btn uc-btn--primary" href="/auth/google/login" data-testid="sign-in">Sign in with Google</a>
+            </p>
+        {% endcall %}
     {% elif current_user.status.value == "pending" %}
         {% include "pending.html" %}
     {% elif current_user.status.value == "disabled" %}
-        <h1>Account disabled</h1>
-        <p>Your account has been disabled. Contact an administrator.</p>
+        {% call c.page_header("Account disabled") %}{% endcall %}
+        {% call c.card() %}
+            <p>Your account has been disabled. Contact an administrator.</p>
+        {% endcall %}
     {% else %}
-        <h1>Welcome, {{ current_user.name }}</h1>
-        <p data-testid="welcome">
-            Signed in as <strong>{{ current_user.email }}</strong>.
-            Role: <strong>{{ current_user.role.value if current_user.role else "—" }}</strong>.
-        </p>
+        {% call c.page_header("Welcome, " ~ current_user.name) %}{% endcall %}
+        {% call c.card() %}
+            <p data-testid="welcome">
+                Signed in as <strong>{{ current_user.email }}</strong>.
+                Role: <strong>{{ current_user.role.value if current_user.role else "—" }}</strong>.
+            </p>
+        {% endcall %}
     {% endif %}
 {% endblock %}

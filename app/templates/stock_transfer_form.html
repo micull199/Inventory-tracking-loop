@@ -1,99 +1,128 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Transfer — {{ item.name }} — UC Inventory{% endblock %}
 {% block content %}
-    <p>
-        <a href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
-    </p>
-    <h1>Transfer: {{ item.name }}</h1>
-    <p>
-        <strong>SKU:</strong> {{ item.sku }} &middot;
-        <strong>Current quantity:</strong>
-        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
-        {{ item.unit }} &middot;
-        <strong>From location:</strong>
-        <span data-testid="stock-transfer-from-location">
-            {{ from_location.name if from_location else "—" }}
-        </span>
-    </p>
+    {% call c.page_header(
+        "Transfer: " ~ item.name,
+        subtitle="Move stock between locations — recorded for audit; doesn't change current quantity or valuation.",
+        heading_testid="stock-transfer-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    {% endcall %}
 
-    <form method="post" action="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="uc-stack-4 uc-mb-6">
+        {% call c.card("Item") %}
+            <div class="uc-grid-2">
+                <div>
+                    <div class="uc-label">SKU</div>
+                    <div class="uc-strong uc-num">{{ item.sku }}</div>
+                </div>
+                <div>
+                    <div class="uc-label">Current quantity</div>
+                    <div class="uc-strong uc-num">
+                        <span data-testid="item-current-qty">{{ item.current_qty }}</span>
+                        {{ item.unit }}
+                    </div>
+                </div>
+                <div>
+                    <div class="uc-label">From location</div>
+                    <div class="uc-strong">
+                        <span data-testid="stock-transfer-from-location">
+                            {{ from_location.name if from_location else "—" }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        {% endcall %}
 
-        <p>
-            <label for="to_location_id">Move to <span aria-hidden="true">*</span></label><br>
-            <select id="to_location_id" name="to_location_id" required
-                    data-testid="stock-transfer-to-location-input">
-                <option value="">— pick a location —</option>
-                {% for loc in to_location_options %}
-                    <option value="{{ loc.id }}"
-                            {% if form.to_location_id == (loc.id | string) %}selected{% endif %}>
-                        {{ loc.name }}
-                    </option>
-                {% endfor %}
-            </select>
-            <em>only active locations other than the current one are listed</em>
-        </p>
+        {% call c.card("Movement") %}
+            <form method="post" action="/admin/items/{{ item.id }}/transfer" data-testid="stock-transfer-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="qty">Quantity <span aria-hidden="true">*</span></label><br>
-            <input type="text" inputmode="decimal" id="qty" name="qty" required
-                   value="{{ form.qty }}"
-                   data-testid="stock-transfer-qty-input"
-                   placeholder="e.g. 5">
-            <em>{{ item.unit }} — recorded for audit; transfers don't change current quantity or valuation</em>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="to_location_id">Move to <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-select" id="to_location_id" name="to_location_id" required
+                            data-testid="stock-transfer-to-location-input">
+                        <option value="">— pick a location —</option>
+                        {% for loc in to_location_options %}
+                            <option value="{{ loc.id }}"
+                                    {% if form.to_location_id == (loc.id | string) %}selected{% endif %}>
+                                {{ loc.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <small class="uc-helper">only active locations other than the current one are listed</small>
+                </div>
 
-        <p>
-            <label for="reason">Reason</label><br>
-            <input type="text" id="reason" name="reason"
-                   value="{{ form.reason }}"
-                   data-testid="stock-transfer-reason-input"
-                   maxlength="255"
-                   placeholder="e.g. end of shift, equipment relocation">
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="qty">Quantity <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" inputmode="decimal" id="qty" name="qty" required
+                           value="{{ form.qty }}"
+                           data-testid="stock-transfer-qty-input"
+                           placeholder="e.g. 5">
+                    <small class="uc-helper">{{ item.unit }} — recorded for audit; transfers don't change current quantity or valuation</small>
+                </div>
 
-        <p>
-            <label for="note">Note</label><br>
-            <textarea id="note" name="note"
-                      data-testid="stock-transfer-note-input"
-                      maxlength="2000"
-                      rows="3" cols="50">{{ form.note }}</textarea>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="reason">Reason</label>
+                    <input class="uc-input" type="text" id="reason" name="reason"
+                           value="{{ form.reason }}"
+                           data-testid="stock-transfer-reason-input"
+                           maxlength="255"
+                           placeholder="e.g. end of shift, equipment relocation">
+                </div>
 
-        <p>
-            <button type="submit" class="button" data-testid="stock-transfer-submit">
-                Record transfer
-            </button>
-        </p>
-    </form>
+                <div class="uc-field">
+                    <label class="uc-label" for="note">Note</label>
+                    <textarea class="uc-textarea" id="note" name="note"
+                              data-testid="stock-transfer-note-input"
+                              maxlength="2000"
+                              rows="3">{{ form.note }}</textarea>
+                </div>
 
-    <h2>Recent movements</h2>
-    {% if recent_movements %}
-        <table data-testid="movements-table">
-            <thead>
-                <tr>
-                    <th>When</th>
-                    <th>Type</th>
-                    <th>Qty</th>
-                    <th>Total cost</th>
-                    <th>Actor</th>
-                    <th>Reason</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for m in recent_movements %}
-                    <tr data-testid="movement-row" data-movement-id="{{ m.id }}">
-                        <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
-                        <td>{{ m.type }}</td>
-                        <td>{{ m.qty }}</td>
-                        <td>{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
-                        <td>{{ m.actor_email or "—" }}</td>
-                        <td>{{ m.reason or "" }}</td>
-                    </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    {% else %}
-        <p data-testid="movements-empty">No movements yet for this item.</p>
-    {% endif %}
+                {% call c.form_actions() %}
+                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="stock-transfer-submit">
+                        Record transfer
+                    </button>
+                    <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/edit">Cancel</a>
+                {% endcall %}
+            </form>
+        {% endcall %}
+
+        {% call c.card("Recent movements", flush=true) %}
+            {% if recent_movements %}
+                <div class="uc-table-wrap" style="border:0; border-radius:0; box-shadow:none;">
+                    <table class="uc-table" data-testid="movements-table">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Type</th>
+                                <th class="uc-right">Qty</th>
+                                <th class="uc-right">Total cost</th>
+                                <th>Actor</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in recent_movements %}
+                                <tr data-testid="movement-row" data-movement-id="{{ m.id }}">
+                                    <td>{{ m.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                                    <td>{{ m.type }}</td>
+                                    <td class="uc-num uc-right">{{ m.qty }}</td>
+                                    <td class="uc-num uc-right">{% if m.total_cost is not none %}{{ m.total_cost }}{% else %}—{% endif %}</td>
+                                    <td>{{ m.actor_email or "—" }}</td>
+                                    <td>{{ m.reason or "" }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="uc-empty" data-testid="movements-empty">
+                    <span class="uc-empty-title">No movements yet</span>
+                    No movements yet for this item.
+                </div>
+            {% endif %}
+        {% endcall %}
+    </div>
 {% endblock %}

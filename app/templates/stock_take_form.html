@@ -1,90 +1,91 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}New stock take — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="stock-take-form-heading">New stock take</h1>
+    {% call c.page_header(
+        "New stock take",
+        subtitle="Schedule a count session. Pick a scope (all items, a category, or a location) and the date you'll run it on. You can start counting once the date arrives.",
+        heading_testid="stock-take-form-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stock-takes">&larr; Back</a>
+    {% endcall %}
 
-    <p>
-        Schedule a count session. Pick a scope (all items, a category, or a
-        location) and the date you'll run it on. You can start counting once
-        the date arrives.
-    </p>
+    {% call c.card("Stock take") %}
+        <form method="post" action="/admin/stock-takes" data-testid="stock-take-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-    <form method="post" action="/admin/stock-takes" data-testid="stock-take-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="uc-field">
+                <div class="uc-label">Scope</div>
+                <div class="uc-stack-2">
+                    <label class="uc-check">
+                        <input type="radio"
+                               name="scope_type"
+                               value="all"
+                               data-testid="stock-take-scope-type-input"
+                               checked>
+                        All items
+                    </label>
+                    <label class="uc-check">
+                        <input type="radio"
+                               name="scope_type"
+                               value="node"
+                               data-testid="stock-take-scope-type-input">
+                        Category
+                    </label>
+                    <select class="uc-select" name="scope_node_id"
+                            data-testid="stock-take-scope-node-input">
+                        <option value="">— pick a category —</option>
+                        {% for node in nodes %}
+                            <option value="{{ node.id }}">
+                                {% if node.parent_id %}↳ {% endif %}{{ node.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <label class="uc-check">
+                        <input type="radio"
+                               name="scope_type"
+                               value="location"
+                               data-testid="stock-take-scope-type-input">
+                        Location
+                    </label>
+                    <select class="uc-select" name="scope_location_id"
+                            data-testid="stock-take-scope-location-input">
+                        <option value="">— pick a location —</option>
+                        {% for loc in locations %}
+                            <option value="{{ loc.id }}">{{ loc.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
 
-        <fieldset>
-            <legend>Scope</legend>
-            <label>
-                <input type="radio"
-                       name="scope_type"
-                       value="all"
-                       data-testid="stock-take-scope-type-input"
-                       checked>
-                All items
-            </label>
-            <br>
-            <label>
-                <input type="radio"
-                       name="scope_type"
-                       value="node"
-                       data-testid="stock-take-scope-type-input">
-                Category
-                <select name="scope_node_id"
-                        data-testid="stock-take-scope-node-input">
-                    <option value="">— pick a category —</option>
-                    {% for node in nodes %}
-                        <option value="{{ node.id }}">
-                            {% if node.parent_id %}↳ {% endif %}{{ node.name }}
-                        </option>
-                    {% endfor %}
-                </select>
-            </label>
-            <br>
-            <label>
-                <input type="radio"
-                       name="scope_type"
-                       value="location"
-                       data-testid="stock-take-scope-type-input">
-                Location
-                <select name="scope_location_id"
-                        data-testid="stock-take-scope-location-input">
-                    <option value="">— pick a location —</option>
-                    {% for loc in locations %}
-                        <option value="{{ loc.id }}">{{ loc.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-        </fieldset>
-
-        <p>
-            <label>
-                Scheduled for *
-                <input type="date"
+            <div class="uc-field">
+                <label class="uc-label" for="scheduled_for">Scheduled for <span class="uc-required" aria-hidden="true">*</span></label>
+                <input class="uc-input" type="date"
+                       id="scheduled_for"
                        name="scheduled_for"
                        value="{{ form.scheduled_for }}"
                        data-testid="stock-take-scheduled-for-input"
                        required>
-            </label>
-        </p>
+            </div>
 
-        <p>
-            <label>
-                Notes
-                <br>
-                <textarea name="notes"
+            <div class="uc-field">
+                <label class="uc-label" for="notes">Notes</label>
+                <textarea class="uc-textarea"
+                          id="notes"
+                          name="notes"
                           rows="3"
                           maxlength="2000"
                           data-testid="stock-take-notes-input">{{ form.notes }}</textarea>
-            </label>
-        </p>
+            </div>
 
-        <p>
-            <button type="submit"
-                    class="button"
-                    data-testid="stock-take-submit">
-                Schedule stock take
-            </button>
-            <a href="/admin/stock-takes">Cancel</a>
-        </p>
-    </form>
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary"
+                        type="submit"
+                        data-testid="stock-take-submit">
+                    Schedule stock take
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/stock-takes">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
 {% endblock %}

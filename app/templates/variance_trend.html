@@ -1,105 +1,117 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Stock-take variance trend — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="variance-trend-heading">Stock-take variance trend</h1>
-    <p>
-        Per-stock-take rollup of committed line variances over the selected
-        rolling window. Only completed stock takes contribute; only
-        committed lines with a non-zero variance are counted.
-    </p>
+    {% call c.page_header(
+        "Stock-take variance trend",
+        subtitle="Per-stock-take rollup of committed line variances over the selected rolling window. Only completed stock takes contribute; only committed lines with a non-zero variance are counted.",
+        heading_testid="variance-trend-heading"
+    ) %}
+        <a class="uc-btn uc-btn--secondary"
+           href="/admin/reports/variance-trend?format=csv&days={{ days }}"
+           data-testid="variance-trend-csv-link">Download CSV</a>
+    {% endcall %}
 
-    <form method="get" action="/admin/reports/variance-trend"
-          data-testid="variance-trend-form"
-          style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
-        <label for="days">Window (days):</label>
-        <input type="number" id="days" name="days"
-               min="1" max="365"
-               value="{{ days }}"
-               data-testid="variance-trend-days-input"
-               style="width:6rem;">
-        <button type="submit"
-                data-testid="variance-trend-days-submit">Update</button>
-        <a href="/admin/reports/variance-trend?format=csv&days={{ days }}"
-           data-testid="variance-trend-csv-link"
-           style="margin-left:0.75rem;">Download CSV</a>
-    </form>
-
-    <section aria-labelledby="totals-heading"
-             data-testid="variance-trend-totals"
-             style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; margin-bottom:1.25rem;">
-        <h2 id="totals-heading" style="margin-top:0;">Totals over the last {{ days }} day{{ "s" if days != 1 else "" }}</h2>
-        <ul style="list-style:none; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:1rem;">
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Stock takes</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-stock-take-count">{{ totals.stock_take_count }}</div>
-            </li>
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Lines with variance</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-total-lines-with-variance">{{ totals.lines_with_variance }}</div>
-            </li>
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Positive variance (units)</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-total-positive">{{ totals.positive_variance }}</div>
-            </li>
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Negative variance, abs (units)</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-total-negative-abs">{{ totals.negative_variance_abs }}</div>
-            </li>
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Net variance (units)</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-total-net">{{ totals.net_variance }}</div>
-            </li>
-            <li>
-                <div style="color: var(--muted); font-size:0.85rem;">Total movement, abs (units)</div>
-                <div style="font-size:1.2rem; font-weight:600;"
-                     data-testid="variance-trend-total-abs">{{ totals.abs_variance }}</div>
-            </li>
-        </ul>
+    <section class="uc-card uc-mb-6" aria-labelledby="variance-trend-window-heading">
+        <header class="uc-card-header">
+            <h2 id="variance-trend-window-heading">Window</h2>
+            <div class="uc-card-actions">
+                <form method="get" action="/admin/reports/variance-trend"
+                      data-testid="variance-trend-form"
+                      class="uc-row-2">
+                    <label for="days" class="uc-label" style="margin:0;">Window (days)</label>
+                    <input class="uc-input uc-num" type="number" id="days" name="days"
+                           min="1" max="365"
+                           value="{{ days }}"
+                           data-testid="variance-trend-days-input"
+                           style="width:96px; height:32px;">
+                    <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                            data-testid="variance-trend-days-submit">Update</button>
+                </form>
+            </div>
+        </header>
+        <div class="uc-card-body">
+            <h3 class="uc-stat-label" id="totals-heading" style="margin-bottom:var(--s-3);">
+                Totals over the last {{ days }} day{{ "s" if days != 1 else "" }}
+            </h3>
+            <div data-testid="variance-trend-totals" class="uc-stat-grid" style="margin-bottom:0;">
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Stock takes</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-stock-take-count">{{ totals.stock_take_count }}</span>
+                </div>
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Lines with variance</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-total-lines-with-variance">{{ totals.lines_with_variance }}</span>
+                </div>
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Positive variance (units)</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-total-positive">{{ totals.positive_variance }}</span>
+                </div>
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Negative variance, abs (units)</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-total-negative-abs">{{ totals.negative_variance_abs }}</span>
+                </div>
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Net variance (units)</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-total-net">{{ totals.net_variance }}</span>
+                </div>
+                <div class="uc-stat">
+                    <span class="uc-stat-label">Total movement, abs (units)</span>
+                    <span class="uc-stat-value uc-num"
+                          data-testid="variance-trend-total-abs">{{ totals.abs_variance }}</span>
+                </div>
+            </div>
+        </div>
     </section>
 
     {% if rows %}
-        <table data-testid="variance-trend-table">
-            <thead>
-                <tr>
-                    <th>Stock take</th>
-                    <th>Scope</th>
-                    <th>Scheduled for</th>
-                    <th>Completed at</th>
-                    <th>Lines</th>
-                    <th>+ Variance</th>
-                    <th>− Variance (abs)</th>
-                    <th>Net</th>
-                    <th>Abs</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in rows %}
-                    <tr data-testid="variance-trend-row"
-                        data-stock-take-id="{{ row.id }}">
-                        <td>
-                            <a href="/admin/stock-takes/{{ row.id }}"
-                               data-testid="variance-trend-row-id">#{{ row.id }}</a>
-                        </td>
-                        <td data-testid="variance-trend-row-scope">{{ row.scope_label }}</td>
-                        <td data-testid="variance-trend-row-scheduled-for">{{ row.scheduled_for.isoformat() }}</td>
-                        <td data-testid="variance-trend-row-completed-at">{{ row.completed_at.strftime("%Y-%m-%d %H:%M") }}</td>
-                        <td data-testid="variance-trend-row-lines-with-variance">{{ row.aggregate.lines_with_variance }}</td>
-                        <td data-testid="variance-trend-row-positive">{{ row.aggregate.positive_variance }}</td>
-                        <td data-testid="variance-trend-row-negative-abs">{{ row.aggregate.negative_variance_abs }}</td>
-                        <td data-testid="variance-trend-row-net">{{ row.aggregate.net_variance }}</td>
-                        <td data-testid="variance-trend-row-abs">{{ row.aggregate.abs_variance }}</td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="variance-trend-table">
+                <thead>
+                    <tr>
+                        <th>Stock take</th>
+                        <th>Scope</th>
+                        <th>Scheduled for</th>
+                        <th>Completed at</th>
+                        <th class="uc-right">Lines</th>
+                        <th class="uc-right">+ Variance</th>
+                        <th class="uc-right">− Variance (abs)</th>
+                        <th class="uc-right">Net</th>
+                        <th class="uc-right">Abs</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr data-testid="variance-trend-row"
+                            data-stock-take-id="{{ row.id }}">
+                            <td class="uc-strong">
+                                <a href="/admin/stock-takes/{{ row.id }}"
+                                   data-testid="variance-trend-row-id">#{{ row.id }}</a>
+                            </td>
+                            <td data-testid="variance-trend-row-scope">{{ row.scope_label }}</td>
+                            <td class="uc-num" data-testid="variance-trend-row-scheduled-for">{{ row.scheduled_for.isoformat() }}</td>
+                            <td class="uc-num" data-testid="variance-trend-row-completed-at">{{ row.completed_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                            <td class="uc-num uc-right" data-testid="variance-trend-row-lines-with-variance">{{ row.aggregate.lines_with_variance }}</td>
+                            <td class="uc-num uc-right" data-testid="variance-trend-row-positive">{{ row.aggregate.positive_variance }}</td>
+                            <td class="uc-num uc-right" data-testid="variance-trend-row-negative-abs">{{ row.aggregate.negative_variance_abs }}</td>
+                            <td class="uc-num uc-right" data-testid="variance-trend-row-net">{{ row.aggregate.net_variance }}</td>
+                            <td class="uc-num uc-right" data-testid="variance-trend-row-abs">{{ row.aggregate.abs_variance }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="variance-trend-empty">
-            No completed stock takes in the last {{ days }} day{{ "s" if days != 1 else "" }}.
-        </p>
+        <div data-testid="variance-trend-empty">
+            {{ c.empty_state(
+                "No completed stock takes",
+                "No completed stock takes in the last " ~ days ~ " day" ~ ("s" if days != 1 else "") ~ "."
+            ) }}
+        </div>
     {% endif %}
 {% endblock %}

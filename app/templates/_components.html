@@ -144,9 +144,13 @@
 </div>
 {%- endmacro %}
 
-{# ---- empty_state — used inside an empty card / table row ---- #}
-{% macro empty_state(title, body="") -%}
-<div class="uc-empty">
+{# ---- empty_state — used inside an empty card / table row ----
+   ``testid`` (optional) is hung on the wrapper so callers can preserve
+   the existing list-view ``…-empty`` testid that integration / e2e
+   suites query. The wrapper is a real visible element (zero-content
+   sibling spans don't satisfy Playwright's ``to_be_visible``). #}
+{% macro empty_state(title, body="", testid="") -%}
+<div class="uc-empty"{% if testid %} data-testid="{{ testid }}"{% endif %}>
     <span class="uc-empty-title">{{ title }}</span>
     {% if body %}{{ body }}{% endif %}
 </div>

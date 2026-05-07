@@ -1,48 +1,54 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="{{ back_url }}" data-testid="back-to-units">&larr; Back to units</a></p>
-    <h1>{{ title }}</h1>
-    <p>Item: <strong>{{ item.name }}</strong> ({{ item.sku }})</p>
+    {% call c.page_header(title, subtitle="Item: " ~ item.name ~ " (" ~ item.sku ~ ")") %}
+        <a class="uc-btn uc-btn--ghost" href="{{ back_url }}" data-testid="back-to-units">&larr; Back to units</a>
+    {% endcall %}
 
-    <form method="post" action="{{ action }}" data-testid="item-unit-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="item-unit-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="serial_or_label">Serial / label <span aria-hidden="true">*</span></label><br>
-            <input type="text" id="serial_or_label" name="serial_or_label" required
-                   value="{{ form.serial_or_label }}"
-                   data-testid="item-unit-serial-input"
-                   maxlength="128">
-        </p>
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="serial_or_label">Serial / label <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="serial_or_label" name="serial_or_label" required
+                           value="{{ form.serial_or_label }}"
+                           data-testid="item-unit-serial-input"
+                           maxlength="128">
+                </div>
 
-        <p>
-            <label for="status">Status</label><br>
-            <select id="status" name="status" data-testid="item-unit-status-input">
-                {% for s in statuses %}
-                    <option value="{{ s }}"
-                            {% if form.status == s %}selected{% endif %}>{{ s }}</option>
-                {% endfor %}
-            </select>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="status">Status</label>
+                    <select class="uc-select" id="status" name="status" data-testid="item-unit-status-input">
+                        {% for s in statuses %}
+                            <option value="{{ s }}"
+                                    {% if form.status == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
 
-        <p>
-            <label for="location_id">Location</label><br>
-            <select id="location_id" name="location_id" data-testid="item-unit-location-input">
-                <option value="">— none —</option>
-                {% for l in location_options %}
-                    <option value="{{ l.id }}"
-                            {% if form.location_id == (l.id | string) %}selected{% endif %}>
-                        {{ l.label }}
-                    </option>
-                {% endfor %}
-            </select>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="location_id">Location</label>
+                    <select class="uc-select" id="location_id" name="location_id" data-testid="item-unit-location-input">
+                        <option value="">— none —</option>
+                        {% for l in location_options %}
+                            <option value="{{ l.id }}"
+                                    {% if form.location_id == (l.id | string) %}selected{% endif %}>
+                                {{ l.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </section>
 
-        <p>
-            <button type="submit" class="button" data-testid="item-unit-submit">
-                {% if unit %}Save changes{% else %}Create unit{% endif %}
-            </button>
-        </p>
-    </form>
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="item-unit-submit">
+                    {% if unit %}Save changes{% else %}Create unit{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="{{ back_url }}">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
 {% endblock %}

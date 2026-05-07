@@ -1,23 +1,28 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Stock takes — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="stock-takes-heading">Stock takes</h1>
+    {% call c.page_header(
+        "Stock takes",
+        heading_testid="stock-takes-heading"
+    ) %}
+        {{ c.button("+ New stock take", href="/admin/stock-takes/new", testid="stock-takes-new-link") }}
+    {% endcall %}
 
-    <p>
-        <a href="/admin/stock-takes/new"
-           class="button"
-           data-testid="stock-takes-new-link">
-            New stock take
-        </a>
-    </p>
+    {% set _st_variant_map = {
+        "scheduled": "accent",
+        "open": "accent",
+        "in_progress": "warn",
+        "completed": "success",
+        "cancelled": "danger",
+    } %}
 
-    <nav aria-label="Filter">
+    <nav class="uc-tabs" aria-label="Filter">
         <a href="/admin/stock-takes?show=open"
            data-testid="filter-open"
            {% if show == "open" %}aria-current="page"{% endif %}>
             Open
         </a>
-        &middot;
         <a href="/admin/stock-takes?show=completed"
            data-testid="filter-completed"
            {% if show == "completed" %}aria-current="page"{% endif %}>
@@ -25,62 +30,62 @@
         </a>
     </nav>
 
-    <p>
-        <a href="/admin/stock-takes?format=csv&show={{ show }}"
-           data-testid="stock-takes-list-csv-link">
-            Download CSV
-        </a>
-    </p>
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           href="/admin/stock-takes?format=csv&show={{ show }}"
+           data-testid="stock-takes-list-csv-link">Download CSV</a>
+    </div>
 
     {% if rows %}
-        <table data-testid="stock-takes-table">
-            <thead>
-                <tr>
-                    <th>Scope</th>
-                    <th>Scheduled for</th>
-                    <th>Status</th>
-                    <th>Created by</th>
-                    <th>Created at</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in rows %}
-                    <tr data-testid="stock-takes-row"
-                        data-stock-take-id="{{ row.id }}"
-                        data-status="{{ row.status }}">
-                        <td data-testid="stock-takes-row-scope">{{ row.scope_label }}</td>
-                        <td data-testid="stock-takes-row-scheduled-for">
-                            {{ row.scheduled_for.isoformat() }}
-                        </td>
-                        <td>
-                            <span data-testid="stock-takes-row-status-badge">
-                                {{ row.status }}
-                            </span>
-                        </td>
-                        <td data-testid="stock-takes-row-created-by">
-                            {% if row.created_by_email %}{{ row.created_by_email }}{% else %}—{% endif %}
-                        </td>
-                        <td data-testid="stock-takes-row-created-at">
-                            {{ row.created_at.strftime("%Y-%m-%d %H:%M") }}
-                        </td>
-                        <td>
-                            <a href="/admin/stock-takes/{{ row.id }}"
-                               data-testid="stock-takes-row-detail-link">
-                                View &rarr;
-                            </a>
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stock-takes-table">
+                <thead>
+                    <tr>
+                        <th>Scope</th>
+                        <th>Scheduled for</th>
+                        <th>Status</th>
+                        <th>Created by</th>
+                        <th>Created at</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr data-testid="stock-takes-row"
+                            data-stock-take-id="{{ row.id }}"
+                            data-status="{{ row.status }}">
+                            <td data-testid="stock-takes-row-scope">{{ row.scope_label }}</td>
+                            <td data-testid="stock-takes-row-scheduled-for">
+                                {{ row.scheduled_for.isoformat() }}
+                            </td>
+                            <td>
+                                <span data-testid="stock-takes-row-status-badge">
+                                    {{ c.pill(row.status, variant=_st_variant_map.get(row.status, "")) }}
+                                </span>
+                            </td>
+                            <td data-testid="stock-takes-row-created-by">
+                                {% if row.created_by_email %}{{ row.created_by_email }}{% else %}—{% endif %}
+                            </td>
+                            <td data-testid="stock-takes-row-created-at">
+                                {{ row.created_at.strftime("%Y-%m-%d %H:%M") }}
+                            </td>
+                            <td class="uc-actions">
+                                <a href="/admin/stock-takes/{{ row.id }}"
+                                   data-testid="stock-takes-row-detail-link">
+                                    View &rarr;
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="stock-takes-empty">
-            {% if show == "completed" %}
-                No completed stock takes yet.
-            {% else %}
-                No stock takes scheduled or in progress.
-            {% endif %}
-        </p>
+        {{ c.empty_state(
+            "No completed stock takes yet." if show == "completed" else "No stock takes scheduled or in progress.",
+            "",
+            testid="stock-takes-empty"
+        ) }}
     {% endif %}
 {% endblock %}

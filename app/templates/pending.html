@@ -1,7 +1,13 @@
-<h1 data-testid="pending-heading">Account pending approval</h1>
+{% import "_components.html" as c %}
+{% call c.page_header(
+    "Account pending approval",
+    heading_testid="pending-heading"
+) %}{% endcall %}
+{% call c.card() %}
 <p>
     Hi {{ current_user.name }} — your sign-in worked, but your account is waiting
     for an administrator to assign you a role. You'll be able to use the system
     once that happens.
 </p>
 <p>If this is urgent, ping an administrator.</p>
+{% endcall %}

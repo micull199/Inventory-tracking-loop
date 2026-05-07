@@ -1,56 +1,89 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Manage users — UC Inventory{% endblock %}
 {% block content %}
-    <h1>Manage users</h1>
-    <p>Assign roles and activate or disable accounts. Pending users appear at the top.</p>
+    {% call c.page_header(
+        "Manage users",
+        subtitle="Assign roles and activate or disable accounts. Pending users appear at the top."
+    ) %}
+    {% endcall %}
 
-    <p><a data-testid="admin-users-csv-link" href="/admin/users?format=csv">Download CSV</a></p>
+    {% set _role_variant_map = {
+        "admin": "accent",
+        "manager": "accent",
+        "office": "accent",
+        "workshop": "accent",
+    } %}
+    {% set _status_variant_map = {
+        "active": "success",
+        "pending": "warn",
+        "disabled": "danger",
+    } %}
 
-    <table data-testid="admin-users-table">
-        <thead>
-            <tr>
-                <th>Email</th>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Created</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for u in users %}
-                <tr data-testid="user-row" data-user-id="{{ u.id }}" data-user-status="{{ u.status.value }}">
-                    <td data-testid="user-email">{{ u.email }}</td>
-                    <td>{{ u.name }}</td>
-                    <td>
-                        <form method="post" action="/admin/users/{{ u.id }}/role" style="display:inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <select name="role" data-testid="role-select" {% if u.id == current_user.id %}disabled{% endif %}>
-                                <option value="" {% if u.role is none %}selected{% endif %}>— (no role)</option>
-                                {% for r in roles %}
-                                    <option value="{{ r.value }}" {% if u.role == r %}selected{% endif %}>{{ r.value }}</option>
-                                {% endfor %}
-                            </select>
-                            {% if u.id != current_user.id %}
-                                <button type="submit" data-testid="role-submit">Save role</button>
-                            {% endif %}
-                        </form>
-                    </td>
-                    <td>
-                        <form method="post" action="/admin/users/{{ u.id }}/status" style="display:inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <select name="status" data-testid="status-select" {% if u.id == current_user.id %}disabled{% endif %}>
-                                {% for s in statuses %}
-                                    <option value="{{ s.value }}" {% if u.status == s %}selected{% endif %}>{{ s.value }}</option>
-                                {% endfor %}
-                            </select>
-                            {% if u.id != current_user.id %}
-                                <button type="submit" data-testid="status-submit">Save status</button>
-                            {% endif %}
-                        </form>
-                    </td>
-                    <td>{{ u.created_at.strftime("%Y-%m-%d") }}</td>
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="admin-users-csv-link"
+           href="/admin/users?format=csv">Download CSV</a>
+    </div>
+
+    <div class="uc-table-wrap">
+        <table class="uc-table" data-testid="admin-users-table">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
                 </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                    <tr data-testid="user-row" data-user-id="{{ u.id }}" data-user-status="{{ u.status.value }}">
+                        <td data-testid="user-email" class="uc-strong">{{ u.email }}</td>
+                        <td>{{ u.name }}</td>
+                        <td>
+                            <form method="post" action="/admin/users/{{ u.id }}/role" class="uc-row-2" style="margin:0;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <select name="role" class="uc-select" style="height:32px; width:auto;"
+                                        data-testid="role-select"
+                                        {% if u.id == current_user.id %}disabled{% endif %}>
+                                    <option value="" {% if u.role is none %}selected{% endif %}>— (no role)</option>
+                                    {% for r in roles %}
+                                        <option value="{{ r.value }}" {% if u.role == r %}selected{% endif %}>{{ r.value }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% if u.role %}
+                                    {{ c.pill(u.role.value, variant=_role_variant_map.get(u.role.value, "")) }}
+                                {% endif %}
+                                {% if u.id != current_user.id %}
+                                    <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                                            data-testid="role-submit">Save role</button>
+                                {% endif %}
+                            </form>
+                        </td>
+                        <td>
+                            <form method="post" action="/admin/users/{{ u.id }}/status" class="uc-row-2" style="margin:0;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <select name="status" class="uc-select" style="height:32px; width:auto;"
+                                        data-testid="status-select"
+                                        {% if u.id == current_user.id %}disabled{% endif %}>
+                                    {% for s in statuses %}
+                                        <option value="{{ s.value }}" {% if u.status == s %}selected{% endif %}>{{ s.value }}</option>
+                                    {% endfor %}
+                                </select>
+                                {{ c.pill(u.status.value, variant=_status_variant_map.get(u.status.value, "")) }}
+                                {% if u.id != current_user.id %}
+                                    <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                                            data-testid="status-submit">Save status</button>
+                                {% endif %}
+                            </form>
+                        </td>
+                        <td class="uc-mono">{{ u.created_at.strftime("%Y-%m-%d") }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 {% endblock %}

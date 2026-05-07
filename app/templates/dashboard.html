@@ -94,9 +94,9 @@
             {% else %}
                 {{ c.empty_state(
                     "No movements yet",
-                    "No stock-out movements in the last " ~ top_days ~ " day" ~ ("s" if top_days != 1 else "") ~ "."
+                    "No stock-out movements in the last " ~ top_days ~ " day" ~ ("s" if top_days != 1 else "") ~ ".",
+                    testid="dashboard-top-consumed-empty"
                 ) }}
-                <span data-testid="dashboard-top-consumed-empty" hidden></span>
             {% endif %}
         </div>
     </section>

@@ -1,80 +1,88 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Units for {{ item.name }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="/admin/items/{{ item.id }}/edit" data-testid="back-to-item">&larr; Back to {{ item.name }}</a></p>
-    <h1>Units for {{ item.name }}</h1>
-    <p>SKU <strong>{{ item.sku }}</strong> — {{ item.unit }}</p>
+    {% call c.page_header(
+        "Units for " ~ item.name,
+        subtitle="SKU " ~ item.sku ~ " — " ~ item.unit
+    ) %}
+        <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/edit" data-testid="back-to-item">&larr; Back to item</a>
+        {% if can_create %}
+            <a class="uc-btn uc-btn--primary" href="/admin/items/{{ item.id }}/units/new" data-testid="new-item-unit">+ New unit</a>
+        {% endif %}
+    {% endcall %}
 
     {% if not is_unique_tracked %}
-        <p data-testid="not-unique-tracked">
-            <em>This item is qty-tracked. Switch its tracking mode to “unique” on the
-            <a href="/admin/items/{{ item.id }}/edit">item edit page</a> to manage individual units.</em>
-        </p>
+        {% call c.card() %}
+            <p data-testid="not-unique-tracked" class="uc-muted">
+                This item is qty-tracked. Switch its tracking mode to "unique" on the
+                <a href="/admin/items/{{ item.id }}/edit">item edit page</a> to manage individual units.
+            </p>
+        {% endcall %}
     {% elif is_item_archived %}
-        <p data-testid="item-archived-note">
-            <em>This item is archived. New units cannot be added; existing units are still editable.</em>
-        </p>
+        {% call c.card() %}
+            <p data-testid="item-archived-note" class="uc-muted">
+                This item is archived. New units cannot be added; existing units are still editable.
+            </p>
+        {% endcall %}
     {% endif %}
 
-    {% if can_create %}
-        <p>
-            <a class="button" href="/admin/items/{{ item.id }}/units/new" data-testid="new-item-unit">New unit</a>
-        </p>
-    {% endif %}
-
-    <nav aria-label="Filter units" data-testid="item-units-tabs" style="margin-bottom: 1rem;">
+    <nav class="uc-tabs" aria-label="Filter units" data-testid="item-units-tabs">
         <a href="/admin/items/{{ item.id }}/units?show=active"
            data-testid="tab-active"
            {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
-        |
         <a href="/admin/items/{{ item.id }}/units?show=archived"
            data-testid="tab-archived"
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
     {% if units %}
-        <table data-testid="item-units-table">
-            <thead>
-                <tr>
-                    <th>Serial / label</th>
-                    <th>Status</th>
-                    <th>Location</th>
-                    <th>Created</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for u in units %}
-                    <tr data-testid="item-unit-row" data-unit-id="{{ u.id }}">
-                        <td data-testid="item-unit-serial">{{ u.serial_or_label }}</td>
-                        <td data-testid="item-unit-status">{{ u.status.value }}</td>
-                        <td data-testid="item-unit-location">
-                            {% if u.location_id %}{{ location_names.get(u.location_id, "") }}{% else %}—{% endif %}
-                        </td>
-                        <td>{{ u.created_at.strftime("%Y-%m-%d") }}</td>
-                        <td>
-                            <a href="/admin/items/units/{{ u.id }}/edit" data-testid="edit-item-unit">Edit</a>
-                            {% if can_archive %}
-                                {% if u.archived_at is none %}
-                                    <form method="post" action="/admin/items/units/{{ u.id }}/archive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="archive-item-unit">Archive</button>
-                                    </form>
-                                {% else %}
-                                    <form method="post" action="/admin/items/units/{{ u.id }}/unarchive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="unarchive-item-unit">Unarchive</button>
-                                    </form>
-                                {% endif %}
-                            {% endif %}
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="item-units-table">
+                <thead>
+                    <tr>
+                        <th>Serial / label</th>
+                        <th>Status</th>
+                        <th>Location</th>
+                        <th>Created</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for u in units %}
+                        <tr data-testid="item-unit-row" data-unit-id="{{ u.id }}">
+                            <td class="uc-strong" data-testid="item-unit-serial">{{ u.serial_or_label }}</td>
+                            <td data-testid="item-unit-status">{{ u.status.value }}</td>
+                            <td data-testid="item-unit-location">
+                                {% if u.location_id %}{{ location_names.get(u.location_id, "") }}{% else %}—{% endif %}
+                            </td>
+                            <td class="uc-num">{{ u.created_at.strftime("%Y-%m-%d") }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/items/units/{{ u.id }}/edit" data-testid="edit-item-unit">Edit</a>
+                                {% if can_archive %}
+                                    {% if u.archived_at is none %}
+                                        <form method="post" action="/admin/items/units/{{ u.id }}/archive" style="display:inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit" data-testid="archive-item-unit">Archive</button>
+                                        </form>
+                                    {% else %}
+                                        <form method="post" action="/admin/items/units/{{ u.id }}/unarchive" style="display:inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit" data-testid="unarchive-item-unit">Unarchive</button>
+                                        </form>
+                                    {% endif %}
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="item-units-empty">
-            {% if show == "archived" %}No archived units.{% else %}No units yet.{% endif %}
-        </p>
+        <div data-testid="item-units-empty">
+            {{ c.empty_state(
+                "No archived units" if show == "archived" else "No units yet"
+            ) }}
+        </div>
     {% endif %}
 {% endblock %}

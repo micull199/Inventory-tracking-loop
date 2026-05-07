@@ -1,13 +1,15 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Currently out — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="checkouts-admin-heading">Currently out</h1>
-    <p>
-        Open checkouts across every flagged item. Use the tabs to narrow to
-        overdue rows. Click a row to jump to the per-item check-in form.
-    </p>
+    {% call c.page_header(
+        "Currently out",
+        subtitle="Open checkouts across every flagged item. Use the tabs to narrow to overdue rows. Click a row to jump to the per-item check-in form.",
+        heading_testid="checkouts-admin-heading"
+    ) %}
+    {% endcall %}
 
-    <p>
+    <p class="uc-muted">
         <strong>Open:</strong>
         <span data-testid="checkouts-open-count">{{ open_count }}</span>
         &middot;
@@ -15,13 +17,12 @@
         <span data-testid="checkouts-overdue-count">{{ overdue_count }}</span>
     </p>
 
-    <nav aria-label="Filter">
+    <nav class="uc-tabs" aria-label="Filter">
         <a href="/admin/checkouts?show=open"
            data-testid="filter-open"
            {% if show == "open" %}aria-current="page"{% endif %}>
             Open ({{ open_count }})
         </a>
-        &middot;
         <a href="/admin/checkouts?show=overdue"
            data-testid="filter-overdue"
            {% if show == "overdue" %}aria-current="page"{% endif %}>
@@ -29,80 +30,82 @@
         </a>
     </nav>
 
-    <p>
-        <a data-testid="checkouts-admin-csv-link"
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="checkouts-admin-csv-link"
            href="/admin/checkouts?format=csv&amp;show={{ show }}">
             Download CSV
         </a>
-    </p>
+    </div>
 
     {% if rows %}
-        <table data-testid="checkouts-table">
-            <thead>
-                <tr>
-                    <th>SKU</th>
-                    <th>Item</th>
-                    <th>Unit</th>
-                    <th>Holder</th>
-                    <th>Checked out</th>
-                    <th>Due back</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in rows %}
-                    <tr data-testid="checkouts-row"
-                        data-checkout-id="{{ row.checkout_id }}"
-                        data-item-id="{{ row.item_id }}"
-                        data-overdue="{{ "true" if row.is_overdue else "false" }}">
-                        <td data-testid="checkouts-row-item-sku">
-                            {{ row.item_sku }}{% if row.item_archived %} (archived){% endif %}
-                        </td>
-                        <td data-testid="checkouts-row-item-name">{{ row.item_name }}</td>
-                        <td data-testid="checkouts-row-unit">
-                            {% if row.unit_serial %}{{ row.unit_serial }}{% else %}—{% endif %}
-                        </td>
-                        <td data-testid="checkouts-row-holder">
-                            {% if row.holder_email %}{{ row.holder_email }}{% else %}—{% endif %}
-                        </td>
-                        <td data-testid="checkouts-row-checked-out-at">
-                            {{ row.checked_out_at.strftime("%Y-%m-%d %H:%M") }}
-                        </td>
-                        <td data-testid="checkouts-row-expected-return">
-                            {% if row.expected_return %}
-                                {{ row.expected_return.strftime("%Y-%m-%d") }}
-                            {% else %}
-                                —
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if row.is_overdue %}
-                                <span data-testid="checkouts-row-overdue-badge"
-                                      style="color: var(--danger); font-weight:600;">
-                                    Overdue ({{ row.days_overdue }}d)
-                                </span>
-                            {% else %}
-                                Open
-                            {% endif %}
-                        </td>
-                        <td>
-                            <a href="/admin/items/{{ row.item_id }}/checkout"
-                               data-testid="checkouts-row-item-link">
-                                Check in &rarr;
-                            </a>
-                        </td>
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="checkouts-table">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Item</th>
+                        <th>Unit</th>
+                        <th>Holder</th>
+                        <th>Checked out</th>
+                        <th>Due back</th>
+                        <th>Status</th>
+                        <th class="uc-right">Actions</th>
                     </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    {% for row in rows %}
+                        <tr data-testid="checkouts-row"
+                            data-checkout-id="{{ row.checkout_id }}"
+                            data-item-id="{{ row.item_id }}"
+                            data-overdue="{{ "true" if row.is_overdue else "false" }}">
+                            <td class="uc-num uc-strong" data-testid="checkouts-row-item-sku">
+                                {{ row.item_sku }}{% if row.item_archived %} {{ c.pill("(archived)") }}{% endif %}
+                            </td>
+                            <td data-testid="checkouts-row-item-name">{{ row.item_name }}</td>
+                            <td data-testid="checkouts-row-unit">
+                                {% if row.unit_serial %}{{ row.unit_serial }}{% else %}—{% endif %}
+                            </td>
+                            <td data-testid="checkouts-row-holder">
+                                {% if row.holder_email %}{{ row.holder_email }}{% else %}—{% endif %}
+                            </td>
+                            <td data-testid="checkouts-row-checked-out-at">
+                                {{ row.checked_out_at.strftime("%Y-%m-%d %H:%M") }}
+                            </td>
+                            <td data-testid="checkouts-row-expected-return">
+                                {% if row.expected_return %}
+                                    {{ row.expected_return.strftime("%Y-%m-%d") }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.is_overdue %}
+                                    <span data-testid="checkouts-row-overdue-badge">
+                                        {{ c.pill("Overdue (" ~ row.days_overdue ~ "d)", variant="danger") }}
+                                    </span>
+                                {% else %}
+                                    {{ c.pill("Open", variant="accent") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-actions">
+                                <a href="/admin/items/{{ row.item_id }}/checkout"
+                                   data-testid="checkouts-row-item-link">
+                                    Check in &rarr;
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     {% else %}
-        <p data-testid="checkouts-admin-empty">
-            {% if show == "overdue" %}
-                No overdue checkouts.
-            {% else %}
-                No open checkouts.
-            {% endif %}
-        </p>
+        <div data-testid="checkouts-admin-empty">
+            {{ c.empty_state(
+                "No overdue checkouts." if show == "overdue" else "No open checkouts.",
+                ""
+            ) }}
+        </div>
     {% endif %}
 {% endblock %}

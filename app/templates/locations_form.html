@@ -1,32 +1,39 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
-    <p><a href="/admin/locations">&larr; Back to locations</a></p>
-    <h1>{{ title }}</h1>
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/locations">&larr; Back</a>
+    {% endcall %}
 
-    <form method="post" action="{{ action }}" data-testid="location-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="location-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-        <p>
-            <label for="name">Name <span aria-hidden="true">*</span></label><br>
-            <input type="text" id="name" name="name" required
-                   value="{{ form.name }}"
-                   data-testid="location-name-input"
-                   maxlength="255">
-        </p>
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="name" name="name" required
+                           value="{{ form.name }}"
+                           data-testid="location-name-input"
+                           maxlength="255">
+                </div>
 
-        <p>
-            <label for="notes">Notes</label><br>
-            <textarea id="notes" name="notes"
-                      data-testid="location-notes-input"
-                      maxlength="2000"
-                      rows="4" cols="50">{{ form.notes }}</textarea>
-        </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-textarea" id="notes" name="notes"
+                              data-testid="location-notes-input"
+                              maxlength="2000"
+                              rows="4">{{ form.notes }}</textarea>
+                </div>
+            </section>
 
-        <p>
-            <button type="submit" class="button" data-testid="location-submit">
-                {% if location %}Save changes{% else %}Create location{% endif %}
-            </button>
-        </p>
-    </form>
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="location-submit">
+                    {% if location %}Save changes{% else %}Create location{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/locations">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
 {% endblock %}

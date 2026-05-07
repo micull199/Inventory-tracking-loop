@@ -1,13 +1,31 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Audit log — UC Inventory{% endblock %}
 {% block content %}
-    <h1>Audit log</h1>
-    <p>
-        Append-only history of every state-changing action. The log cannot be
-        edited; corrections are made via new movements with explanatory reasons.
-    </p>
+    {% call c.page_header(
+        "Audit log",
+        subtitle="Append-only history of every state-changing action. The log cannot be edited; corrections are made via new movements with explanatory reasons."
+    ) %}
+    {% endcall %}
 
-    <p data-testid="audit-summary">
+    {% set _audit_variant_map = {
+        "created": "accent",
+        "updated": "warn",
+        "deleted": "danger",
+        "archived": "warn",
+        "restored": "success",
+        "received": "success",
+        "sent": "accent",
+        "cancelled": "danger",
+        "completed": "success",
+    } %}
+
+    {% macro _audit_pill_variant(action) -%}
+        {%- set verb = action.rsplit(".", 1)[-1] -%}
+        {{ _audit_variant_map.get(verb, "") }}
+    {%- endmacro %}
+
+    <p class="uc-muted" data-testid="audit-summary">
         {% if total == 0 %}
             No audit entries yet.
         {% else %}
@@ -15,53 +33,67 @@
         {% endif %}
     </p>
 
-    <p>
-        <a data-testid="audit-csv-link" href="/admin/audit?format=csv">Download CSV</a>
-    </p>
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="audit-csv-link"
+           href="/admin/audit?format=csv">Download CSV</a>
+    </div>
 
-    <table data-testid="admin-audit-table">
-        <thead>
-            <tr>
-                <th>Time</th>
-                <th>Actor</th>
-                <th>Action</th>
-                <th>Entity</th>
-                <th>Before</th>
-                <th>After</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for entry, actor in rows %}
-                <tr data-testid="audit-row" data-audit-id="{{ entry.id }}">
-                    <td data-testid="audit-time">{{ entry.created_at.isoformat() }}</td>
-                    <td data-testid="audit-actor">
-                        {% if actor %}{{ actor.email }}{% else %}(system){% endif %}
-                    </td>
-                    <td data-testid="audit-action">{{ entry.action }}</td>
-                    <td data-testid="audit-entity">
-                        {% if entry.entity_id is none %}{{ entry.entity_type }}{% else %}{{ entry.entity_type }}:{{ entry.entity_id }}{% endif %}
-                    </td>
-                    <td data-testid="audit-before">
-                        {% if entry.before_json is none %}—{% else %}{{ entry.before_json | tojson }}{% endif %}
-                    </td>
-                    <td data-testid="audit-after">
-                        {% if entry.after_json is none %}—{% else %}{{ entry.after_json | tojson }}{% endif %}
-                    </td>
+    <div class="uc-table-wrap">
+        <table class="uc-table" data-testid="admin-audit-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Actor</th>
+                    <th>Action</th>
+                    <th>Entity</th>
+                    <th>Before</th>
+                    <th>After</th>
                 </tr>
-            {% else %}
-                <tr data-testid="audit-empty">
-                    <td colspan="6">No audit entries on this page.</td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                {% for entry, actor in rows %}
+                    <tr data-testid="audit-row" data-audit-id="{{ entry.id }}">
+                        <td class="uc-mono" data-testid="audit-time">{{ entry.created_at.isoformat() }}</td>
+                        <td data-testid="audit-actor">
+                            {% if actor %}{{ actor.email }}{% else %}<span class="uc-muted">(system)</span>{% endif %}
+                        </td>
+                        <td data-testid="audit-action">
+                            {{ c.pill(entry.action, variant=_audit_pill_variant(entry.action)|trim) }}
+                        </td>
+                        <td class="uc-mono" data-testid="audit-entity">
+                            {% if entry.entity_id is none %}{{ entry.entity_type }}{% else %}{{ entry.entity_type }}:{{ entry.entity_id }}{% endif %}
+                        </td>
+                        <td data-testid="audit-before">
+                            {% if entry.before_json is none %}<span class="uc-muted">—</span>{% else %}<pre class="uc-mono" style="white-space:pre-wrap; font-size:12px; margin:0;">{{ entry.before_json | tojson }}</pre>{% endif %}
+                        </td>
+                        <td data-testid="audit-after">
+                            {% if entry.after_json is none %}<span class="uc-muted">—</span>{% else %}<pre class="uc-mono" style="white-space:pre-wrap; font-size:12px; margin:0;">{{ entry.after_json | tojson }}</pre>{% endif %}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr data-testid="audit-empty">
+                        <td colspan="6">
+                            {{ c.empty_state("No audit entries on this page.") }}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 
-    <nav aria-label="Audit log pagination" data-testid="audit-pagination">
+    <nav class="uc-toolbar uc-mt-4" aria-label="Audit log pagination" data-testid="audit-pagination">
         {% if has_prev %}
-            <a href="/admin/audit?page={{ page - 1 }}" data-testid="audit-prev">Previous</a>
+            <a class="uc-btn uc-btn--secondary uc-btn--sm"
+               href="/admin/audit?page={{ page - 1 }}"
+               data-testid="audit-prev">&larr; Previous</a>
         {% endif %}
+        <span class="uc-toolbar-spacer"></span>
         {% if has_next %}
-            <a href="/admin/audit?page={{ page + 1 }}" data-testid="audit-next">Next</a>
+            <a class="uc-btn uc-btn--secondary uc-btn--sm"
+               href="/admin/audit?page={{ page + 1 }}"
+               data-testid="audit-next">Next &rarr;</a>
         {% endif %}
     </nav>
 {% endblock %}

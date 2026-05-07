@@ -1,121 +1,303 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Stock take #{{ st.id }} — UC Inventory{% endblock %}
 {% block content %}
     <p>
         <a href="/admin/stock-takes">&larr; Back to stock takes</a>
     </p>
 
-    <h1 data-testid="stock-take-detail-heading">
-        Stock take #{{ st.id }}
-    </h1>
-
-    <p>
-        <strong>Status:</strong>
-        <span data-testid="stock-take-detail-status-badge"
-              data-status="{{ status }}">{{ status }}</span>
-        &middot;
-        <strong>Scope:</strong>
-        <span data-testid="stock-take-detail-scope">{{ scope_label }}</span>
-        &middot;
-        <strong>Scheduled for:</strong>
-        <span data-testid="stock-take-detail-scheduled-for">
-            {{ st.scheduled_for.isoformat() }}
+    {% call c.page_header(
+        "Stock take #" ~ st.id,
+        heading_testid="stock-take-detail-heading"
+    ) %}
+        {% set _pill_variant = "success" if status == "completed" else ("accent" if status == "in_progress" else "") %}
+        <span data-testid="stock-take-detail-status-badge" data-status="{{ status }}">
+            {{ c.pill(status, variant=_pill_variant) }}
         </span>
-        {% if creator_email %}
-            &middot;
-            <strong>Created by:</strong>
-            <span data-testid="stock-take-detail-created-by">{{ creator_email }}</span>
-        {% endif %}
-    </p>
-    {% if st.notes %}
-        <p>
-            <strong>Notes:</strong>
-            <span data-testid="stock-take-detail-notes">{{ st.notes }}</span>
-        </p>
-    {% endif %}
+    {% endcall %}
+
+    {% call c.card("Overview") %}
+        <div class="uc-grid-2">
+            <div>
+                <span class="uc-stat-label">Scope</span>
+                <span class="uc-strong" data-testid="stock-take-detail-scope">{{ scope_label }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Scheduled for</span>
+                <span class="uc-strong uc-num" data-testid="stock-take-detail-scheduled-for">{{ st.scheduled_for.isoformat() }}</span>
+            </div>
+            {% if creator_email %}
+                <div>
+                    <span class="uc-stat-label">Created by</span>
+                    <span class="uc-strong" data-testid="stock-take-detail-created-by">{{ creator_email }}</span>
+                </div>
+            {% endif %}
+            {% if st.notes %}
+                <div>
+                    <span class="uc-stat-label">Notes</span>
+                    <span class="uc-strong" data-testid="stock-take-detail-notes">{{ st.notes }}</span>
+                </div>
+            {% endif %}
+        </div>
+    {% endcall %}
+
+    <div class="uc-mt-6"></div>
 
     {% if status == "scheduled" %}
         {# Scheduled branch — preview scope + start form. #}
-        <h2>Scope preview</h2>
-        {% if scope_items %}
-            <table data-testid="stock-take-scope-table">
-                <thead>
-                    <tr>
-                        <th>SKU</th>
-                        <th>Name</th>
-                        <th>Current qty</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in scope_items %}
-                        <tr data-testid="stock-take-scope-row"
-                            data-item-id="{{ item.id }}">
-                            <td data-testid="stock-take-scope-row-sku">{{ item.sku }}</td>
-                            <td data-testid="stock-take-scope-row-name">{{ item.name }}</td>
-                            <td data-testid="stock-take-scope-row-current-qty">
-                                {{ item.current_qty }}
-                            </td>
+        {% call c.card("Scope preview", flush=true) %}
+            {% if scope_items %}
+                <table class="uc-table" data-testid="stock-take-scope-table">
+                    <thead>
+                        <tr>
+                            <th>SKU</th>
+                            <th>Name</th>
+                            <th class="uc-right">Current qty</th>
                         </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        {% for item in scope_items %}
+                            <tr data-testid="stock-take-scope-row"
+                                data-item-id="{{ item.id }}">
+                                <td class="uc-num uc-strong" data-testid="stock-take-scope-row-sku">{{ item.sku }}</td>
+                                <td data-testid="stock-take-scope-row-name">{{ item.name }}</td>
+                                <td class="uc-num uc-right" data-testid="stock-take-scope-row-current-qty">
+                                    {{ item.current_qty }}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                {{ c.empty_state(
+                    "No items in scope",
+                    "No active items match this scope. Add items, unarchive existing items, or schedule a different scope."
+                ) }}
+                <span data-testid="stock-take-no-items-note" hidden></span>
+            {% endif %}
+        {% endcall %}
 
-            <form method="post"
-                  action="/admin/stock-takes/{{ st.id }}/start"
-                  data-testid="stock-take-start-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <p>
-                    Once you start, the system records the current quantity
-                    for every item in scope as the baseline for variance.
-                </p>
-                <p>
-                    <button type="submit"
-                            class="button"
-                            data-testid="stock-take-start-submit">
-                        Start counting
-                    </button>
-                </p>
-            </form>
-        {% else %}
-            <p data-testid="stock-take-no-items-note">
-                No active items match this scope. Add items, unarchive
-                existing items, or schedule a different scope.
-            </p>
+        {% if scope_items %}
+            <div class="uc-mt-6"></div>
+            {% call c.card("Start counting") %}
+                <form method="post"
+                      action="/admin/stock-takes/{{ st.id }}/start"
+                      data-testid="stock-take-start-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <p class="uc-muted">
+                        Once you start, the system records the current quantity
+                        for every item in scope as the baseline for variance.
+                    </p>
+                    <div class="uc-form-actions">
+                        <button type="submit"
+                                class="uc-btn uc-btn--primary"
+                                data-testid="stock-take-start-submit">
+                            Start counting
+                        </button>
+                    </div>
+                </form>
+            {% endcall %}
         {% endif %}
     {% elif status == "in_progress" %}
         {# In-progress branch — count form + (when there are variances) commit form. #}
-        <h2>Counting</h2>
         {% if commit_error %}
-            <p data-testid="stock-take-commit-error" role="alert">
+            <div class="uc-error" data-testid="stock-take-commit-error" role="alert">
                 {{ commit_error }}
-            </p>
+            </div>
         {% endif %}
-        <p data-testid="stock-take-progress-summary">
-            <strong>Counted:</strong>
-            <span data-testid="stock-take-progress-counted">{{ progress.counted }}</span>
-            &middot;
-            <strong>Uncounted:</strong>
-            <span data-testid="stock-take-progress-uncounted">{{ progress.uncounted }}</span>
-            &middot;
-            <strong>With variance:</strong>
-            <span data-testid="stock-take-progress-with-variance">{{ progress.with_variance }}</span>
-        </p>
+
+        {% call c.card("Progress") %}
+            <p data-testid="stock-take-progress-summary" class="uc-row-4" style="margin:0;">
+                <span><span class="uc-stat-label">Counted</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-counted">{{ progress.counted }}</span></span>
+                <span><span class="uc-stat-label">Uncounted</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-uncounted">{{ progress.uncounted }}</span></span>
+                <span><span class="uc-stat-label">With variance</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-with-variance">{{ progress.with_variance }}</span></span>
+            </p>
+        {% endcall %}
+
+        <div class="uc-mt-6"></div>
 
         {% if lines %}
-            <form method="post"
-                  action="/admin/stock-takes/{{ st.id }}/counts"
-                  data-testid="stock-take-count-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <section class="uc-card uc-mb-6" aria-labelledby="counting-heading">
+                <header class="uc-card-header">
+                    <h2 id="counting-heading">Counting</h2>
+                </header>
+                <div class="uc-card-body uc-card-body--flush">
+                    <form method="post"
+                          action="/admin/stock-takes/{{ st.id }}/counts"
+                          data-testid="stock-take-count-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-                <table data-testid="stock-take-count-table">
+                        <table class="uc-table" data-testid="stock-take-count-table">
+                            <thead>
+                                <tr>
+                                    <th>SKU</th>
+                                    <th>Name</th>
+                                    <th>Unit</th>
+                                    <th class="uc-right">System qty</th>
+                                    <th class="uc-right">Counted qty</th>
+                                    <th class="uc-right">Variance</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for line in lines %}
+                                    <tr data-testid="stock-take-count-row"
+                                        data-line-id="{{ line.line_id }}"
+                                        data-item-id="{{ line.item_id }}"
+                                        data-counted="{{ "true" if line.is_counted else "false" }}">
+                                        <td class="uc-num uc-strong" data-testid="stock-take-count-sku">{{ line.item_sku }}</td>
+                                        <td data-testid="stock-take-count-name">{{ line.item_name }}</td>
+                                        <td>{{ line.item_unit }}</td>
+                                        <td class="uc-num uc-right" data-testid="stock-take-count-system-qty">
+                                            {{ line.system_qty }}
+                                        </td>
+                                        <td class="uc-right">
+                                            <input type="text"
+                                                   class="uc-input uc-num"
+                                                   style="height:32px; width:120px; display:inline-block;"
+                                                   inputmode="decimal"
+                                                   name="counted_{{ line.line_id }}"
+                                                   value="{{ line.counted_qty if line.counted_qty is not none else '' }}"
+                                                   placeholder="—"
+                                                   data-testid="stock-take-count-counted-input"
+                                                   data-line-id="{{ line.line_id }}">
+                                        </td>
+                                        <td class="uc-num uc-right" data-testid="stock-take-count-variance"
+                                            data-variance-sign="{{ line.variance_sign }}">
+                                            {{ line.variance_str }}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+
+                        <div class="uc-card-body" style="border-top:1px solid var(--border);">
+                            <button type="submit"
+                                    class="uc-btn uc-btn--primary"
+                                    data-testid="stock-take-count-submit">
+                                Save counts
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            {% if commit_lines %}
+                <section class="uc-card" aria-labelledby="commit-heading">
+                    <header class="uc-card-header">
+                        <h2 id="commit-heading">Commit</h2>
+                    </header>
+                    <div class="uc-card-body uc-card-body--flush">
+                        <div class="uc-card-body" style="border-bottom:1px solid var(--border);">
+                            <p class="uc-muted" style="margin:0;">
+                                Committing writes one adjustment movement per
+                                non-zero variance line and closes this stock take.
+                                Positive variances need a unit cost; negative
+                                variances consume FIFO layers automatically.
+                            </p>
+                        </div>
+                        <form method="post"
+                              action="/admin/stock-takes/{{ st.id }}/commit"
+                              data-testid="stock-take-commit-form">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                            <table class="uc-table" data-testid="stock-take-commit-table">
+                                <thead>
+                                    <tr>
+                                        <th>SKU</th>
+                                        <th>Name</th>
+                                        <th>Unit</th>
+                                        <th class="uc-right">Variance</th>
+                                        <th class="uc-right">Unit cost</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for cl in commit_lines %}
+                                        <tr data-testid="stock-take-commit-row"
+                                            data-line-id="{{ cl.line_id }}"
+                                            data-item-id="{{ cl.item_id }}"
+                                            data-direction="{{ cl.direction }}">
+                                            <td class="uc-num uc-strong" data-testid="stock-take-commit-sku">{{ cl.item_sku }}</td>
+                                            <td data-testid="stock-take-commit-name">{{ cl.item_name }}</td>
+                                            <td>{{ cl.item_unit }}</td>
+                                            <td class="uc-num uc-right" data-testid="stock-take-commit-variance">
+                                                {{ cl.variance_str }}
+                                            </td>
+                                            <td class="uc-right">
+                                                {% if cl.direction == "increase" %}
+                                                    <input type="text"
+                                                           class="uc-input uc-num"
+                                                           style="height:32px; width:120px; display:inline-block;"
+                                                           inputmode="decimal"
+                                                           name="unit_cost_{{ cl.line_id }}"
+                                                           value="{{ cl.unit_cost_default }}"
+                                                           placeholder="0.00"
+                                                           required
+                                                           data-testid="stock-take-commit-unit-cost-input"
+                                                           data-line-id="{{ cl.line_id }}">
+                                                {% else %}
+                                                    <span class="uc-muted" data-testid="stock-take-commit-unit-cost-na">—</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+
+                            <div class="uc-card-body" style="border-top:1px solid var(--border);">
+                                <button type="submit"
+                                        class="uc-btn uc-btn--primary"
+                                        data-testid="stock-take-commit-submit">
+                                    Commit count
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+            {% else %}
+                {% call c.card("Commit") %}
+                    {{ c.empty_state(
+                        "Nothing to commit",
+                        "All counted lines match the system. Re-count any lines with variances or close this stock take by ignoring it."
+                    ) }}
+                    <span data-testid="stock-take-no-variances-note" hidden></span>
+                {% endcall %}
+            {% endif %}
+        {% else %}
+            {% call c.card() %}
+                {{ c.empty_state("No lines on this stock take.") }}
+                <span data-testid="stock-take-empty-lines" hidden></span>
+            {% endcall %}
+        {% endif %}
+    {% else %}
+        {# Completed branch — read-only summary. #}
+        {% call c.card("Progress") %}
+            <p data-testid="stock-take-progress-summary" class="uc-row-4" style="margin:0;">
+                <span><span class="uc-stat-label">Counted</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-counted">{{ progress.counted }}</span></span>
+                <span><span class="uc-stat-label">Uncounted</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-uncounted">{{ progress.uncounted }}</span></span>
+                <span><span class="uc-stat-label">With variance</span>
+                    <span class="uc-strong uc-num" data-testid="stock-take-progress-with-variance">{{ progress.with_variance }}</span></span>
+            </p>
+        {% endcall %}
+
+        <div class="uc-mt-6"></div>
+
+        {% if lines %}
+            {% call c.card("Lines", flush=true) %}
+                <table class="uc-table" data-testid="stock-take-count-table">
                     <thead>
                         <tr>
                             <th>SKU</th>
                             <th>Name</th>
                             <th>Unit</th>
-                            <th>System qty</th>
-                            <th>Counted qty</th>
-                            <th>Variance</th>
+                            <th class="uc-right">System qty</th>
+                            <th class="uc-right">Counted qty</th>
+                            <th class="uc-right">Variance</th>
+                            <th>Committed?</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -123,178 +305,38 @@
                             <tr data-testid="stock-take-count-row"
                                 data-line-id="{{ line.line_id }}"
                                 data-item-id="{{ line.item_id }}"
-                                data-counted="{{ "true" if line.is_counted else "false" }}">
-                                <td data-testid="stock-take-count-sku">{{ line.item_sku }}</td>
+                                data-counted="{{ "true" if line.is_counted else "false" }}"
+                                data-committed="{{ "true" if line.is_committed else "false" }}">
+                                <td class="uc-num uc-strong" data-testid="stock-take-count-sku">{{ line.item_sku }}</td>
                                 <td data-testid="stock-take-count-name">{{ line.item_name }}</td>
                                 <td>{{ line.item_unit }}</td>
-                                <td data-testid="stock-take-count-system-qty">
+                                <td class="uc-num uc-right" data-testid="stock-take-count-system-qty">
                                     {{ line.system_qty }}
                                 </td>
-                                <td>
-                                    <input type="text"
-                                           inputmode="decimal"
-                                           name="counted_{{ line.line_id }}"
-                                           value="{{ line.counted_qty if line.counted_qty is not none else '' }}"
-                                           placeholder="—"
-                                           data-testid="stock-take-count-counted-input"
-                                           data-line-id="{{ line.line_id }}">
+                                <td class="uc-num uc-right">
+                                    {% if line.counted_qty is not none %}
+                                        {{ line.counted_qty }}
+                                    {% else %}
+                                        —
+                                    {% endif %}
                                 </td>
-                                <td data-testid="stock-take-count-variance"
+                                <td class="uc-num uc-right" data-testid="stock-take-count-variance"
                                     data-variance-sign="{{ line.variance_sign }}">
                                     {{ line.variance_str }}
+                                </td>
+                                <td data-testid="stock-take-line-committed">
+                                    {% if line.is_committed %}Yes{% else %}—{% endif %}
                                 </td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
-
-                <p>
-                    <button type="submit"
-                            class="button"
-                            data-testid="stock-take-count-submit">
-                        Save counts
-                    </button>
-                </p>
-            </form>
-
-            <h2>Commit</h2>
-            {% if commit_lines %}
-                <p>
-                    <em>
-                        Committing writes one adjustment movement per
-                        non-zero variance line and closes this stock take.
-                        Positive variances need a unit cost; negative
-                        variances consume FIFO layers automatically.
-                    </em>
-                </p>
-                <form method="post"
-                      action="/admin/stock-takes/{{ st.id }}/commit"
-                      data-testid="stock-take-commit-form">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-                    <table data-testid="stock-take-commit-table">
-                        <thead>
-                            <tr>
-                                <th>SKU</th>
-                                <th>Name</th>
-                                <th>Unit</th>
-                                <th>Variance</th>
-                                <th>Unit cost</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for cl in commit_lines %}
-                                <tr data-testid="stock-take-commit-row"
-                                    data-line-id="{{ cl.line_id }}"
-                                    data-item-id="{{ cl.item_id }}"
-                                    data-direction="{{ cl.direction }}">
-                                    <td data-testid="stock-take-commit-sku">{{ cl.item_sku }}</td>
-                                    <td data-testid="stock-take-commit-name">{{ cl.item_name }}</td>
-                                    <td>{{ cl.item_unit }}</td>
-                                    <td data-testid="stock-take-commit-variance">
-                                        {{ cl.variance_str }}
-                                    </td>
-                                    <td>
-                                        {% if cl.direction == "increase" %}
-                                            <input type="text"
-                                                   inputmode="decimal"
-                                                   name="unit_cost_{{ cl.line_id }}"
-                                                   value="{{ cl.unit_cost_default }}"
-                                                   placeholder="0.00"
-                                                   required
-                                                   data-testid="stock-take-commit-unit-cost-input"
-                                                   data-line-id="{{ cl.line_id }}">
-                                        {% else %}
-                                            <span data-testid="stock-take-commit-unit-cost-na">—</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-
-                    <p>
-                        <button type="submit"
-                                class="button"
-                                data-testid="stock-take-commit-submit">
-                            Commit count
-                        </button>
-                    </p>
-                </form>
-            {% else %}
-                <p data-testid="stock-take-no-variances-note">
-                    All counted lines match the system. Nothing to commit;
-                    re-count any lines with variances or close this stock
-                    take by ignoring it.
-                </p>
-            {% endif %}
+            {% endcall %}
         {% else %}
-            <p data-testid="stock-take-empty-lines">
-                No lines on this stock take.
-            </p>
-        {% endif %}
-    {% else %}
-        {# Completed branch — read-only summary. #}
-        <h2>Completed</h2>
-        <p data-testid="stock-take-progress-summary">
-            <strong>Counted:</strong>
-            <span data-testid="stock-take-progress-counted">{{ progress.counted }}</span>
-            &middot;
-            <strong>Uncounted:</strong>
-            <span data-testid="stock-take-progress-uncounted">{{ progress.uncounted }}</span>
-            &middot;
-            <strong>With variance:</strong>
-            <span data-testid="stock-take-progress-with-variance">{{ progress.with_variance }}</span>
-        </p>
-
-        {% if lines %}
-            <table data-testid="stock-take-count-table">
-                <thead>
-                    <tr>
-                        <th>SKU</th>
-                        <th>Name</th>
-                        <th>Unit</th>
-                        <th>System qty</th>
-                        <th>Counted qty</th>
-                        <th>Variance</th>
-                        <th>Committed?</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for line in lines %}
-                        <tr data-testid="stock-take-count-row"
-                            data-line-id="{{ line.line_id }}"
-                            data-item-id="{{ line.item_id }}"
-                            data-counted="{{ "true" if line.is_counted else "false" }}"
-                            data-committed="{{ "true" if line.is_committed else "false" }}">
-                            <td data-testid="stock-take-count-sku">{{ line.item_sku }}</td>
-                            <td data-testid="stock-take-count-name">{{ line.item_name }}</td>
-                            <td>{{ line.item_unit }}</td>
-                            <td data-testid="stock-take-count-system-qty">
-                                {{ line.system_qty }}
-                            </td>
-                            <td>
-                                {% if line.counted_qty is not none %}
-                                    {{ line.counted_qty }}
-                                {% else %}
-                                    —
-                                {% endif %}
-                            </td>
-                            <td data-testid="stock-take-count-variance"
-                                data-variance-sign="{{ line.variance_sign }}">
-                                {{ line.variance_str }}
-                            </td>
-                            <td data-testid="stock-take-line-committed">
-                                {% if line.is_committed %}Yes{% else %}—{% endif %}
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p data-testid="stock-take-empty-lines">
-                No lines on this stock take.
-            </p>
+            {% call c.card() %}
+                {{ c.empty_state("No lines on this stock take.") }}
+                <span data-testid="stock-take-empty-lines" hidden></span>
+            {% endcall %}
         {% endif %}
     {% endif %}
 {% endblock %}

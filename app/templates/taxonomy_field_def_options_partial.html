@@ -3,9 +3,9 @@
    different type so the form doesn't display an input that the server will
    reject as invalid (text/number/decimal/etc. fields can't carry options). #}
 {% if show_options %}
-    <p data-testid="field-def-options-row">
-        <label for="options_text">Options (one per line — for select / multiselect only)</label><br>
-        <textarea id="options_text" name="options_text" rows="4" cols="40"
+    <div class="uc-field" data-testid="field-def-options-row">
+        <label class="uc-label" for="options_text">Options (one per line — for select / multiselect only)</label>
+        <textarea class="uc-textarea" id="options_text" name="options_text" rows="4"
                   data-testid="field-def-options-input">{{ form.options_text }}</textarea>
-    </p>
+    </div>
 {% endif %}
