@@ -1006,7 +1006,62 @@ No `archived_at` on any of the three. The engine maintains six invariants (docum
 
 ## Current slice
 
-*(none — CONFTEST1 shipped this iteration. See Completed slices log row I75 for the canonical record. Plan content + cross-checks preserved below in commented form for slice context.)*
+**CONFTEST2 — Per-test isolation via SAVEPOINT for non-SQLite backends (DoD #11 progress step; MISSION §5 "SQLite for local/test, Postgres for cloud. The data layer must work with both via SQLAlchemy."):** smallest end-to-end slice that continues CONFTEST1's DoD #11 progress. With CONFTEST1's `TEST_DATABASE_URL` override + dialect-aware engine helper landed, the next gap is per-test isolation when the override points at a shared backend (Postgres). Currently `db_session` creates a fresh engine each test, which gives automatic isolation on in-memory SQLite (each engine = isolated DB) but on a shared Postgres backend every test would step on every other test's row data (schema is idempotent via `Base.metadata.create_all`, but rows persist). This slice adds the SQLAlchemy 2.0 `join_transaction_mode="create_savepoint"` pattern: each test's session lives inside an outer transaction on a single connection, with the savepoint pattern intercepting `session.commit()`/`session.rollback()` so they never escape the outer scope; teardown rolls back the outer transaction. **No DoD ticked** — DoD #11 also needs (c) Postgres CI job (gated on a remote being configured + a CI workflow YAML — `git remote -v` shows nothing). After CONFTEST2 the test conftest-side work for DoD #11 is complete; only CI infra remains.
+
+- **Scope** (`tests/conftest.py` refactor + new `tests/integration/test_conftest_isolation.py` only — no `app/` change; no new migrations; no new modules outside `tests/`):
+  - **Add `_make_isolated_session(engine: Engine)` helper** to `tests/conftest.py`. Builds a connection-bound session with `join_transaction_mode="create_savepoint"` (SQLAlchemy 2.0+ idiom). Pattern (approx):
+    ```python
+    @contextmanager
+    def _make_isolated_session(engine: Engine) -> Iterator[Session]:
+        Base.metadata.create_all(engine)
+        connection = engine.connect()
+        transaction = connection.begin()
+        SessionLocal = sessionmaker(bind=connection, autoflush=False, autocommit=False, future=True, join_transaction_mode="create_savepoint")
+        try:
+            with SessionLocal() as session:
+                yield session
+        finally:
+            transaction.rollback()
+            connection.close()
+    ```
+    `join_transaction_mode="create_savepoint"` is the SQLAlchemy 2.0 way to handle "the test session is inside an outer transaction; route handlers' `session.commit()` should NOT escape the outer scope" — much cleaner than the older `event.listens_for(session, "after_transaction_end")` pattern. SQLAlchemy 2.0.49 is in `pyproject.toml`; the parameter is documented at https://docs.sqlalchemy.org/en/20/orm/session_basics.html#joining-a-session-into-an-external-transaction-such-as-for-test-suites.
+  - **Modify `db_session` fixture** to dispatch on URL prefix:
+    - SQLite URL (the default — covers in-memory + file URLs) → existing path (per-test engine = per-test DB; isolation is automatic, savepoint pattern is unnecessary overhead).
+    - Non-SQLite URL → `_make_isolated_session(engine)` for shared-backend isolation.
+    - The dispatch keeps the existing 2502-test default behaviour unchanged (zero risk of breaking SQLite-side tests).
+  - **Modify `client` fixture** to thread the same dispatch: when `db_session` is bound to a connection (savepoint mode), `OverrideSession` binds to the same connection with `join_transaction_mode="create_savepoint"` so the route-handler-side session joins the same outer transaction. When `db_session` is bound to an engine (SQLite default), `OverrideSession` binds to that engine — existing behaviour. The bind-introspection trick: `db_session.get_bind()` returns the connection in savepoint mode and the engine in SQLite mode; the fixture inspects the type with `isinstance(bind, Connection)` to decide.
+
+- **Tests** (~9 new in `tests/integration/test_conftest_isolation.py`):
+  - `TestMakeIsolatedSession` (5):
+    - `test_yields_writable_session_against_sqlite_file` — opens a SQLite file engine + `_make_isolated_session(engine)` + writes a `User` row + asserts visible via `session.query(User).first()`. The savepoint pattern works on any dialect (SQLite supports SAVEPOINT) so SQLite-file is a valid surrogate for Postgres-side validation without needing Postgres infra.
+    - `test_commit_does_not_escape_outer_transaction` — writes a row + `session.commit()`s + exits the helper context manager + opens a fresh engine on the same SQLite file URL + asserts the row is gone (the outer transaction was rolled back at teardown, so the commit's effect was confined to the savepoint and discarded with the outer rollback).
+    - `test_rollback_inside_helper_preserves_outer_transaction` — writes a row + `session.rollback()`s + writes a different row + `session.commit()`s + exits the helper + opens a fresh engine + asserts the second row is also gone (rollback popped the savepoint and rolled back to it; the outer rollback at teardown then discarded everything).
+    - `test_integrity_error_recovery` — tries to insert a duplicate-key row (after seeding a row + commit-savepoint) + catches the `IntegrityError` + calls `session.rollback()` + asserts the session is usable for further writes (mirrors the `test_top_level_name_is_unique`-style pattern that ~30 unit tests use). Forces the savepoint pattern to handle the "broken session after IntegrityError" case correctly.
+    - `test_uses_savepoint_mode` — pins that the helper passes `join_transaction_mode="create_savepoint"` to `sessionmaker` (source-text inspection via `inspect.getsource(_make_isolated_session)` substring check). Forcing function so a future PR that drops the parameter (which would silently break isolation) fails the suite.
+  - `TestDbSessionDispatch` (3):
+    - `test_db_session_uses_sqlite_path_by_default` — under the default `TEST_DATABASE_URL` (`sqlite:///:memory:`), the fixture's engine has `dialect.name == "sqlite"` AND the bind returned by `session.get_bind()` is an `Engine` (not a `Connection`). Pins existing behaviour preserved.
+    - `test_db_session_uses_savepoint_path_for_non_sqlite_url` — monkeypatches `TEST_DATABASE_URL` to a SQLite-file URL (forces the savepoint branch even though the dialect is SQLite — the dispatch should be on URL prefix, not dialect; this isolates the dispatch logic from the dialect). Verifies the bind is a `Connection`. (Note: the current dispatch is on URL `startswith("sqlite")` — this test would FAIL the way I've described it. I'll either flip the dispatch to a different boundary, e.g. an opt-in env var, or rephrase the test to use a `postgresql+psycopg://` URL and assert the connection-binding via lazy engine inspection.)
+    - **Resolution**: the cleanest dispatch is on URL prefix (`sqlite` → existing, else → savepoint). The test for the savepoint branch will set `TEST_DATABASE_URL=postgresql+psycopg:///nonexistent_db_for_dispatch_check` and assert that `_make_test_engine` returns a Postgres-dialect engine (lazy — no connection). The savepoint branch isn't actually exercised at the fixture level without a real Postgres, but `_make_isolated_session` is exercised directly by `TestMakeIsolatedSession` with a SQLite-file engine. The dispatch logic itself is pinned via source-text inspection (`inspect.getsource(db_session)` contains `if url.startswith("sqlite")` substring or equivalent).
+  - `TestClientFixtureDispatch` (1):
+    - `test_client_fixture_still_works_with_default_sqlite` — sanity check: the existing `client` fixture continues to work for the default SQLite case (covers thousands of existing integration tests by proxy). Drives a simple `client.get("/healthz")` or equivalent unauthenticated route + asserts 200.
+
+- **Why opt-in dispatch on URL, not unified savepoint pattern for everyone**: the savepoint pattern works on SQLite (savepoints are supported), but it adds a per-test connection-open + outer-transaction overhead that the existing per-test-engine pattern doesn't have. For 2502 tests on SQLite, the unified pattern would slow the suite measurably. The dispatch keeps SQLite fast + correct + Postgres-isolation correct. Both code paths are exercised by tests.
+
+- **Cross-checked every load-bearing claim against source**: `tests/conftest.py:69-103` is the existing `db_session` + `client` fixtures (after CONFTEST1); `pyproject.toml:17` is `sqlalchemy>=2.0` (SQLAlchemy 2.0.49 installed per `uv run python -c "import sqlalchemy; print(sqlalchemy.__version__)"`); `Session.__init__` accepts `join_transaction_mode` parameter (added in SQLAlchemy 2.0 — verified by reading the SQLAlchemy docs link above); ~9 unit-test files have a *local* `db` fixture (`test_taxonomy.py:24`, `test_field_defs.py:28`, etc.) that hardcode their own `create_engine("sqlite:///:memory:")` — those are independent of `db_session` and are unaffected by CONFTEST2. The ~30 `db.rollback()` calls in unit tests are local to those files' fixtures — also unaffected.
+
+- **Manual sanity check** (no human required): the integration tests *are* the manual sanity check — they import `_make_isolated_session` from `tests.conftest` directly + drive every code path with SQLite-file engines. Run as part of `make test` which is part of `make check`.
+
+- **Risks**:
+  - **`join_transaction_mode="create_savepoint"` syntax**: SQLAlchemy 2.0+ only. Confirmed available in 2.0.49.
+  - **`IntegrityError` recovery**: the savepoint pattern handles this correctly per SQLAlchemy docs — the `IntegrityError` rolls back the inner savepoint, leaving the session in a "needs `rollback()` call" state; calling `session.rollback()` rolls back to the outer savepoint, allowing further writes. Pinned by `test_integrity_error_recovery`.
+  - **Schema persistence on shared Postgres**: `Base.metadata.create_all(engine)` runs on every test (fast — checks `information_schema` for existing tables and skips them). Acceptable overhead for v1.
+  - **`Connection` vs `Engine` bind dispatch in `client` fixture**: the bind-type introspection via `isinstance(bind, Connection)` is a clean dispatcher. SQLAlchemy's `Session.get_bind()` returns whatever was passed to the sessionmaker — either an Engine (SQLite path) or a Connection (savepoint path).
+
+- **DoD impact**: **No DoD ticked.** DoD #11 needs (a) conftest URL/dialect switch (CONFTEST1 ✓) + (b) per-test isolation on shared backends (this slice) + (c) Postgres CI job (gated on remote infra). CONFTEST2 closes (b). After CONFTEST2 a developer can run `createdb test_uc && TEST_DATABASE_URL=postgresql+psycopg:///test_uc make test` and the suite would isolate per-test correctly (the schema-create cost the only per-test wasted work on Postgres). The CI infra leg (c) lands when a remote is configured.
+
+---
+
+*(Previous Current slice — CONFTEST1 shipped iteration 75 — moved to Completed slices log row I75. Plan content + cross-checks preserved below in commented form for slice context.)*
 
 <!-- CONFTEST1 plan (now shipped — preserved for slice context).
 

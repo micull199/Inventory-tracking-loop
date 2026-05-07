@@ -6,17 +6,27 @@ database with a fresh schema.
 
 The fixture engine URL is resolved from the ``TEST_DATABASE_URL`` env var,
 defaulting to ``sqlite:///:memory:``. Setting ``TEST_DATABASE_URL`` to a
-Postgres URL (e.g. ``postgresql:///test_uc``) lets a developer smoke-test the
-suite against Postgres without code changes — DoD #11's "runs in cloud config
-on Postgres with no code changes (env vars only)" half. Per-test isolation on
-a shared Postgres backend (transaction rollback or schema-per-test) is a
-separate follow-up.
+Postgres URL (e.g. ``postgresql+psycopg:///test_uc``) lets a developer smoke-
+test the suite against Postgres without code changes — DoD #11's "runs in
+cloud config on Postgres with no code changes (env vars only)" half.
+
+Per-test isolation strategy:
+
+- **SQLite (default)**: each test creates its own engine pointing at a fresh
+  in-memory or file DB. Isolation is automatic; no transaction wrapping needed.
+- **Non-SQLite (Postgres)**: each test reuses the shared backend, so isolation
+  needs the SQLAlchemy 2.0 "outer transaction + savepoint" pattern. The session
+  is bound to a connection inside an outer transaction; ``session.commit()``
+  and ``session.rollback()`` operate on a SAVEPOINT (via
+  ``join_transaction_mode="create_savepoint"``) so they never escape; teardown
+  rolls back the outer transaction, discarding all the test's writes.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 # Force a known-good config before any app imports happen.
 os.environ.setdefault("APP_ENV", "test")
@@ -25,7 +35,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Connection, Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -66,18 +76,61 @@ def _make_test_engine(url: str) -> Engine:
     return create_engine(url, future=True)
 
 
+@contextmanager
+def _make_isolated_session(engine: Engine) -> Iterator[Session]:
+    """Yield a session whose writes never escape an outer transaction.
+
+    Used for shared-backend testing (Postgres) where each test must roll back
+    its writes for isolation. The pattern: open a connection, begin an outer
+    transaction, bind a sessionmaker to that connection with
+    ``join_transaction_mode="create_savepoint"`` so the route handler's
+    ``session.commit()`` / ``session.rollback()`` operate on a SAVEPOINT inside
+    the outer transaction. At teardown, roll back the outer transaction —
+    every committed savepoint is discarded, no rows persist.
+
+    The helper is dialect-agnostic (SAVEPOINTs are supported on every
+    SQLAlchemy-supported backend that matters for this project), so SQLite-file
+    engines can drive validation tests without needing a running Postgres.
+    """
+    Base.metadata.create_all(engine)
+    connection = engine.connect()
+    transaction = connection.begin()
+    SessionLocal = sessionmaker(
+        bind=connection,
+        autoflush=False,
+        autocommit=False,
+        future=True,
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        with SessionLocal() as session:
+            yield session
+    finally:
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
+
+
 @pytest.fixture
 def db_session() -> Iterator[Session]:
     """An isolated database session with all tables created.
 
-    Defaults to in-memory SQLite (one engine per test) so existing tests stay
-    isolated. Honours ``TEST_DATABASE_URL`` for Postgres smoke tests; per-test
-    isolation on a shared Postgres backend is a follow-up.
+    SQLite URLs (the default): each test gets its own engine pointing at a
+    fresh in-memory or file DB. Isolation is automatic.
+
+    Non-SQLite URLs (e.g. Postgres): each test reuses the shared backend, so
+    the savepoint pattern wraps the session in an outer transaction that's
+    rolled back at teardown. See ``_make_isolated_session``.
     """
-    engine = _make_test_engine(_resolve_test_database_url())
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-    with SessionLocal() as session:
+    url = _resolve_test_database_url()
+    engine = _make_test_engine(url)
+    if url.startswith("sqlite"):
+        Base.metadata.create_all(engine)
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+        with SessionLocal() as session:
+            yield session
+        return
+    with _make_isolated_session(engine) as session:
         yield session
 
 
@@ -85,11 +138,26 @@ def db_session() -> Iterator[Session]:
 def client(db_session: Session) -> Iterator[TestClient]:
     """A TestClient with ``get_session`` overridden to share the test session.
 
-    Uses the same engine as ``db_session`` so writes done via the API are
-    visible to assertions made directly through ``db_session``.
+    Binds ``OverrideSession`` to whatever ``db_session`` is bound to:
+
+    - SQLite path: the engine. Each route-handler request opens its own session
+      on the engine — same DB visible because of StaticPool's single
+      connection.
+    - Savepoint path: the connection. Each route-handler request opens its own
+      session that joins the same outer transaction via
+      ``join_transaction_mode="create_savepoint"``. Route-handler commits land
+      inside the test's savepoint and are discarded at teardown.
     """
     bind = db_session.get_bind()
-    OverrideSession = sessionmaker(bind=bind, autoflush=False, autocommit=False, future=True)
+    sessionmaker_kwargs: dict[str, object] = {
+        "bind": bind,
+        "autoflush": False,
+        "autocommit": False,
+        "future": True,
+    }
+    if isinstance(bind, Connection):
+        sessionmaker_kwargs["join_transaction_mode"] = "create_savepoint"
+    OverrideSession = sessionmaker(**sessionmaker_kwargs)  # type: ignore[arg-type]
 
     def _override() -> Iterator[Session]:
         with OverrideSession() as s:
