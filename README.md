@@ -189,7 +189,27 @@ The taxonomy is a Manager-owned two-level tree (Category → Sub-category). Item
 
 ### Creating an item
 
-_TODO_
+Items are the foundational unit of stock — every movement, stock take, purchase order, and audit row references an item. Each item lives on exactly one **leaf node** of the taxonomy (see _Defining a new category…_ above) and inherits that node's custom fields. Creating items is Manager-owned (Admins always pass); Office can edit existing items but cannot create or archive them.
+
+1. Sign in as a Manager (or Admin).
+2. Click **Items** in the top nav (or visit `/admin/items`).
+3. Click **New item**.
+4. Fill in the core fields:
+   - **SKU** (required, unique across active items, max 64 chars).
+   - **Name** (required, max 255 chars).
+   - **Category** (required) — pick a leaf node. Non-leaf categories are listed but disabled (the dropdown shows _"── Top / (pick a sub-category) ──"_); items must live on a leaf.
+   - **Unit** (required) — short unit-of-measure label, e.g. `g`, `ml`, `ea`.
+   - **Tracking mode** — `qty` (counted in bulk, e.g. a box of polishing compound) or `unique` (one record per physical item, e.g. a specific tool or mould). For `unique`, after saving, use the **Manage units** link on the item form to add per-unit serial labels.
+   - **Requires check-out** — tick for tools, moulds, or anything that gets handed to a named worker. Surfaces a per-item check-out form to Workshop staff (see _Reading the audit trail_ below for how that history is captured).
+5. Fill in the reorder fields (Manager-only — Office sees these read-only):
+   - **Reorder threshold** — when `current_qty` drops to or below this value, the item appears on the reorder dashboard.
+   - **Reorder quantity** — the default qty pre-filled on draft purchase orders.
+6. Fill in the optional fields: **Supplier** (preferred vendor for reorders), **Location** (physical home), **QR code** (printable label payload — type any unique string, or leave blank for items that don't carry a label), **Notes** (free text, max 2000 chars).
+7. Fill in any **Category fields** the leaf node defines (DOC2's custom-field schema). Required custom fields are enforced on save; the form rejects bad types (e.g. non-numeric in a `decimal` field) with a 400.
+8. Click **Create item**.
+9. The list page reappears with the new row. New items start at `current_qty = 0` — only stock movements (Stock in / Stock out / Adjust / Transfer / a PO receipt) move that number.
+
+To edit an item, click **Edit** on its row. To stop using an item without losing history, click **Archive** — archived items move to the Archived tab and remain readable on existing movements, purchase orders, and stock takes, but are hidden from new entry. Click **Unarchive** to re-activate. Items cannot be hard-deleted; the audit log assumes their IDs persist.
 
 ### Printing a QR label and scanning it
 

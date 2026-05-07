@@ -99,3 +99,52 @@ class TestDefiningACategorySection:
         # leaves only, and adding a sub-category turns a Category into a non-leaf.
         assert "leaf" in body.lower()
         assert "Sub-category" in body or "sub-category" in body
+
+
+class TestCreatingAnItemSection:
+    """DOC3 — pin the item-creation walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Creating an item")
+        assert "_TODO_" not in body, "item section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "item section looks unsubstantial"
+
+    def test_section_references_admin_items_route(self) -> None:
+        body = _section("Creating an item")
+        assert "/admin/items" in body
+
+    def test_section_names_manager_role(self) -> None:
+        body = _section("Creating an item")
+        # Item creation is Manager-owned (Admin always passes); the section
+        # must name the role so a future Office reader knows why the form
+        # is hidden from them.
+        assert "Manager" in body
+
+    def test_section_names_required_core_fields(self) -> None:
+        body = _section("Creating an item")
+        # The four required core fields enforced by ``app/items.py``'s
+        # ``_normalise`` helper. A future PR that drops one fails this test.
+        assert "SKU" in body
+        assert "Name" in body
+        assert "Category" in body
+        assert "Unit" in body
+        assert "required" in body
+
+    def test_section_names_tracking_modes(self) -> None:
+        body = _section("Creating an item")
+        # The two ``TrackingMode`` enum values. If a future rename of the
+        # vocabulary lands, this test fails and forces the docs to update.
+        assert "qty" in body
+        assert "unique" in body
+
+    def test_section_names_requires_checkout_concept(self) -> None:
+        body = _section("Creating an item")
+        # The ``requires_checkout`` flag is the primary differentiator for
+        # tool/mould workflow visibility (DoD #4). The section must name it
+        # so Manager readers know how to enable check-out for those items.
+        assert "check-out" in body.lower() or "check out" in body.lower()
+
+    def test_section_explains_archive_posture(self) -> None:
+        body = _section("Creating an item")
+        assert "Archive" in body
+        assert "Unarchive" in body
