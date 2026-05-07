@@ -215,6 +215,89 @@ class TestIndexPage:
 
 
 # ---------------------------------------------------------------------------
+# Google OAuth login (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestGoogleLogin:
+    """Coverage for ``GET /auth/google/login``.
+
+    The route delegates to Authlib's ``authorize_redirect`` which constructs a
+    state-bearing URL into Google's authz endpoint and stores the expected
+    state in the session. We mock the Authlib client so we don't make a real
+    network call while still pinning the route's contract: 503 if Google isn't
+    configured, otherwise return whatever the Authlib helper produced.
+    """
+
+    def test_login_redirects_to_google_authz_endpoint(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from fastapi.responses import RedirectResponse
+
+        stub_url = "https://accounts.google.test/o/oauth2/v2/auth?state=stub-state"
+        google_mock = AsyncMock()
+        google_mock.authorize_redirect = AsyncMock(
+            return_value=RedirectResponse(url=stub_url, status_code=307)
+        )
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/login", follow_redirects=False)
+        assert resp.status_code == 307
+        assert resp.headers["location"] == stub_url
+
+    def test_login_returns_503_when_google_not_configured(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: None)
+
+        resp = client.get("/auth/google/login", follow_redirects=False)
+        assert resp.status_code == 503
+        assert "not configured" in resp.text.lower()
+
+    def test_login_passes_callback_redirect_uri_to_authlib(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The redirect_uri passed to Authlib must end with the callback path
+        and start with ``settings.app_base_url``. A future PR that drops the
+        explicit ``redirect_uri`` (Authlib has a magic-from-request mode) would
+        silently break the prod registration where the URI must match an
+        allowlisted entry in the Google Cloud console — this test catches that
+        regression in-process.
+        """
+        from fastapi.responses import RedirectResponse
+
+        captured: dict[str, Any] = {}
+
+        async def _capture_authorize_redirect(
+            _request: Any, redirect_uri: str
+        ) -> RedirectResponse:
+            captured["redirect_uri"] = redirect_uri
+            return RedirectResponse(url="https://stub", status_code=307)
+
+        google_mock = AsyncMock()
+        google_mock.authorize_redirect = _capture_authorize_redirect
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/login", follow_redirects=False)
+        assert resp.status_code == 307
+
+        from app.config import settings as app_settings
+
+        expected_base = app_settings.app_base_url.rstrip("/")
+        assert captured["redirect_uri"] == f"{expected_base}/auth/google/callback"
+
+
+# ---------------------------------------------------------------------------
 # Google OAuth callback (mocked)
 # ---------------------------------------------------------------------------
 
@@ -287,6 +370,111 @@ class TestGoogleCallback:
         # Active manager was preserved, NOT reverted to pending.
         assert refreshed.role is Role.MANAGER
         assert refreshed.status is UserStatus.ACTIVE
+
+    # ----- Unhappy paths -----
+
+    def test_callback_returns_400_on_oauth_error(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Authlib raises ``OAuthError`` for state-mismatch, unverified
+        signature, expired code, etc. The callback handler must surface that
+        as a 400 with the underlying error name in the detail.
+        """
+        from authlib.integrations.starlette_client import OAuthError
+
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            side_effect=OAuthError(error="invalid_state", description="state mismatch")
+        )
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 400
+        assert "OAuth error" in resp.text
+        assert "invalid_state" in resp.text
+
+    def test_callback_returns_400_when_userinfo_missing_email(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            return_value={"userinfo": {"sub": "g-no-email"}}
+        )
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 400
+        assert "missing user identity" in resp.text
+
+    def test_callback_returns_400_when_userinfo_missing_sub(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(
+            return_value={"userinfo": {"email": "no-sub@example.com"}}
+        )
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 400
+        assert "missing user identity" in resp.text
+
+    def test_callback_fetches_userinfo_separately_when_token_omits_it(
+        self,
+        client: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Some providers (and some Authlib code paths) return the access token
+        without the inline ``userinfo`` claim. The callback handler must fall
+        back to ``google.userinfo(token=token)`` and complete the flow.
+        """
+        google_mock = AsyncMock()
+        google_mock.authorize_access_token = AsyncMock(return_value={})
+        google_mock.userinfo = AsyncMock(
+            return_value={
+                "sub": "g-sep-1",
+                "email": "separate@example.com",
+                "name": "Separate Userinfo",
+            }
+        )
+        monkeypatch.setattr(
+            auth_module.oauth, "create_client", lambda _name: google_mock
+        )
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+        google_mock.userinfo.assert_awaited_once()
+
+        user = db_session.execute(
+            select(User).where(User.email == "separate@example.com")
+        ).scalar_one()
+        assert user.status is UserStatus.PENDING
+        assert user.role is None
+
+    def test_callback_returns_503_when_google_not_configured(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: None)
+
+        resp = client.get("/auth/google/callback", follow_redirects=False)
+        assert resp.status_code == 503
+        assert "not configured" in resp.text.lower()
 
 
 # ---------------------------------------------------------------------------
