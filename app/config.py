@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
 
     bootstrap_admin_email: str = ""
+    oauth_stub_mode: bool = False
 
     @model_validator(mode="after")
     def _validate_prod_secrets(self) -> Self:

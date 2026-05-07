@@ -27,13 +27,27 @@ from app.models import Role, User, UserStatus
 
 oauth = OAuth()
 if settings.google_client_id and settings.google_client_secret:
-    oauth.register(
-        name="google",
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
-    )
+    if settings.oauth_stub_mode:
+        # Test-only: register Google against the local stub endpoints so no
+        # external network call is needed and no JWT verification fires.
+        _stub_base = f"{settings.app_base_url.rstrip('/')}/auth/_stub"
+        oauth.register(
+            name="google",
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            authorize_url=f"{_stub_base}/authorize",
+            access_token_url=f"{_stub_base}/token",
+            userinfo_endpoint=f"{_stub_base}/userinfo",
+            client_kwargs={"scope": "email profile"},
+        )
+    else:
+        oauth.register(
+            name="google",
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+            client_kwargs={"scope": "openid email profile"},
+        )
 
 
 # ---------------------------------------------------------------------------

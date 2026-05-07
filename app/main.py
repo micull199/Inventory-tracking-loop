@@ -28,7 +28,7 @@ from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
-from app.csrf import CSRFMiddleware
+from app.csrf import DEFAULT_EXEMPT_PATHS, CSRFMiddleware
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Role, User, UserStatus
@@ -45,9 +45,16 @@ app.add_middleware(
     same_site="lax",
     https_only=settings.app_env == "prod",
 )
+_csrf_exempt = DEFAULT_EXEMPT_PATHS
+if settings.oauth_stub_mode:
+    # The stub token endpoint receives a server-side POST from Authlib's httpx
+    # client — it never carries a CSRF cookie, so exempt it when the stub is
+    # active.  This path only exists (and is only reachable) in test mode.
+    _csrf_exempt = _csrf_exempt | frozenset({"/auth/_stub/token"})
 app.add_middleware(
     CSRFMiddleware,
     secure=settings.app_env == "prod",
+    exempt_paths=_csrf_exempt,
 )
 
 app.include_router(auth_router)
@@ -68,6 +75,11 @@ app.include_router(stock_takes_module.router)
 app.include_router(reports_module.router)
 app.include_router(scan_module.router)
 app.include_router(audit_routes_module.router)
+
+if settings.oauth_stub_mode:
+    from app import oauth_test_stub as oauth_test_stub_module
+
+    app.include_router(oauth_test_stub_module.stub_router)
 
 
 @app.get("/health")
