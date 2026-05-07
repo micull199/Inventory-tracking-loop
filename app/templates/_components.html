@@ -1,0 +1,158 @@
+{# Shared UC Inventory components — Jinja2 macros that map 1:1 to the
+   tokens + classes in /static/uc.css. Templates import via:
+
+       {% import "_components.html" as c %}
+
+   then use ``c.page_header(...)``, ``c.input(...)`` etc. Each macro is a
+   thin wrapper around the matching ``uc-*`` class so a global style
+   change ripples everywhere without per-template edits.
+
+   Macros never invent new copy — they pass-through what the caller
+   gave them. The brief is explicit: this is a styling pass, not a
+   content rewrite.
+#}
+
+{# ---- page_header ----
+   Title + optional subtitle + optional right-side actions block. Use
+   the ``actions`` caller-block for buttons that belong with the title
+   (e.g. "+ New item" on a list page). #}
+{% macro page_header(title, subtitle="", testid="page-header", heading_testid="") -%}
+<div class="uc-pageheader" data-testid="{{ testid }}">
+    <div class="uc-pageheader-text">
+        <h1{% if heading_testid %} data-testid="{{ heading_testid }}"{% endif %}>{{ title }}</h1>
+        {% if subtitle %}<p class="uc-subtitle">{{ subtitle }}</p>{% endif %}
+    </div>
+    {% if caller %}
+        <div class="uc-pageheader-actions">{{ caller() }}</div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
+{# ---- card / card_header / card_body — generic surface ----
+   Used for grouping form sections, dashboard panels, etc. Caller fills
+   the body. ``flush=true`` removes body padding so a table can butt
+   the card edges. #}
+{% macro card(title="", flush=false, testid="card") %}
+<section class="uc-card" data-testid="{{ testid }}">
+    {% if title %}
+    <header class="uc-card-header">
+        <h2>{{ title }}</h2>
+    </header>
+    {% endif %}
+    <div class="uc-card-body{% if flush %} uc-card-body--flush{% endif %}">
+        {{ caller() }}
+    </div>
+</section>
+{% endmacro %}
+
+{# ---- stat_card — dashboard tile ----
+   Label + big number + optional foot link. ``status`` ∈ "warn" |
+   "danger" | "success" emits a coloured dot in the label. ``empty_text``
+   replaces the foot link with reassuring microcopy when value is "0",
+   per the brief's "All good" guidance.
+#}
+{% macro stat_card(label, value, foot_label="", foot_url="", status="", empty_text="", testid="stat") -%}
+<div class="uc-stat">
+    <span class="uc-stat-label">
+        {% if status %}<span class="uc-dot uc-dot--{{ status }}" aria-hidden="true"></span>{% endif %}
+        {{ label }}
+    </span>
+    <span class="uc-stat-value uc-num" data-testid="{{ testid }}">{{ value }}</span>
+    <span class="uc-stat-foot">
+        {% if value|string == "0" and empty_text %}
+            <span class="uc-stat-empty">{{ empty_text }}</span>
+        {% elif foot_label and foot_url %}
+            <a href="{{ foot_url }}" data-testid="{{ testid }}-link">{{ foot_label }} &rarr;</a>
+        {% endif %}
+    </span>
+</div>
+{%- endmacro %}
+
+{# ---- input ----
+   Label-above-input. ``type`` defaults to text. ``helper`` shows below
+   the input. ``error`` (string) renders the input in error state with
+   the message below. Pass ``inputmode="decimal"`` etc. for mobile-
+   keyboard hints; the caller controls ``autocomplete`` if needed. #}
+{% macro input(name, label, value="", type="text", helper="", required=false, placeholder="", maxlength="", inputmode="", testid="", disabled=false, readonly=false) -%}
+<div class="uc-field">
+    <label class="uc-label" for="{{ name }}">{{ label }}{% if required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+    <input class="uc-input" type="{{ type }}" id="{{ name }}" name="{{ name }}"
+           value="{{ value }}"
+           {% if required %}required{% endif %}
+           {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+           {% if maxlength %}maxlength="{{ maxlength }}"{% endif %}
+           {% if inputmode %}inputmode="{{ inputmode }}"{% endif %}
+           {% if disabled %}disabled{% endif %}
+           {% if readonly %}readonly{% endif %}
+           {% if testid %}data-testid="{{ testid }}"{% endif %}>
+    {% if helper %}<small class="uc-helper">{{ helper }}</small>{% endif %}
+</div>
+{%- endmacro %}
+
+{# ---- select ----
+   Same shape as input(). ``options`` is a list of dicts ``{value, label}``
+   or 2-tuples; ``current`` selects the matching value. ``blank_label``
+   adds a leading "— …" option (use for optional FKs). #}
+{% macro select(name, label, options, current="", blank_label="", helper="", required=false, testid="", disabled=false) -%}
+<div class="uc-field">
+    <label class="uc-label" for="{{ name }}">{{ label }}{% if required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}</label>
+    <select class="uc-select" id="{{ name }}" name="{{ name }}"
+            {% if required %}required{% endif %}
+            {% if disabled %}disabled{% endif %}
+            {% if testid %}data-testid="{{ testid }}"{% endif %}>
+        {% if blank_label %}<option value="">{{ blank_label }}</option>{% endif %}
+        {% for opt in options %}
+            {% set v = opt.value if opt.value is defined else opt[0] %}
+            {% set l = opt.label if opt.label is defined else opt[1] %}
+            <option value="{{ v }}" {% if (current|string) == (v|string) %}selected{% endif %}>{{ l }}</option>
+        {% endfor %}
+    </select>
+    {% if helper %}<small class="uc-helper">{{ helper }}</small>{% endif %}
+</div>
+{%- endmacro %}
+
+{# ---- button ----
+   Variants: primary | secondary | ghost | danger. Use href=… to render
+   as a link styled as a button. type defaults to ``submit`` so a button
+   inside a form submits by default. #}
+{% macro button(label, variant="primary", type="submit", href="", testid="", disabled=false, size="") -%}
+{% set cls = "uc-btn uc-btn--" ~ variant %}{% if size == "sm" %}{% set cls = cls ~ " uc-btn--sm" %}{% endif %}
+{% if href %}
+    <a class="{{ cls }}" href="{{ href }}" {% if testid %}data-testid="{{ testid }}"{% endif %}>{{ label }}</a>
+{% else %}
+    <button class="{{ cls }}" type="{{ type }}" {% if disabled %}disabled{% endif %} {% if testid %}data-testid="{{ testid }}"{% endif %}>{{ label }}</button>
+{% endif %}
+{%- endmacro %}
+
+{# ---- form_actions — primary + secondary on a divider above ----
+   Caller-block; drop button() macros inside. #}
+{% macro form_actions() -%}
+<div class="uc-form-actions">{{ caller() }}</div>
+{%- endmacro %}
+
+{# ---- table_open / table_close ----
+   Unlike the others, the table is too varied to package as one macro.
+   These open + close the wrapping ``uc-table-wrap > uc-table`` and let
+   the caller spell out ``<thead>`` / ``<tbody>`` directly. Sticky
+   header + 48px rows + accent action column come from the CSS. #}
+{% macro table_open(testid="") -%}
+<div class="uc-table-wrap">
+    <table class="uc-table" {% if testid %}data-testid="{{ testid }}"{% endif %}>
+{%- endmacro %}
+{% macro table_close() -%}
+    </table>
+</div>
+{%- endmacro %}
+
+{# ---- empty_state — used inside an empty card / table row ---- #}
+{% macro empty_state(title, body="") -%}
+<div class="uc-empty">
+    <span class="uc-empty-title">{{ title }}</span>
+    {% if body %}{{ body }}{% endif %}
+</div>
+{%- endmacro %}
+
+{# ---- pill — status badge ---- #}
+{% macro pill(label, variant="") -%}
+<span class="uc-pill{% if variant %} uc-pill--{{ variant }}{% endif %}">{{ label }}</span>
+{%- endmacro %}

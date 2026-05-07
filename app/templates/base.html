@@ -4,191 +4,74 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}UC Inventory{% endblock %}</title>
+    {# Pre-load the woff2 weights actually used so first paint doesn't FOUT. #}
+    <link rel="preload" href="/static/fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/Inter-Medium.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/static/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/uc.css">
     <script src="/static/htmx.min.js"></script>
-    <style>
-        :root {
-            --fg: #1a1a1a; --bg: #fafafa; --muted: #666; --border: #d0d0d0;
-            --primary: #1a73e8; --primary-fg: #fff; --focus: #ff8a00;
-            --danger: #b00020;
-        }
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            margin: 0; line-height: 1.5; color: var(--fg); background: var(--bg);
-        }
-        a { color: var(--primary); }
-        a:focus, button:focus, select:focus, input:focus, [tabindex]:focus {
-            outline: 3px solid var(--focus); outline-offset: 2px;
-        }
-        .skip-link {
-            position: absolute; left: -9999px; top: 0;
-            background: var(--fg); color: var(--bg); padding: 0.5rem 1rem;
-            z-index: 100; text-decoration: none;
-        }
-        .skip-link:focus { left: 1rem; top: 1rem; }
-        header.app-header {
-            background: #fff; border-bottom: 1px solid var(--border);
-            padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem;
-        }
-        header.app-header .brand { font-weight: 600; font-size: 1.1rem; }
-        header.app-header .brand a { color: var(--fg); text-decoration: none; }
-        header.app-header .user-info { margin-left: auto; color: var(--muted); }
-        header.app-header .user-info form { display: inline; }
-        header.app-header .user-info button {
-            background: none; border: 1px solid var(--border);
-            padding: 0.35rem 0.75rem; border-radius: 4px; cursor: pointer;
-            font-size: 0.9rem;
-        }
-        nav.primary {
-            background: #fff; border-bottom: 1px solid var(--border);
-            padding: 0.5rem 1rem;
-        }
-        nav.primary ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 0.5rem; }
-        nav.primary a {
-            display: inline-block; padding: 0.5rem 0.85rem; text-decoration: none;
-            color: var(--fg); border-radius: 4px;
-        }
-        nav.primary a:hover { background: #eef3fc; }
-        nav.primary a[aria-current="page"] {
-            background: var(--primary); color: var(--primary-fg); font-weight: 600;
-        }
-        main {
-            max-width: 960px; margin: 1.5rem auto; padding: 0 1rem;
-        }
-        .flash {
-            padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem;
-            background: #fff8e1; border: 1px solid #f1c40f;
-        }
-        a.button, button.button {
-            display: inline-block; padding: 0.5rem 1rem; background: var(--primary);
-            color: var(--primary-fg); text-decoration: none; border-radius: 4px;
-            border: 0; cursor: pointer; font-size: 1rem;
-        }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
-    </style>
 </head>
 <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <header class="app-header" role="banner">
-        <div class="brand"><a href="/">UC Inventory</a></div>
-        {% if current_user %}
-            <div class="user-info">
-                <span data-testid="user-email">{{ current_user.email }}</span>
-                <span data-testid="user-status">{{ current_user.status.value }}</span>
-                {% if current_user.role %}
-                    <span data-testid="user-role">{{ current_user.role.value }}</span>
-                {% endif %}
-                <form method="post" action="/auth/logout">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" data-testid="sign-out">Sign out</button>
-                </form>
-            </div>
-        {% endif %}
+    <header class="uc-topbar" role="banner">
+        <div class="uc-topbar-inner">
+            <div class="uc-brand"><a href="/">UC Inventory</a></div>
+            {% if current_user %}
+                <div class="uc-user">
+                    <span class="uc-email" data-testid="user-email">{{ current_user.email }}</span>
+                    <span class="uc-chip" data-testid="user-status">{{ current_user.status.value }}</span>
+                    {% if current_user.role %}
+                        <span class="uc-chip" data-testid="user-role">{{ current_user.role.value }}</span>
+                    {% endif %}
+                    <form method="post" action="/auth/logout">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="uc-btn uc-btn--ghost uc-btn--sm" data-testid="sign-out">Sign out</button>
+                    </form>
+                </div>
+            {% endif %}
+        </div>
     </header>
 
     {% if current_user and current_user.status.value == "active" %}
-        <nav class="primary" aria-label="Primary" data-testid="primary-nav">
-            <ul>
+        <nav class="uc-nav" aria-label="Primary" data-testid="primary-nav">
+            <ul class="uc-nav-inner">
                 <li><a href="/" {% if request.url.path == "/" %}aria-current="page"{% endif %}>Home</a></li>
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office", "workshop") %}
-                    <li>
-                        <a href="/scan"
-                           data-testid="nav-scan"
-                           {% if request.url.path == "/scan" or request.url.path.startswith("/scan/") %}aria-current="page"{% endif %}>
-                            Scan
-                        </a>
-                    </li>
+                    <li><a href="/scan" data-testid="nav-scan"
+                       {% if request.url.path == "/scan" or request.url.path.startswith("/scan/") %}aria-current="page"{% endif %}>Scan</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
-                    <li>
-                        <a href="/admin/dashboard"
-                           data-testid="nav-dashboard"
-                           {% if request.url.path == "/admin/dashboard" or request.url.path.startswith("/admin/dashboard/") %}aria-current="page"{% endif %}>
-                            Dashboard
-                        </a>
-                    </li>
-                {% endif %}
-                {% if current_user.role and current_user.role.value in ("admin", "manager") %}
-                    <li>
-                        <a href="/admin/suppliers"
-                           data-testid="nav-suppliers"
-                           {% if request.url.path.startswith("/admin/suppliers") %}aria-current="page"{% endif %}>
-                            Suppliers
-                        </a>
-                    </li>
-                    <li>
-                        <a href="/admin/locations"
-                           data-testid="nav-locations"
-                           {% if request.url.path.startswith("/admin/locations") %}aria-current="page"{% endif %}>
-                            Locations
-                        </a>
-                    </li>
-                    <li>
-                        <a href="/admin/taxonomy"
-                           data-testid="nav-taxonomy"
-                           {% if request.url.path.startswith("/admin/taxonomy") %}aria-current="page"{% endif %}>
-                            Taxonomy
-                        </a>
-                    </li>
+                    <li><a href="/admin/dashboard" data-testid="nav-dashboard"
+                       {% if request.url.path == "/admin/dashboard" or request.url.path.startswith("/admin/dashboard/") %}aria-current="page"{% endif %}>Dashboard</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office", "workshop") %}
-                    <li>
-                        <a href="/admin/items"
-                           data-testid="nav-items"
-                           {% if request.url.path.startswith("/admin/items") %}aria-current="page"{% endif %}>
-                            Items
-                        </a>
-                    </li>
+                    <li><a href="/admin/items" data-testid="nav-items"
+                       {% if request.url.path.startswith("/admin/items") %}aria-current="page"{% endif %}>Items</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
-                    <li>
-                        <a href="/admin/reorder"
-                           data-testid="nav-reorder"
-                           {% if request.url.path == "/admin/reorder" or request.url.path.startswith("/admin/reorder/") %}aria-current="page"{% endif %}>
-                            Reorder
-                        </a>
-                    </li>
-                    <li>
-                        <a href="/admin/purchase-orders"
-                           data-testid="nav-pos"
-                           {% if request.url.path.startswith("/admin/purchase-orders") %}aria-current="page"{% endif %}>
-                            POs
-                        </a>
-                    </li>
-                    <li>
-                        <a href="/admin/checkouts"
-                           data-testid="nav-checkouts"
-                           {% if request.url.path == "/admin/checkouts" or request.url.path.startswith("/admin/checkouts/") %}aria-current="page"{% endif %}>
-                            Checkouts
-                        </a>
-                    </li>
-                    <li>
-                        <a href="/admin/stock-takes"
-                           data-testid="nav-stock-takes"
-                           {% if request.url.path == "/admin/stock-takes" or request.url.path.startswith("/admin/stock-takes/") %}aria-current="page"{% endif %}>
-                            Stock takes
-                        </a>
-                    </li>
+                    <li><a href="/admin/reorder" data-testid="nav-reorder"
+                       {% if request.url.path == "/admin/reorder" or request.url.path.startswith("/admin/reorder/") %}aria-current="page"{% endif %}>Reorder</a></li>
+                    <li><a href="/admin/purchase-orders" data-testid="nav-pos"
+                       {% if request.url.path.startswith("/admin/purchase-orders") %}aria-current="page"{% endif %}>POs</a></li>
+                    <li><a href="/admin/checkouts" data-testid="nav-checkouts"
+                       {% if request.url.path == "/admin/checkouts" or request.url.path.startswith("/admin/checkouts/") %}aria-current="page"{% endif %}>Checkouts</a></li>
+                    <li><a href="/admin/stock-takes" data-testid="nav-stock-takes"
+                       {% if request.url.path == "/admin/stock-takes" or request.url.path.startswith("/admin/stock-takes/") %}aria-current="page"{% endif %}>Stock takes</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value in ("admin", "manager") %}
-                    <li>
-                        <a href="/admin/audit"
-                           data-testid="nav-audit"
-                           {% if request.url.path.startswith("/admin/audit") %}aria-current="page"{% endif %}>
-                            Audit
-                        </a>
-                    </li>
+                    <li><a href="/admin/suppliers" data-testid="nav-suppliers"
+                       {% if request.url.path.startswith("/admin/suppliers") %}aria-current="page"{% endif %}>Suppliers</a></li>
+                    <li><a href="/admin/locations" data-testid="nav-locations"
+                       {% if request.url.path.startswith("/admin/locations") %}aria-current="page"{% endif %}>Locations</a></li>
+                    <li><a href="/admin/taxonomy" data-testid="nav-taxonomy"
+                       {% if request.url.path.startswith("/admin/taxonomy") %}aria-current="page"{% endif %}>Taxonomy</a></li>
+                    <li><a href="/admin/audit" data-testid="nav-audit"
+                       {% if request.url.path.startswith("/admin/audit") %}aria-current="page"{% endif %}>Audit</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value == "admin" %}
-                    <li>
-                        <a href="/admin/users"
-                           data-testid="nav-users"
-                           {% if request.url.path.startswith("/admin/users") %}aria-current="page"{% endif %}>
-                            Users
-                        </a>
-                    </li>
+                    <li><a href="/admin/users" data-testid="nav-users"
+                       {% if request.url.path.startswith("/admin/users") %}aria-current="page"{% endif %}>Users</a></li>
                 {% endif %}
             </ul>
         </nav>
@@ -196,7 +79,7 @@
 
     <main id="main" tabindex="-1">
         {% if flash %}
-            <div class="flash" role="status" data-testid="flash">{{ flash }}</div>
+            <div class="uc-flash" role="status" data-testid="flash">{{ flash }}</div>
         {% endif %}
         {% block content %}{% endblock %}
     </main>

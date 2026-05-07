@@ -1,126 +1,137 @@
 {% extends "base.html" %}
+{% import "_components.html" as c %}
 {% block title %}Dashboard — UC Inventory{% endblock %}
 {% block content %}
-    <h1 data-testid="dashboard-heading">Dashboard</h1>
-    <p>
-        A snapshot of inventory value, what's running low, and what's being
-        consumed. Adjust the rolling window or the COGS date range using the
-        forms below.
-    </p>
+    {% call c.page_header(
+        "Dashboard",
+        subtitle="A snapshot of inventory value, what's running low, and what's being consumed.",
+        heading_testid="dashboard-heading"
+    ) %}
+        <a class="uc-btn uc-btn--secondary" href="/admin/reports/variance-trend"
+           data-testid="dashboard-variance-trend-link">Variance trend</a>
+    {% endcall %}
 
-    <section aria-label="At-a-glance">
-        <ul style="list-style:none; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:1rem;">
-            <li style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; min-width:200px;">
-                <div style="color: var(--muted); font-size:0.85rem;">Total inventory value</div>
-                <div style="font-size:1.4rem; font-weight:600;"
-                     data-testid="dashboard-total-value">{{ total_value }}</div>
-            </li>
-            <li style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; min-width:200px;">
-                <div style="color: var(--muted); font-size:0.85rem;">Low-stock items</div>
-                <div style="font-size:1.4rem; font-weight:600;"
-                     data-testid="dashboard-low-stock-count">{{ low_stock_count }}</div>
-                <div style="font-size:0.85rem;">
-                    <a href="/admin/reorder">View reorder dashboard</a>
-                </div>
-            </li>
-            <li style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; min-width:200px;">
-                <div style="color: var(--muted); font-size:0.85rem;">Open POs</div>
-                <div style="font-size:1.4rem; font-weight:600;"
-                     data-testid="dashboard-open-pos-count">{{ open_pos_count }}</div>
-                <div style="font-size:0.85rem;">
-                    <a href="/admin/purchase-orders">View POs</a>
-                </div>
-            </li>
-            <li style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; min-width:200px;">
-                <div style="color: var(--muted); font-size:0.85rem;">Overdue checkouts</div>
-                <div style="font-size:1.4rem; font-weight:600;"
-                     data-testid="dashboard-overdue-checkouts">{{ overdue_checkouts }}</div>
-                <div style="font-size:0.85rem;">
-                    <a href="/admin/checkouts?show=overdue">View checkouts</a>
-                </div>
-            </li>
-        </ul>
-    </section>
+    <div class="uc-stat-grid">
+        {{ c.stat_card(
+            "Total inventory value",
+            total_value,
+            testid="dashboard-total-value"
+        ) }}
+        {{ c.stat_card(
+            "Low-stock items",
+            low_stock_count,
+            foot_label="View reorder dashboard",
+            foot_url="/admin/reorder",
+            status="warn" if (low_stock_count|string) != "0" else "",
+            empty_text="All good — every active item is above its threshold.",
+            testid="dashboard-low-stock-count"
+        ) }}
+        {{ c.stat_card(
+            "Open POs",
+            open_pos_count,
+            foot_label="View POs",
+            foot_url="/admin/purchase-orders",
+            empty_text="No open purchase orders.",
+            testid="dashboard-open-pos-count"
+        ) }}
+        {{ c.stat_card(
+            "Overdue checkouts",
+            overdue_checkouts,
+            foot_label="View checkouts",
+            foot_url="/admin/checkouts?show=overdue",
+            status="danger" if (overdue_checkouts|string) != "0" else "",
+            empty_text="No overdue checkouts.",
+            testid="dashboard-overdue-checkouts"
+        ) }}
+    </div>
 
-    <p style="margin-top:1rem;">
-        <a href="/admin/reports/variance-trend"
-           data-testid="dashboard-variance-trend-link">View stock-take variance trend &rarr;</a>
-    </p>
-
-    <section aria-labelledby="top-consumed-heading" style="margin-top:1.5rem;">
-        <h2 id="top-consumed-heading">Top consumed items</h2>
-        <form method="get" action="/admin/dashboard"
-              data-testid="dashboard-top-days-form"
-              style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
-            <label for="top_days">Window (days):</label>
-            <input type="number" id="top_days" name="top_days"
-                   min="1" max="365"
-                   value="{{ top_days }}"
-                   data-testid="dashboard-top-days-input"
-                   style="width:6rem;">
-            <input type="hidden" name="cogs_start" value="{{ cogs_start }}">
-            <input type="hidden" name="cogs_end" value="{{ cogs_end }}">
-            <button type="submit"
-                    data-testid="dashboard-top-days-submit">Update</button>
-        </form>
-
-        {% if top_consumed %}
-            <table data-testid="dashboard-top-consumed-table">
-                <thead>
-                    <tr>
-                        <th>SKU</th>
-                        <th>Name</th>
-                        <th>Total qty out</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in top_consumed %}
-                        <tr data-testid="dashboard-top-consumed-row"
-                            data-item-id="{{ row.item_id }}">
-                            <td data-testid="dashboard-top-consumed-sku">{{ row.sku }}</td>
-                            <td data-testid="dashboard-top-consumed-name">{{ row.name }}</td>
-                            <td data-testid="dashboard-top-consumed-qty">{{ row.qty }}</td>
-                            <td>
-                                <a href="/admin/items/{{ row.item_id }}/detail"
-                                   data-testid="dashboard-top-consumed-detail-link">Details</a>
-                            </td>
+    {# ---- Top consumed ---- #}
+    <section class="uc-card uc-mb-6" aria-labelledby="top-consumed-heading">
+        <header class="uc-card-header">
+            <h2 id="top-consumed-heading">Top consumed items</h2>
+            <div class="uc-card-actions">
+                <form method="get" action="/admin/dashboard"
+                      data-testid="dashboard-top-days-form"
+                      class="uc-row-2">
+                    <label for="top_days" class="uc-label" style="margin:0;">Window (days)</label>
+                    <input class="uc-input uc-num" type="number" id="top_days" name="top_days"
+                           min="1" max="365"
+                           value="{{ top_days }}"
+                           data-testid="dashboard-top-days-input"
+                           style="width:96px; height:32px;">
+                    <input type="hidden" name="cogs_start" value="{{ cogs_start }}">
+                    <input type="hidden" name="cogs_end" value="{{ cogs_end }}">
+                    <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                            data-testid="dashboard-top-days-submit">Update</button>
+                </form>
+            </div>
+        </header>
+        <div class="uc-card-body uc-card-body--flush">
+            {% if top_consumed %}
+                <table class="uc-table" data-testid="dashboard-top-consumed-table">
+                    <thead>
+                        <tr>
+                            <th>SKU</th>
+                            <th>Name</th>
+                            <th class="uc-right">Total qty out</th>
+                            <th class="uc-right">Actions</th>
                         </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        {% else %}
-            <p data-testid="dashboard-top-consumed-empty">
-                No stock-out movements in the last {{ top_days }} day{{ "s" if top_days != 1 else "" }}.
-            </p>
-        {% endif %}
+                    </thead>
+                    <tbody>
+                        {% for row in top_consumed %}
+                            <tr data-testid="dashboard-top-consumed-row" data-item-id="{{ row.item_id }}">
+                                <td class="uc-num uc-strong" data-testid="dashboard-top-consumed-sku">{{ row.sku }}</td>
+                                <td data-testid="dashboard-top-consumed-name">{{ row.name }}</td>
+                                <td class="uc-num uc-right" data-testid="dashboard-top-consumed-qty">{{ row.qty }}</td>
+                                <td class="uc-actions">
+                                    <a href="/admin/items/{{ row.item_id }}/detail"
+                                       data-testid="dashboard-top-consumed-detail-link">Details</a>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                {{ c.empty_state(
+                    "No movements yet",
+                    "No stock-out movements in the last " ~ top_days ~ " day" ~ ("s" if top_days != 1 else "") ~ "."
+                ) }}
+                <span data-testid="dashboard-top-consumed-empty" hidden></span>
+            {% endif %}
+        </div>
     </section>
 
-    <section aria-labelledby="cogs-heading" style="margin-top:1.5rem;">
-        <h2 id="cogs-heading">Cost of goods consumed</h2>
-        <p>
-            Sum of stock-out and negative-adjustment costs over a date range
-            (inclusive of both end dates).
-        </p>
-        <form method="get" action="/admin/dashboard"
-              data-testid="dashboard-cogs-form"
-              style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem;">
-            <label for="cogs_start">From:</label>
-            <input type="date" id="cogs_start" name="cogs_start"
-                   value="{{ cogs_start }}"
-                   data-testid="dashboard-cogs-start-input">
-            <label for="cogs_end">To:</label>
-            <input type="date" id="cogs_end" name="cogs_end"
-                   value="{{ cogs_end }}"
-                   data-testid="dashboard-cogs-end-input">
-            <input type="hidden" name="top_days" value="{{ top_days }}">
-            <button type="submit"
-                    data-testid="dashboard-cogs-submit">Update</button>
-        </form>
-        <div style="border:1px solid var(--border); border-radius:6px; padding:0.75rem 1rem; max-width:300px;">
-            <div style="color: var(--muted); font-size:0.85rem;">COGS ({{ cogs_start }} → {{ cogs_end }})</div>
-            <div style="font-size:1.4rem; font-weight:600;"
-                 data-testid="dashboard-cogs-amount">{{ cogs_amount }}</div>
+    {# ---- COGS ---- #}
+    <section class="uc-card" aria-labelledby="cogs-heading">
+        <header class="uc-card-header">
+            <h2 id="cogs-heading">Cost of goods consumed</h2>
+            <div class="uc-card-actions">
+                <form method="get" action="/admin/dashboard"
+                      data-testid="dashboard-cogs-form"
+                      class="uc-row-2">
+                    <label for="cogs_start" class="uc-label" style="margin:0;">From</label>
+                    <input class="uc-input" type="date" id="cogs_start" name="cogs_start"
+                           value="{{ cogs_start }}"
+                           data-testid="dashboard-cogs-start-input"
+                           style="height:32px;">
+                    <label for="cogs_end" class="uc-label" style="margin:0;">To</label>
+                    <input class="uc-input" type="date" id="cogs_end" name="cogs_end"
+                           value="{{ cogs_end }}"
+                           data-testid="dashboard-cogs-end-input"
+                           style="height:32px;">
+                    <input type="hidden" name="top_days" value="{{ top_days }}">
+                    <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm"
+                            data-testid="dashboard-cogs-submit">Update</button>
+                </form>
+            </div>
+        </header>
+        <div class="uc-card-body">
+            <p class="uc-muted" style="font-size:13px;">
+                Sum of stock-out and negative-adjustment costs over a date range
+                (inclusive of both end dates).
+            </p>
+            <div class="uc-stat-label">COGS ({{ cogs_start }} → {{ cogs_end }})</div>
+            <div class="uc-stat-value uc-num" data-testid="dashboard-cogs-amount">{{ cogs_amount }}</div>
         </div>
     </section>
 {% endblock %}

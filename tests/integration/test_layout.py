@@ -546,10 +546,18 @@ class TestRoleAwareNav:
         # Visiting the PO list page should set aria-current on nav-pos but
         # NOT on nav-reorder.
         resp = client.get("/admin/purchase-orders")
-        nav_reorder_snippet = resp.text[
-            resp.text.find('data-testid="nav-reorder"') :
-        ][:300]
-        assert 'aria-current="page"' not in nav_reorder_snippet
+        # Slice within the nav-reorder anchor element only (back to its
+        # opening ``<a`` and forward to its first ``</a>``) rather than
+        # a fixed-byte window — denser nav markup would otherwise sweep
+        # in the neighbour link's attributes and false-positive.
+        marker = resp.text.find('data-testid="nav-reorder"')
+        assert marker != -1
+        link_start = resp.text.rfind("<a", 0, marker)
+        link_end = resp.text.find("</a>", marker)
+        assert link_start != -1
+        assert link_end != -1
+        nav_reorder_anchor = resp.text[link_start:link_end]
+        assert 'aria-current="page"' not in nav_reorder_anchor
 
 
 class TestFlashRegion:
