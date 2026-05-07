@@ -286,7 +286,23 @@ A purchase order (PO) tells a supplier what UC wants to buy. POs move through fi
 
 ### Receiving stock against a PO
 
-_TODO_
+Receiving is the **FIFO-cost-layer-creating** leg of the PO lifecycle. Each line you receive becomes one **in** stock movement on the item plus a new cost layer (`source = po_receipt`) at the **actual unit cost** you enter at the moment of receipt — and that actual cost is what stock valuation is calculated against per MISSION §3 (the **expected unit cost** on the PO line is the price emailed to the supplier; it is **not** authoritative for valuation). Receiving is owned by **Office** staff (Manager and Admin also pass; Workshop cannot manage POs at all). Each receipt writes one `purchase_order.received` audit row that records the before / after status plus a per-line list of `(line_id, received_qty, actual_unit_cost, movement_id)` so the audit view at `/admin/audit` can trace any new cost layer back to the PO line that produced it.
+
+**Only `sent` and `partially_received` POs can be received against.** A draft PO must be sent first (or cancelled if no longer wanted); a fully `received` PO is closed; a `cancelled` PO cannot be received against. The detail page hides the **Receive against this PO** link unless the PO is in a receivable status — if the link is missing, check the status badge at the top of the detail page.
+
+1. Sign in as an Office user (Manager or Admin also work).
+2. Open the PO detail page from **Purchase orders** in the nav (or visit `/admin/purchase-orders/{id}`).
+3. Click **Receive against this PO** (or visit `/admin/purchase-orders/{id}/receive` directly). The receive form lists every line with its **SKU**, **Qty ordered**, **Already received** (cumulative across prior partial receipts), **Outstanding** (`qty_ordered − qty_received`), plus two per-line inputs:
+    - **Receiving now** — the qty you took in *this* delivery. Leave blank or `0` for lines that didn't arrive yet (perfectly valid for a partial receipt).
+    - **Actual unit cost** — the price you actually paid for *this* delivery. Defaults to the line's expected unit cost; override if the supplier invoice differs. Required when **Receiving now** is non-zero, and is what creates the FIFO cost layer.
+4. Click **Record receipt**. For each line with `Receiving now > 0`, the app records an **in** stock movement on the item, creates a new FIFO cost layer at the actual unit cost (subsequent stock-outs consume layers oldest-first), and increments the line's cumulative received qty. The new movement and layer appear on the item detail page's history.
+5. The PO's status flips automatically based on the *cumulative* received state across every line:
+    - **received** — every line has `qty_received >= qty_ordered`.
+    - **partially_received** — at least one line still has outstanding qty. The receive form stays available so you can record the rest later.
+
+**Over-receipt is rejected.** If you accidentally receive more than was ordered on a line (cumulative `qty_received + Receiving now > qty_ordered`), the form returns a 400 naming the line and the offending qty — no movement, layer, or audit row is written. If a supplier genuinely sent more than ordered, record the overage as a manual stock-in on the item (which also creates a FIFO cost layer) rather than over-receiving against the PO.
+
+**An all-zero submit is a no-op.** Submitting the form with every line blank or `0` writes no movement, no cost layer, no audit row, and the PO status doesn't change — the page flashes _"PO #{id} — no receipts entered."_ and redirects back to the detail page.
 
 ### Reading the audit trail for an item
 

@@ -333,3 +333,87 @@ class TestGeneratingPurchaseOrderSection:
         # either modality from the docs fails the suite.
         assert "PDF" in body
         assert "email" in body.lower()
+
+
+class TestReceivingStockAgainstPOSection:
+    """DOC7 — pin the PO receive walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Receiving stock against a PO")
+        assert "_TODO_" not in body, (
+            "PO receive section still has _TODO placeholder"
+        )
+        assert len(body.strip()) > 400, (
+            "PO receive section looks unsubstantial"
+        )
+
+    def test_section_references_admin_purchase_orders_route(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # ``/admin/purchase-orders`` is the prefix mounted by
+        # ``app/purchase_orders.py``'s ``list_router``. The receive
+        # form lives at ``/admin/purchase-orders/{id}/receive``.
+        # A future rename of the prefix fails this test and forces
+        # a docs update on the same PR.
+        assert "/admin/purchase-orders" in body
+
+    def test_section_references_receive_path(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # The /receive sub-path is the form route mounted at
+        # ``app/purchase_orders.py:1110`` (GET) + ``:1137`` (POST).
+        # Pinned independently of the prefix so a future rename of
+        # ``/receive`` to ``/record-receipt`` fires a granular failure.
+        assert "/receive" in body
+
+    def test_section_names_office_role(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # MISSION §3.103 + DoD #6 assigns POs (including receive)
+        # to Office. The role gate at ``app/purchase_orders.py:1114``
+        # is ``require_role(Role.MANAGER, Role.OFFICE)``; Admin
+        # passes via ``app/auth.py``'s blanket admin override.
+        # The section must name Office so a future Office reader
+        # knows the page is for them.
+        assert "Office" in body
+
+    def test_section_names_receivable_statuses(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # ``_RECEIVABLE_STATUSES`` at ``app/purchase_orders.py:1059``
+        # is exactly ``(SENT, PARTIALLY_RECEIVED)``. The section must
+        # name both so a future PR that drops one (or expands the
+        # gate to include DRAFT) fails the suite.
+        assert "sent" in body.lower()
+        assert "partially_received" in body
+
+    def test_section_names_fifo_cost_layer_creation(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # MISSION §3 (Cost tracking): "Receiving creates a new FIFO
+        # cost layer at that actual unit cost." The section must
+        # name FIFO + cost layer so a future reader understands why
+        # the actual unit cost is load-bearing for stock valuation.
+        # ``FIFO`` is the canonical acronym across MISSION + cost-
+        # engine source; case-sensitive pin.
+        assert "FIFO" in body
+        assert "cost layer" in body.lower()
+
+    def test_section_names_actual_vs_expected_cost(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # MISSION §3 (Reorder and POs / Cost tracking): expected
+        # unit cost on the PO line is what gets emailed; actual
+        # unit cost is entered at receipt time and is what creates
+        # the FIFO cost layer. The section must name both halves
+        # so a user understands why the PO line cost isn't
+        # authoritative for stock valuation. Mirrors DOC6's
+        # same-named test on the send side.
+        lower = body.lower()
+        assert "expected unit cost" in lower
+        assert "actual unit cost" in lower
+
+    def test_section_names_partial_vs_full_status_flip(self) -> None:
+        body = _section("Receiving stock against a PO")
+        # ``app/purchase_orders.py:1257-1258`` flips the status to
+        # RECEIVED iff every line has ``qty_received >= qty_ordered``,
+        # else PARTIALLY_RECEIVED. The section must name both
+        # branches so a user understands why a receipt sometimes
+        # closes the PO and sometimes leaves the receive form
+        # available.
+        assert "received" in body.lower()
+        assert "partially_received" in body
