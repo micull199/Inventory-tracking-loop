@@ -613,6 +613,33 @@ class TestQuickLinksAndTechStackTodoResolution:
             "./CHANGELOG.md from Quick links but the file does not exist"
         )
 
+    def test_quick_links_deployed_url_resolved(self) -> None:
+        # P4 closed the ``_TODO: deployed URL_`` placeholder by replacing
+        # it with a note pointing to the Fly.io hostname.  Two-pin shape:
+        # placeholder gone + a Fly.io reference present.
+        body = _h2_section("Quick links")
+        assert "_TODO: deployed URL" not in body, (
+            "Quick links still carries the deployed-URL _TODO placeholder; "
+            "fill it in per the P4 slice instructions"
+        )
+        assert "fly" in body.lower(), (
+            "Quick links deployed-URL line does not reference Fly.io; "
+            "expected a fly.dev hostname or 'fly launch' reference"
+        )
+
+    def test_tech_stack_deploy_target_resolved(self) -> None:
+        # P4 replaced ``_TODO (Fly.io or Render)_`` with the chosen
+        # deploy target. Two-pin: placeholder gone + Fly.io named.
+        body = _h2_section("Tech stack")
+        assert "_TODO (Fly.io or Render)" not in body, (
+            "Tech stack still carries the deploy-target _TODO placeholder; "
+            "fill it in per the P4 slice instructions"
+        )
+        assert "Fly.io" in body, (
+            "Tech stack does not name Fly.io as the chosen deploy target; "
+            "either update README or revise this test if the target changed"
+        )
+
 
 class TestContributingAndLicenseFooter:
     """DOC10 — pin the Contributing + License footer ``_TODO`` resolutions.
@@ -715,3 +742,83 @@ class TestContributingAndLicenseFooter:
                 f"MISSION + PROGRESS Proposed scope changes, or remove "
                 f"the {forbidden!r} reference"
             )
+
+
+class TestDeploySection:
+    """P4 + DOC9 — pin the ``## Deployment`` section against drift.
+
+    The section was a ``_TODO`` placeholder until the P4 slice landed
+    ``Dockerfile`` + ``fly.toml`` and filled in the walk-through.  These
+    tests guard the content against regressions (e.g. a future PR blanking
+    the section) and against drift from the actual infra files (e.g. the
+    release command changes in ``fly.toml`` but the README is not updated).
+    """
+
+    def test_section_is_filled(self) -> None:
+        body = _h2_section("Deployment")
+        assert "_TODO" not in body, "Deployment section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "Deployment section looks unsubstantial"
+
+    def test_section_names_fly_io(self) -> None:
+        body = _h2_section("Deployment")
+        assert "Fly.io" in body
+
+    def test_section_references_fly_toml(self) -> None:
+        body = _h2_section("Deployment")
+        assert "fly.toml" in body
+
+    def test_section_references_secret_key(self) -> None:
+        body = _h2_section("Deployment")
+        assert "SECRET_KEY" in body
+
+    def test_section_references_google_client_id(self) -> None:
+        body = _h2_section("Deployment")
+        assert "GOOGLE_CLIENT_ID" in body
+
+    def test_section_names_postgres(self) -> None:
+        body = _h2_section("Deployment")
+        assert "Postgres" in body
+
+    def test_section_names_alembic_migration_command(self) -> None:
+        body = _h2_section("Deployment")
+        assert "alembic upgrade head" in body
+
+    def test_section_names_bootstrap_admin_email(self) -> None:
+        body = _h2_section("Deployment")
+        assert "BOOTSTRAP_ADMIN_EMAIL" in body
+
+
+class TestDeployInfrastructure:
+    """P4 — pin the existence and basic shape of deploy artefacts.
+
+    These tests guard against accidental deletion of ``Dockerfile`` /
+    ``fly.toml`` and against the release command drifting out of sync
+    between ``fly.toml`` and the README's documented step.
+    """
+
+    def test_dockerfile_exists_at_repo_root(self) -> None:
+        dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
+        assert dockerfile.exists(), (
+            "Dockerfile missing at repo root — required for Fly.io deploy"
+        )
+
+    def test_dockerfile_names_uvicorn(self) -> None:
+        dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
+        text = dockerfile.read_text(encoding="utf-8")
+        assert "uvicorn" in text, (
+            "Dockerfile does not reference uvicorn; expected CMD to start uvicorn"
+        )
+
+    def test_fly_toml_exists_at_repo_root(self) -> None:
+        fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"
+        assert fly_toml.exists(), (
+            "fly.toml missing at repo root — required for Fly.io deploy"
+        )
+
+    def test_fly_toml_names_release_command(self) -> None:
+        fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"
+        text = fly_toml.read_text(encoding="utf-8")
+        assert "alembic upgrade head" in text, (
+            "fly.toml does not set release_command to 'alembic upgrade head'; "
+            "migrations would not run automatically on deploy"
+        )

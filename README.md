@@ -11,7 +11,7 @@ Inventory tracking for UC's workshop and office. Tracks raw materials, consumabl
 - [Mission and scope](./MISSION.md) — single source of truth for what this app does and does not do.
 - [Build progress](./PROGRESS.md) — what's been built, what's next, what's stuck.
 - [Changelog](./CHANGELOG.md) — high-level "what shipped" log, one line per slice.
-- _TODO: deployed URL_
+- **Live app:** `https://uc-inventory.fly.dev` — update after `fly launch` assigns your hostname.
 
 ---
 
@@ -44,7 +44,7 @@ Not a job/order management system. Not an accounting integration. Not customer-f
 - **Background jobs:** APScheduler in-process
 - **Tests:** pytest + httpx, Playwright (Python) for end-to-end
 - **Lint/type:** ruff, mypy (strict on `app/`)
-- **Deploy target:** _TODO (Fly.io or Render)_
+- **Deploy target:** Fly.io (see `fly.toml` + `Dockerfile`; `alembic upgrade head` runs as a release command on every deploy).
 
 The stack is fixed by MISSION.md §5. Don't swap it without going through that document first.
 
@@ -387,7 +387,99 @@ The build loop's exit condition is "all twelve DoD items ticked AND `make check`
 
 ## Deployment
 
-_TODO: filled in during slice P4. Will cover Fly.io or Render config, secrets management, Postgres connection, running migrations on deploy, and how to assign the first Admin user in production._
+UC Inventory deploys to **Fly.io** with a managed Postgres database. The `Dockerfile` and `fly.toml` in the repo root cover the full configuration. Every `fly deploy` runs `alembic upgrade head` as a release command before the new version takes traffic — migrations are automatic.
+
+### Prerequisites
+
+- [Fly CLI](https://fly.io/docs/getting-started/installing-flyctl/) installed and authenticated:
+  ```sh
+  fly auth login
+  ```
+- A Fly.io account (the free tier is sufficient to start).
+
+### First deploy
+
+1. **Create the app and Postgres database:**
+
+   ```sh
+   fly launch --copy-config --name uc-inventory
+   fly postgres create --name uc-inventory-db
+   fly postgres attach --app uc-inventory uc-inventory-db
+   ```
+
+   `fly postgres attach` injects `DATABASE_URL` into the app's environment automatically.
+
+2. **Set required secrets:**
+
+   ```sh
+   fly secrets set \
+     APP_ENV=prod \
+     APP_BASE_URL=https://uc-inventory.fly.dev \
+     SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))") \
+     GOOGLE_CLIENT_ID=<your-client-id> \
+     GOOGLE_CLIENT_SECRET=<your-client-secret>
+   ```
+
+   Generate `SECRET_KEY` locally and paste the output — never commit it to the repo.
+
+3. **Configure Google SSO:**
+
+   In [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials → your OAuth 2.0 Client ID, add the following to **Authorised redirect URIs**:
+
+   ```
+   https://uc-inventory.fly.dev/auth/google/callback
+   ```
+
+   Replace the hostname if you chose a different app name during `fly launch`.
+
+4. **(Optional) Seed the first Admin:**
+
+   Set `BOOTSTRAP_ADMIN_EMAIL` to the Google Workspace email of your first Admin user before the first sign-in:
+
+   ```sh
+   fly secrets set BOOTSTRAP_ADMIN_EMAIL=owner@example.com
+   ```
+
+   The first sign-in from that address is auto-promoted to Admin. Remove the secret after the Admin account is established:
+
+   ```sh
+   fly secrets unset BOOTSTRAP_ADMIN_EMAIL
+   ```
+
+5. **Deploy:**
+
+   ```sh
+   fly deploy
+   ```
+
+   Or `make deploy` if you prefer Makefile targets. Fly.io runs `alembic upgrade head` before the new machine starts serving — no manual migration step needed.
+
+6. **Open the app:** navigate to `https://uc-inventory.fly.dev` (or the hostname assigned during `fly launch`), sign in with Google, and the Admin account is ready.
+
+### Email (optional)
+
+The default `EMAIL_BACKEND=console` prints outbound emails to the application logs (visible via `fly logs`). To enable real SMTP for PO delivery:
+
+```sh
+fly secrets set \
+  EMAIL_BACKEND=smtp \
+  SMTP_HOST=smtp.example.com \
+  SMTP_PORT=587 \
+  SMTP_USER=<user> \
+  SMTP_PASSWORD=<password> \
+  SMTP_FROM=inventory@example.com
+```
+
+### Ongoing deploys
+
+```sh
+fly deploy        # deploy the latest build
+fly logs          # stream live logs
+make deploy       # same as fly deploy
+make deploy-logs  # same as fly logs
+```
+
+All environment configuration lives in `fly.toml` (non-secret values) and Fly secrets (sensitive values). Never put secrets in `fly.toml` or commit them to the repo.
 
 ---
 

@@ -5,7 +5,7 @@
 # loop.sh and MISSION.md to match.
 
 .PHONY: help install dev test e2e e2e-install lint typecheck format \
-        migrate migration seed clean check ci
+        migrate migration seed clean check ci deploy deploy-logs
 
 # Default target: show available commands.
 help:
@@ -24,6 +24,8 @@ help:
 	@echo "  make seed           load dev fixtures"
 	@echo "  make check          lint + typecheck + test + e2e (loop runner uses this)"
 	@echo "  make ci             same as check, no extra output (CI-friendly)"
+	@echo "  make deploy         fly deploy (requires Fly CLI + fly auth login)"
+	@echo "  make deploy-logs    stream live logs from Fly.io"
 	@echo "  make clean          remove caches and build artifacts"
 
 install:
@@ -76,3 +78,9 @@ check: lint typecheck test e2e
 
 # `ci` is identical but quieter — for use in GitHub Actions etc. once that exists.
 ci: lint typecheck test e2e
+
+deploy:
+	fly deploy
+
+deploy-logs:
+	fly logs
