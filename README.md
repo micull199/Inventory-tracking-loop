@@ -412,8 +412,19 @@ Human-in-the-loop touch points:
 
 ## Contributing
 
-_TODO_
+This project is built by Claude Code running an autonomous build loop (see `## How this gets built` above + `MISSION.md` §8). The loop is the primary author; a human reviewer ticks Definition-of-Done items in `PROGRESS.md` and edits `MISSION.md` when scope genuinely needs to change. **External pull requests are not the workflow** — this is an internal UC build, not an open-source project.
+
+If you have feedback or have spotted a bug, open an issue (the same instruction line 5 carries for stray `_TODO`s). Useful detail to include: which DoD item it relates to (per `MISSION.md` §7), what you saw, what you expected.
+
+If you want to understand how the codebase evolves, the canonical sources are:
+
+- `MISSION.md` — single source of truth for what the app does and does not do; lists the Definition of Done.
+- `PROGRESS.md` — running log of plans, completed slices, self-critiques, and proposed scope changes. Read the "Current state" section first.
+- `CHANGELOG.md` — high-level "what shipped" log, one line per slice.
+- `loop.sh` — the loop runner shell script.
+
+Scope changes go through "Proposed scope changes" in `PROGRESS.md` first; the loop never silently expands or shrinks scope.
 
 ## License
 
-_TODO_
+Proprietary — internal UC tool. The licence declaration in `pyproject.toml` (`license = { text = "Proprietary" }`) is the canonical record. The source is hosted only for UC and its build loop; no rights to use, copy, modify, or distribute are granted to outside parties. For licensing enquiries contact UC directly.

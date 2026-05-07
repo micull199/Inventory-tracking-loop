@@ -612,3 +612,106 @@ class TestQuickLinksAndTechStackTodoResolution:
             "CHANGELOG.md missing at repo root — README links to "
             "./CHANGELOG.md from Quick links but the file does not exist"
         )
+
+
+class TestContributingAndLicenseFooter:
+    """DOC10 — pin the Contributing + License footer ``_TODO`` resolutions.
+
+    Two ``_TODO`` placeholders were closed by DOC10:
+
+    1. **Contributing**: explains the loop-driven posture, points at
+       ``MISSION.md`` + ``PROGRESS.md`` + ``CHANGELOG.md``, and calls out
+       that external pull requests are not the workflow (this is an
+       internal UC build, not open-source).
+    2. **License**: matches ``pyproject.toml``'s canonical declaration
+       ``license = { text = "Proprietary" }`` — no rights granted to
+       outside parties.
+
+    Three ``_TODO`` blocks remain *intentionally* unresolved (deferred to
+    P4): the deployed-URL link in Quick links + the deploy target line
+    in Tech stack + the ``## Deployment`` section. DOC10 does not pin
+    those so a future P4 can flip them without touching this class.
+    """
+
+    def test_contributing_section_is_filled(self) -> None:
+        body = _h2_section("Contributing")
+        assert "_TODO_" not in body, (
+            "Contributing section still has _TODO placeholder"
+        )
+        # Substantial section: covers the loop posture, the canonical
+        # source files, the no-external-PRs invariant, and where to
+        # file feedback. ~150-200 words is comfortably above 200 chars.
+        assert len(body.strip()) > 200, (
+            "Contributing section looks unsubstantial"
+        )
+
+    def test_contributing_section_references_mission_and_progress(self) -> None:
+        # Section's whole purpose is to point a curious reader at the
+        # loop's two source-of-truth files. A future PR that drops
+        # either reference fails this test on first run.
+        body = _h2_section("Contributing")
+        assert "MISSION.md" in body
+        assert "PROGRESS.md" in body
+
+    def test_contributing_section_names_loop_driven_posture(self) -> None:
+        # Pins the project's "this is a Claude Code autonomous build
+        # loop" identity. A future PR that softens the prose to "this
+        # is a normal repo" would fail this test. Case-insensitive on
+        # ``loop`` so prose like "the build loop" or "Loop" both pass.
+        body = _h2_section("Contributing")
+        assert "loop" in body.lower()
+
+    def test_contributing_section_says_external_prs_are_not_workflow(self) -> None:
+        # Forces the section to call out the no-external-PRs
+        # convention. One-of-two disjunction (``pull request`` OR
+        # ``external``) tolerates both natural phrasings:
+        # "external pull requests are not the workflow" or
+        # "this is an internal build, not external contribution".
+        body = _h2_section("Contributing").lower()
+        assert "pull request" in body or "external" in body
+
+    def test_license_section_is_filled(self) -> None:
+        body = _h2_section("License")
+        assert "_TODO_" not in body, (
+            "License section still has _TODO placeholder"
+        )
+        # ~50-100 words is comfortably above 50 chars.
+        assert len(body.strip()) > 50, (
+            "License section looks unsubstantial"
+        )
+
+    def test_license_section_names_proprietary(self) -> None:
+        # Case-sensitive on the canonical capitalisation that matches
+        # ``pyproject.toml``'s declaration. A future PR that demotes
+        # ``Proprietary`` to ``proprietary`` would mismatch the source.
+        body = _h2_section("License")
+        assert "Proprietary" in body
+
+    def test_license_matches_pyproject(self) -> None:
+        # Forces a docs update on a future swap of ``pyproject.toml``'s
+        # licence field. Same docs ↔ source consistency-pinning posture
+        # as ``test_pdf_choice_matches_pyproject``. Pinned to the exact
+        # canonical declaration string so a swap in either direction
+        # (README→pyproject or pyproject→README) gets caught.
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        text = pyproject.read_text(encoding="utf-8")
+        assert 'license = { text = "Proprietary" }' in text, (
+            "pyproject.toml no longer declares Proprietary licence; "
+            "either restore the declaration or update README License"
+        )
+
+    def test_no_silent_open_source_license_in_readme(self) -> None:
+        # 4-way absence pin against the most common open-source licence
+        # names. A future PR that swaps the licence to MIT/Apache/GPL/BSD
+        # without first updating ``pyproject.toml`` and PROGRESS.md
+        # "Proposed scope changes" + ``MISSION.md`` would fail this
+        # test. License flips are load-bearing legal scope changes;
+        # this test forces them through the proper change process.
+        body = _h2_section("License")
+        for forbidden in ("MIT", "Apache", "GPL", "BSD"):
+            assert forbidden not in body, (
+                f"License section names {forbidden!r} but pyproject.toml "
+                f"still declares Proprietary; either update pyproject + "
+                f"MISSION + PROGRESS Proposed scope changes, or remove "
+                f"the {forbidden!r} reference"
+            )
