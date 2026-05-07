@@ -148,3 +148,61 @@ class TestCreatingAnItemSection:
         body = _section("Creating an item")
         assert "Archive" in body
         assert "Unarchive" in body
+
+
+class TestPrintingQrAndScanningSection:
+    """DOC4 — pin the scan-mode walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        assert "_TODO_" not in body, "scan section still has _TODO placeholder"
+        assert len(body.strip()) > 300, "scan section looks unsubstantial"
+
+    def test_section_references_scan_route(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # The /scan landing page is the user-visible entry point. A future
+        # rename of the prefix (currently fixed by ``router = APIRouter(
+        # prefix="/scan", ...)`` in ``app/scan.py``) fails this test and
+        # forces a docs update on the same PR.
+        assert "/scan" in body
+
+    def test_section_references_scan_item_action_picker_route(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # ``/scan/item/{id}`` is the action picker reached via the 303
+        # redirect from ``POST /scan/resolve``. Documenting it explicitly
+        # gives readers a URL to bookmark when debugging.
+        assert "/scan/item/{id}" in body
+
+    def test_section_names_workshop_role(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # Scanning is a Workshop-primary surface (Manager + Office + Admin
+        # also pass via ``require_role``). The section must name Workshop
+        # so a future Workshop reader knows the page is for them.
+        assert "Workshop" in body
+
+    def test_section_names_qr_vs_sku_resolution_precedence(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # The ``_resolve_code`` helper in ``app/scan.py`` looks up
+        # ``qr_code`` first, then ``sku``. The README must explain this
+        # so users diagnosing a wrong-item resolution understand the
+        # order. ``QR`` and ``SKU`` (case-sensitive) cover both halves.
+        assert "QR" in body
+        assert "SKU" in body
+        assert "qr_code" in body or "QR code" in body
+
+    def test_section_names_camera_and_usb_scanner_postures(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # MISSION §3 calls out both modalities: "Works on a desktop with
+        # a USB scanner and on a phone/tablet camera." A future PR that
+        # drops one of them from the docs fails this test.
+        assert "USB" in body
+        assert "camera" in body.lower()
+
+    def test_section_explains_archived_item_resolves(self) -> None:
+        body = _section("Printing a QR label and scanning it")
+        # SC1a's archive-still-resolves posture is observable in
+        # ``scan.html``: an archived item's scan page renders the badge
+        # + a note directing the user to the items list. The README must
+        # name the behaviour so a workshop user scanning an old physical
+        # label isn't surprised when the action forms are missing.
+        assert "archived" in body.lower()

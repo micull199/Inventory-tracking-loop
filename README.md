@@ -213,7 +213,23 @@ To edit an item, click **Edit** on its row. To stop using an item without losing
 
 ### Printing a QR label and scanning it
 
-_TODO_
+Scanning is the high-velocity workshop path — a Workshop user holds a labelled item, scans its code, and records a movement in two interactions (one scan + one tap). It works on a desktop with a USB barcode scanner (which emulates a keyboard) and on a phone or tablet via the back-facing camera. Manager and Office can scan as well; only the *recording* surface differs by role (e.g. Office cannot check items out).
+
+**Labelling an item.** Each item carries an optional **QR code** string set on the item form (see _Creating an item_ above). Type any unique string — typically the SKU or a short slug — and print a matching label by hand for v1. (A built-in printable-label view lands in a future slice; until then the QR-code field is the source of truth for what the scanner will see.) Items without a QR code are still scannable by SKU.
+
+**Scanning the code.**
+
+1. Sign in as a Workshop user (Manager / Office / Admin can also scan).
+2. Click **Scan** in the top nav (or visit `/scan`). The page loads with the **Code** input autofocused.
+3. **USB scanner (desktop):** point the scanner at the label. The scanner sends the decoded characters as keystrokes followed by Enter; the form auto-submits.
+4. **Camera (phone / tablet):** click **Use camera** to start the back camera (`facingMode: "environment"`). On a successful decode, the value is written into the input and the form submits automatically. Permission denied or no-camera errors fall back to the keyboard input with a plain-English status message.
+5. **Keyboard fallback:** any user can type a code into the input directly and click **Find item** if a label is missing or unreadable.
+
+**How a code resolves.** The `/scan/resolve` route looks up the typed value as a **QR code first, then SKU**. If two items happen to share a string across columns, the QR-coded item wins (that's what the scanner physically points at). Unknown codes redirect back to `/scan` with a flash message.
+
+**The action picker on `/scan/item/{id}`.** A successful resolve 303-redirects to `/scan/item/{id}`, which keeps the scan input focused (so the next item drives a fresh resolve without re-navigating) and adds an action picker for the resolved item: **Stock out** (qty), **Stock in** (qty + unit cost — creates a new FIFO cost layer), **Adjust** (direction, qty, optional unit cost for increases, required reason). For items flagged `requires_checkout`, a **Check out →** link also appears.
+
+**Archived items still resolve.** Scanning the QR code or SKU of an archived item resolves to its scan page — but the action forms are hidden and a note directs the user to the items list to record movements. This keeps physical labels working without re-opening the archive on the audit trail.
 
 ### Running a stock take
 
