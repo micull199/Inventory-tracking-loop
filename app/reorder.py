@@ -108,10 +108,17 @@ def _build_groups(db: Session) -> list[dict[str, Any]]:
     bucket), and ``rows`` — a list of view-shaped dicts per item, ordered by
     SKU within the group.
     """
+    # ``reorder_threshold > 0`` filters out the noise case: a freshly-created
+    # item with ``current_qty = 0`` and ``threshold = 0`` would otherwise
+    # qualify (0 ≤ 0) and render a useless "suggested 0, deficit 0" row.
+    # Items the manager hasn't decided a threshold on yet shouldn't pollute
+    # the dashboard. Once a threshold is set (> 0), the ``≤`` predicate
+    # surfaces the item the moment stock drops to or below it.
     stmt = (
         select(Item, Supplier)
         .outerjoin(Supplier, Item.supplier_id == Supplier.id)
         .where(Item.archived_at.is_(None))
+        .where(Item.reorder_threshold > 0)
         .where(Item.current_qty <= Item.reorder_threshold)
         .order_by(Item.sku)
     )

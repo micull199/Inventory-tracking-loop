@@ -3087,6 +3087,13 @@ class TestPOReceiveValidation:
             cost={lines[0].id: "2.00"},
         )
         assert resp.status_code == 400
+        # Form re-renders (HTML) with the error message + typed costs
+        # preserved — not a raw JSON detail body.
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="po-receive-error"' in resp.text
+        assert "cannot receive more than ordered" in resp.text
+        # User's typed cost survives the round-trip.
+        assert 'value="2.00"' in resp.text
 
     def test_over_receipt_after_partial_is_400(
         self, client: TestClient, db_session: Session

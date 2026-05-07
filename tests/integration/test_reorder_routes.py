@@ -664,10 +664,17 @@ class TestReorderDraftPOButton:
 
 
 class TestZeroThreshold:
-    def test_zero_threshold_zero_qty_is_included(
+    def test_zero_threshold_zero_qty_is_excluded(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """Zero threshold + zero stock is genuinely "at threshold"."""
+        """Zero threshold + zero stock no longer surfaces.
+
+        Behaviour change: items the manager hasn't decided a threshold
+        on yet (``threshold == 0``) shouldn't pollute the dashboard with
+        useless "suggested 0, deficit 0" rows. Once the threshold is
+        set (``> 0``) the ``≤`` predicate surfaces the item the moment
+        stock drops to or below it.
+        """
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _make_item(
@@ -679,10 +686,8 @@ class TestZeroThreshold:
         )
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")
-        assert 'data-testid="reorder-row"' in resp.text
-        row_idx = resp.text.find('data-testid="reorder-row"')
-        row = resp.text[row_idx : row_idx + 1500]
-        assert 'data-testid="reorder-deficit">0' in row
+        # Empty-state copy renders; no reorder-row is emitted.
+        assert 'data-testid="reorder-row"' not in resp.text
 
     def test_zero_threshold_positive_qty_is_excluded(
         self, client: TestClient, db_session: Session

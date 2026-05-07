@@ -812,7 +812,10 @@ def _render_stock_transfer_form(
     form_values: dict[str, str],
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
-    # Item must have a from-location for transfer to make sense.
+    # Item must have a from-location for transfer to make sense. The GET
+    # handler redirects to the edit form *before* this helper is called, so
+    # reaching here with no location indicates a hostile / racy POST — fall
+    # back to a 400 rather than dereferencing ``item.location_id`` below.
     if item.location_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -839,7 +842,7 @@ def _render_stock_transfer_form(
     )
 
 
-@router.get("/{item_id}/transfer", response_class=HTMLResponse)
+@router.get("/{item_id}/transfer")
 def stock_transfer_form(
     request: Request,
     item_id: int,
@@ -847,9 +850,22 @@ def stock_transfer_form(
         require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
     ),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     item = _get_item_or_404(db, item_id)
     _reject_archived(item)
+    if item.location_id is None:
+        # Transfer requires a from-location. Bail out gracefully: flash a
+        # message + 303 to the edit form so the user can set the location
+        # without seeing a raw JSON error body. The POST handler still 400s
+        # (hostile / racy submit; see ``_render_stock_transfer_form``).
+        _flash(
+            request,
+            "Set a location on this item before transferring stock.",
+        )
+        return RedirectResponse(
+            url=f"/admin/items/{item.id}/edit",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     return _render_stock_transfer_form(
         request,
         user=user,

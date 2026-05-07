@@ -393,6 +393,39 @@ def _flash(request: Request, message: str) -> None:
     request.session["flash"] = message
 
 
+def _custom_form_view_from_post(
+    raw: Any, field_defs: list[TaxonomyFieldDef]
+) -> dict[str, Any]:
+    """Build the items-form custom-field view from raw POST data without parsing.
+
+    Used by the create / update re-render path so a validation failure
+    doesn't wipe the user's typed values: every key in ``form["custom"]``
+    is the raw string the operator submitted (or list, for multiselect),
+    not the typed parsed value. Returning the raw text means the template
+    re-fills the inputs verbatim — including malformed values like
+    ``"1.2x"`` that a user can correct in place rather than re-type from
+    scratch.
+
+    Boolean: present + truthy → True; absent → False (HTML checkbox shape).
+    Multiselect: multi-valued list (preserve order, drop blanks).
+    Everything else: trimmed string.
+    """
+    out: dict[str, Any] = {}
+    for fd in field_defs:
+        name = f"cf_{fd.key}"
+        if fd.type == FieldType.MULTISELECT:
+            getlist = getattr(raw, "getlist", None)
+            vals = getlist(name) if callable(getlist) else []
+            out[fd.key] = [v for v in vals if isinstance(v, str) and v.strip()]
+        elif fd.type == FieldType.BOOLEAN:
+            v = raw.get(name)
+            out[fd.key] = bool(v) and v != ""
+        else:
+            v = raw.get(name)
+            out[fd.key] = v.strip() if isinstance(v, str) else ""
+    return out
+
+
 def _form_for_item(item: Item | None) -> dict[str, Any]:
     """Render the form-input shape for a fresh form or an existing item."""
     if item is None:
@@ -562,12 +595,29 @@ def _leaf_options(
     if current_id is not None and current_id not in rendered_ids:
         cur = db.get(TaxonomyNode, current_id)
         if cur is not None:
+            # Two distinct "current_id not in rendered_ids" cases:
+            # (1) the node is archived (archived_at IS NOT NULL); or
+            # (2) the node is a top-level that has *gained* sub-categories
+            #     since this item was assigned to it — it's no longer a
+            #     leaf, so it doesn't render in the active leaf list, but
+            #     it isn't archived either. Labelling case (2) "(archived)"
+            #     misleads the manager into thinking they archived
+            #     something they didn't.
+            archived = cur.archived_at is not None
+            if archived:
+                suffix = " (archived)"
+            elif cur.parent_id is None:
+                # Non-archived top-level not in the leaf set ⇒ it has
+                # active children. Tell the manager to pick a sub-category.
+                suffix = " (no longer a leaf — pick a sub-category)"
+            else:
+                suffix = ""
             if cur.parent_id is None:
-                label = f"{cur.name} (archived)"
+                label = f"{cur.name}{suffix}"
             else:
                 parent = db.get(TaxonomyNode, cur.parent_id)
                 parent_name = parent.name if parent is not None else "?"
-                label = f"{parent_name} / {cur.name} (archived)"
+                label = f"{parent_name} / {cur.name}{suffix}"
             options.append(
                 {"id": cur.id, "label": label, "is_group": False}
             )
@@ -1253,41 +1303,100 @@ async def create_item(
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
-    # Auto-generate SKU when the form omits it. The form input was removed
-    # in the items-form-simplification slice; explicit POSTs (tests, the
-    # public API surface) can still pass their own SKU and override.
-    if not (sku or "").strip():
-        try:
-            leaf_int = int((taxonomy_node_id or "").strip())
-        except ValueError:
-            leaf_int = 0
-        leaf = db.get(TaxonomyNode, leaf_int) if leaf_int > 0 else None
-        sku = _generate_sku(db, leaf)
-    fields = _normalise(
-        db,
-        sku=sku,
-        name=name,
-        taxonomy_node_id=taxonomy_node_id,
-        unit=unit,
-        tracking_mode=tracking_mode,
-        requires_checkout=requires_checkout,
-        reorder_threshold=reorder_threshold,
-        reorder_qty=reorder_qty,
-        supplier_id=supplier_id,
-        location_id=location_id,
-        qr_code=qr_code,
-        notes=notes,
-    )
-    _check_sku_unique(db, fields["sku"])
-    _check_qr_unique(db, fields["qr_code"])
+    # Read the form once up-front so the re-render path below can echo the
+    # user's typed values (incl. custom fields) back into the template.
+    # FastAPI caches this for the route's lifetime, so the typed ``Form()``
+    # parameters above and ``request.form()`` below are the same object.
+    raw_form = await request.form()
 
-    # Custom fields: read the full form (FastAPI caches it after the typed
-    # ``Form()`` parameters above, so this is free) and parse against the
-    # leaf's active schema. Required fields raise 400 here, preventing the
-    # item row from being inserted at all.
-    field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
-    form = await request.form()
-    parsed_custom = _collect_custom_fields(form, field_defs)
+    def _re_render(error: str) -> Response:
+        # Validation failed — re-render the create form with the typed
+        # values + the error message rather than letting HTTPException
+        # bubble out as raw JSON. Keeps the manager's other typed inputs
+        # (incl. custom fields) so they can fix the problem in place.
+        try:
+            leaf_id_for_view = int((taxonomy_node_id or "").strip())
+        except ValueError:
+            leaf_id_for_view = 0
+        view_field_defs = (
+            _get_active_field_defs(db, leaf_id_for_view)
+            if leaf_id_for_view > 0
+            else []
+        )
+        form_view: dict[str, Any] = {
+            "sku": (sku or "").strip(),
+            "name": (name or "").strip(),
+            "taxonomy_node_id": (taxonomy_node_id or "").strip(),
+            "unit": (unit or "").strip(),
+            "tracking_mode": tracking_mode or TrackingMode.QTY.value,
+            "requires_checkout": bool(requires_checkout),
+            "reorder_threshold": (reorder_threshold or "").strip(),
+            "reorder_qty": (reorder_qty or "").strip(),
+            "supplier_id": (supplier_id or "").strip(),
+            "location_id": (location_id or "").strip(),
+            "qr_code": (qr_code or "").strip(),
+            "notes": (notes or "").strip(),
+            "custom": _custom_form_view_from_post(raw_form, view_field_defs),
+        }
+        return templates.TemplateResponse(
+            request,
+            "items_form.html",
+            {
+                "current_user": user,
+                "item": None,
+                "form": form_view,
+                "title": "New item",
+                "action": "/admin/items",
+                "leaf_options": _leaf_options(db),
+                "supplier_options": _supplier_options(db),
+                "location_options": _location_options(db),
+                "tracking_modes": [m.value for m in TrackingMode],
+                "can_edit_thresholds": True,
+                "can_save": True,
+                "field_defs": view_field_defs,
+                "error": error,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Auto-generate SKU when the form omits it. The form input was
+        # removed in the items-form-simplification slice; explicit POSTs
+        # (tests, the public API surface) can still pass their own SKU.
+        if not (sku or "").strip():
+            try:
+                leaf_int = int((taxonomy_node_id or "").strip())
+            except ValueError:
+                leaf_int = 0
+            leaf = db.get(TaxonomyNode, leaf_int) if leaf_int > 0 else None
+            sku = _generate_sku(db, leaf)
+        fields = _normalise(
+            db,
+            sku=sku,
+            name=name,
+            taxonomy_node_id=taxonomy_node_id,
+            unit=unit,
+            tracking_mode=tracking_mode,
+            requires_checkout=requires_checkout,
+            reorder_threshold=reorder_threshold,
+            reorder_qty=reorder_qty,
+            supplier_id=supplier_id,
+            location_id=location_id,
+            qr_code=qr_code,
+            notes=notes,
+        )
+        _check_sku_unique(db, fields["sku"])
+        _check_qr_unique(db, fields["qr_code"])
+
+        # Custom fields: parse against the leaf's active schema. Required
+        # fields raise 400 here, before any DB write — re-render path
+        # below catches that and echoes typed values back.
+        field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+        parsed_custom = _collect_custom_fields(raw_form, field_defs)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        return _re_render(str(exc.detail))
 
     item = Item(
         sku=fields["sku"],
@@ -1415,36 +1524,100 @@ async def update_item(
         reorder_threshold = str(item.reorder_threshold)
         reorder_qty = str(item.reorder_qty)
 
-    fields = _normalise(
-        db,
-        sku=sku,
-        name=name,
-        taxonomy_node_id=taxonomy_node_id,
-        unit=unit,
-        tracking_mode=tracking_mode,
-        requires_checkout=requires_checkout,
-        reorder_threshold=reorder_threshold,
-        reorder_qty=reorder_qty,
-        supplier_id=supplier_id,
-        location_id=location_id,
-        qr_code=qr_code,
-        notes=notes,
-        current_node_id=item.taxonomy_node_id,
-        current_supplier_id=item.supplier_id,
-        current_location_id=item.location_id,
-    )
-    _check_sku_unique(db, fields["sku"], exclude_id=item.id)
-    _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)
+    raw_form = await request.form()
 
-    # Custom fields: parse against the *current* leaf's active schema.
-    # Existing rows for archived defs (or for defs that no longer belong to
-    # this leaf if the category just changed) are intentionally left alone —
-    # MISSION §3 "existing items keep their stored values". Required-flag
-    # validation runs here, so a 400 short-circuits before any item update
-    # writes.
-    field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
-    form = await request.form()
-    parsed_custom = _collect_custom_fields(form, field_defs)
+    def _re_render(error: str) -> Response:
+        # Validation failed — re-render the edit form preserving the user's
+        # typed values + error rather than letting HTTPException bubble out
+        # as raw JSON. The "current_id" args on the option helpers keep an
+        # archived FK assignment present in the dropdown.
+        try:
+            leaf_id_for_view = int((taxonomy_node_id or "").strip())
+        except ValueError:
+            leaf_id_for_view = item.taxonomy_node_id
+        view_field_defs = _get_active_field_defs(db, leaf_id_for_view)
+        form_view: dict[str, Any] = {
+            "sku": (sku or "").strip() or item.sku,
+            "name": (name or "").strip(),
+            "taxonomy_node_id": (
+                (taxonomy_node_id or "").strip()
+                or str(item.taxonomy_node_id)
+            ),
+            "unit": (unit or "").strip(),
+            "tracking_mode": tracking_mode or item.tracking_mode.value,
+            "requires_checkout": bool(requires_checkout),
+            "reorder_threshold": (reorder_threshold or "").strip(),
+            "reorder_qty": (reorder_qty or "").strip(),
+            "supplier_id": (supplier_id or "").strip(),
+            "location_id": (location_id or "").strip(),
+            "qr_code": (qr_code or "").strip(),
+            "notes": (notes or "").strip(),
+            "custom": _custom_form_view_from_post(raw_form, view_field_defs),
+        }
+        can_save = _can_save_item(user)
+        return templates.TemplateResponse(
+            request,
+            "items_form.html",
+            {
+                "current_user": user,
+                "item": item,
+                "form": form_view,
+                "title": (
+                    f"Edit {item.name}" if can_save else f"View {item.name}"
+                ),
+                "action": f"/admin/items/{item.id}",
+                "leaf_options": _leaf_options(
+                    db, current_id=item.taxonomy_node_id
+                ),
+                "supplier_options": _supplier_options(
+                    db, current_id=item.supplier_id
+                ),
+                "location_options": _location_options(
+                    db, current_id=item.location_id
+                ),
+                "tracking_modes": [m.value for m in TrackingMode],
+                "can_edit_thresholds": _can_edit_thresholds(user),
+                "can_save": can_save,
+                "field_defs": view_field_defs,
+                "error": error,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        fields = _normalise(
+            db,
+            sku=sku,
+            name=name,
+            taxonomy_node_id=taxonomy_node_id,
+            unit=unit,
+            tracking_mode=tracking_mode,
+            requires_checkout=requires_checkout,
+            reorder_threshold=reorder_threshold,
+            reorder_qty=reorder_qty,
+            supplier_id=supplier_id,
+            location_id=location_id,
+            qr_code=qr_code,
+            notes=notes,
+            current_node_id=item.taxonomy_node_id,
+            current_supplier_id=item.supplier_id,
+            current_location_id=item.location_id,
+        )
+        _check_sku_unique(db, fields["sku"], exclude_id=item.id)
+        _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)
+
+        # Custom fields: parse against the *current* leaf's active schema.
+        # Existing rows for archived defs (or for defs that no longer belong
+        # to this leaf if the category just changed) are intentionally left
+        # alone — MISSION §3 "existing items keep their stored values".
+        # Required-flag validation runs here, so a 400 short-circuits before
+        # any item update writes.
+        field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+        parsed_custom = _collect_custom_fields(raw_form, field_defs)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        return _re_render(str(exc.detail))
     existing_rows = _load_custom_field_value_rows(db, item.id)
 
     diff = _diff(item, fields)

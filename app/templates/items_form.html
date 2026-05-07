@@ -10,6 +10,9 @@
             <em>View only — your role cannot edit items.</em>
         </p>
     {% endif %}
+    {% if error %}
+        <p data-testid="item-form-error" role="alert">{{ error }}</p>
+    {% endif %}
     <form method="post" action="{{ action }}" data-testid="item-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 

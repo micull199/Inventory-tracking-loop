@@ -3762,15 +3762,26 @@ class TestStockTransferFormRendering:
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 400
 
-    def test_item_without_location_is_400(
+    def test_item_without_location_redirects_to_edit_with_flash(
         self, client: TestClient, db_session: Session
     ) -> None:
+        # Behaviour change: GET /admin/items/{id}/transfer for an item
+        # without a from-location no longer returns a raw JSON 400. It
+        # redirects to the edit form with a flash message so the user can
+        # set the location and try again.
         leaf = _make_leaf(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=None)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
-        resp = client.get(f"/admin/items/{item.id}/transfer")
-        assert resp.status_code == 400
+        resp = client.get(
+            f"/admin/items/{item.id}/transfer", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        # Follow once and check the flash is rendered.
+        resp2 = client.get(f"/admin/items/{item.id}/edit")
+        assert resp2.status_code == 200
+        assert "Set a location" in resp2.text
 
     def test_recent_movements_empty_state(
         self, client: TestClient, db_session: Session

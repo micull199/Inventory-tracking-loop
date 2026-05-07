@@ -13,6 +13,10 @@
         <span data-testid="po-receive-status" data-status="{{ po.status.value }}">{{ po.status.value.replace("_", " ") }}</span>
     </p>
 
+    {% if error %}
+        <p data-testid="po-receive-error" role="alert">{{ error }}</p>
+    {% endif %}
+
     <form method="post" action="/admin/purchase-orders/{{ po.id }}/receive"
           data-testid="po-receive-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -47,7 +51,7 @@
                             <td>
                                 <input type="text" inputmode="decimal"
                                        name="received_{{ line.id }}"
-                                       value=""
+                                       value="{{ submitted_received.get(line.id, '') if submitted_received is defined else '' }}"
                                        placeholder="0"
                                        data-testid="po-receive-received-input"
                                        data-line-id="{{ line.id }}">
@@ -55,7 +59,7 @@
                             <td>
                                 <input type="text" inputmode="decimal"
                                        name="cost_{{ line.id }}"
-                                       value="{{ line.expected_unit_cost if line.expected_unit_cost is not none else '' }}"
+                                       value="{% if submitted_cost is defined and line.id in submitted_cost %}{{ submitted_cost[line.id] }}{% elif line.expected_unit_cost is not none %}{{ line.expected_unit_cost }}{% endif %}"
                                        placeholder="0.00"
                                        data-testid="po-receive-cost-input"
                                        data-line-id="{{ line.id }}">

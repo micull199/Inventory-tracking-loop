@@ -1170,35 +1170,72 @@ async def receive_purchase_order(
     form_data = await request.form()
     lines = _po_lines(db, po.id)
 
+    # Per-line raw inputs. Captured up-front so a validation re-render
+    # below can echo what the operator typed back into the form.
+    submitted_received: dict[int, str] = {}
+    submitted_cost: dict[int, str] = {}
+    for line in lines:
+        submitted_received[line.id] = str(
+            form_data.get(f"received_{line.id}", "") or ""
+        ).strip()
+        submitted_cost[line.id] = str(
+            form_data.get(f"cost_{line.id}", "") or ""
+        ).strip()
+
+    def _re_render(error: str) -> Response:
+        # Re-render the receive form with the typed values + error message
+        # rather than letting the HTTPException bubble up as raw JSON. The
+        # operator keeps the per-line costs they already typed.
+        supplier = db.get(Supplier, po.supplier_id)
+        return templates.TemplateResponse(
+            request,
+            "purchase_order_receive_form.html",
+            {
+                "current_user": user,
+                "po": po,
+                "supplier": supplier,
+                "lines": _receive_lines_view(db, po.id),
+                "submitted_received": submitted_received,
+                "submitted_cost": submitted_cost,
+                "error": error,
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
     # First pass: parse + validate every line. No mutation yet — atomic
     # validation per the rest of the PO module's pattern.
     parsed: list[tuple[PurchaseOrderLine, Decimal, Decimal]] = []
     for line in lines:
-        rec_key = f"received_{line.id}"
-        cost_key = f"cost_{line.id}"
-        rec_raw = str(form_data.get(rec_key, "") or "")
-        cost_raw = str(form_data.get(cost_key, "") or "")
-        new_received = _parse_optional_non_negative_decimal_or_zero(
-            rec_raw, field_name="received qty"
-        )
+        rec_raw = submitted_received[line.id]
+        cost_raw = submitted_cost[line.id]
+        try:
+            new_received = _parse_optional_non_negative_decimal_or_zero(
+                rec_raw, field_name="received qty"
+            )
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_400_BAD_REQUEST:
+                raise
+            return _re_render(str(exc.detail))
         # Reject over-receipt before any movement is created.
         if line.qty_received + new_received > line.qty_ordered:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"line {line.id}: cannot receive more than ordered "
-                    f"(ordered {line.qty_ordered}, received "
-                    f"{line.qty_received}, requested {new_received})"
-                ),
+            return _re_render(
+                f"line {line.id}: cannot receive more than ordered "
+                f"(ordered {line.qty_ordered}, received "
+                f"{line.qty_received}, requested {new_received})"
             )
         # Cost is only required when something is being received on this line.
         # When ``new_received == 0`` we don't validate the cost field — the
         # operator can leave it blank and we don't write a movement anyway.
         actual_cost: Decimal
         if new_received > 0:
-            actual_cost = _parse_non_negative_decimal_required(
-                cost_raw, field_name="actual unit cost"
-            )
+            try:
+                actual_cost = _parse_non_negative_decimal_required(
+                    cost_raw, field_name="actual unit cost"
+                )
+            except HTTPException as exc:
+                if exc.status_code != status.HTTP_400_BAD_REQUEST:
+                    raise
+                return _re_render(str(exc.detail))
         else:
             actual_cost = Decimal("0")
         parsed.append((line, new_received, actual_cost))

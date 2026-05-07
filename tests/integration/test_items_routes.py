@@ -4027,3 +4027,152 @@ class TestItemsCreateFormPrefillsFromDefaults:
         tag_end = body.find(">", unit_idx)
         tag = body[tag_start:tag_end]
         assert 'value=""' in tag or 'value' not in tag.split('data-testid')[0]
+
+
+class TestItemsFormReRendersOnValidationError:
+    """Validation failures re-render the form with typed values + an error
+    message instead of bubbling out as a raw JSON ``{"detail": ...}`` body.
+
+    Covers testnotes #1 + #2 (items custom-field validation regressions).
+    """
+
+    def test_create_invalid_decimal_custom_field_re_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Purity",
+            field_type=FieldType.DECIMAL,
+            required=True,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(
+            taxonomy_node_id=leaf.id, name="Bar", csrf=_csrf(client)
+        )
+        payload["cf_purity"] = "not-a-number"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        # Form re-rendered, not raw JSON.
+        assert resp.status_code == 400
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="item-form-error"' in resp.text
+        assert "Purity must be a number" in resp.text
+        # Other typed fields preserved on the re-render.
+        assert 'value="Bar"' in resp.text
+        assert "not-a-number" in resp.text
+        # No row was inserted.
+        assert db_session.execute(select(Item)).first() is None
+
+    def test_create_missing_required_custom_field_re_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Purity",
+            field_type=FieldType.DECIMAL,
+            required=True,
+        )
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                name="Bar",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="item-form-error"' in resp.text
+        assert "Purity is required" in resp.text
+        assert 'value="Bar"' in resp.text
+        assert db_session.execute(select(Item)).first() is None
+
+    def test_update_invalid_custom_field_re_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf, name="Original")
+        _make_field_def(
+            db_session,
+            leaf,
+            name="Purity",
+            field_type=FieldType.DECIMAL,
+            required=True,
+        )
+        _login_as(client, mgr)
+        payload = _create_payload(
+            taxonomy_node_id=leaf.id, name="Renamed", csrf=_csrf(client)
+        )
+        payload["cf_purity"] = "bogus"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 400
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="item-form-error"' in resp.text
+        assert "Purity must be a number" in resp.text
+        assert 'value="Renamed"' in resp.text
+        assert "bogus" in resp.text
+        # The existing item wasn't mutated.
+        db_session.expire_all()
+        refreshed = db_session.get(Item, item.id)
+        assert refreshed is not None
+        assert refreshed.name == "Original"
+
+
+class TestLeafOptionsNonLeafLabel:
+    """Item-edit category dropdown labels a non-leaf parent correctly.
+
+    Bug (testnotes #5): the parent dropdown labelled non-archived parents
+    that had gained sub-categories as ``"(archived)"``, misleading the
+    manager into thinking they archived something they didn't.
+    """
+
+    def test_non_leaf_parent_labelled_explicitly(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Create top-level category, an item assigned to it (so it was a
+        # leaf at the time), then add a sub-cat to make it non-leaf.
+        parent = TaxonomyNode(name="Raw Materials", sort_order=10)
+        db_session.add(parent)
+        db_session.commit()
+        item = _existing_item(db_session, parent, name="Pre-existing")
+        sub = TaxonomyNode(
+            parent_id=parent.id, name="Silver", sort_order=10
+        )
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        # The parent appears as a selectable option (still the item's
+        # current_id), but is NOT labelled archived.
+        assert "Raw Materials (archived)" not in resp.text
+        # New label clearly explains the state.
+        assert "no longer a leaf" in resp.text
+
+    def test_archived_parent_still_labelled_archived(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        parent = TaxonomyNode(
+            name="Old Cat",
+            sort_order=10,
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        db_session.add(parent)
+        db_session.commit()
+        item = _existing_item(db_session, parent, name="Hist")
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert "Old Cat (archived)" in resp.text
