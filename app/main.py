@@ -104,7 +104,13 @@ def index(
     request: Request, current_user: User | None = Depends(get_current_user)
 ) -> HTMLResponse:
     return templates.TemplateResponse(
-        request, "index.html", {"current_user": current_user}
+        request,
+        "index.html",
+        {
+            "current_user": current_user,
+            "dev_login_enabled": settings.app_env in {"dev", "test"},
+            "dev_login_email": settings.bootstrap_admin_email or "",
+        },
     )
 
 
