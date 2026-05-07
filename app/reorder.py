@@ -32,11 +32,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Item, Role, Supplier, User
 from app.template_env import templates
@@ -45,6 +46,56 @@ router = APIRouter(prefix="/admin/reorder", tags=["reorder"])
 
 
 _NO_SUPPLIER_LABEL = "(no supplier)"
+
+
+_REORDER_CSV_HEADERS: list[str] = [
+    "supplier_id",
+    "supplier_name",
+    "supplier_archived",
+    "item_id",
+    "sku",
+    "name",
+    "unit",
+    "current_qty",
+    "threshold",
+    "reorder_qty",
+    "deficit",
+]
+
+
+def _csv_rows_for_reorder(groups: list[dict[str, Any]]) -> list[list[object]]:
+    """Flatten the grouped reorder view into one CSV row per item.
+
+    The HTML template groups items by supplier into sections; the CSV preserves
+    the supplier-grouping context as columns so a downstream consumer can
+    re-group / filter without losing the relationship. ``supplier_id`` is
+    empty for the no-supplier bucket; ``supplier_name`` then renders the
+    ``(no supplier)`` literal that matches the HTML label. Decimals coerce
+    via ``csv_response``'s default ``str(value)`` so ``5.0000`` survives.
+    """
+    rows: list[list[object]] = []
+    for group in groups:
+        supplier_id = group["supplier_id"]
+        supplier_name = group["supplier_label"]
+        supplier_archived = group["supplier_archived"]
+        for r in group["rows"]:
+            item: Item = r["item"]
+            rows.append(
+                [
+                    supplier_id,
+                    supplier_name,
+                    supplier_archived,
+                    item.id,
+                    item.sku,
+                    item.name,
+                    item.unit,
+                    r["current_qty"],
+                    r["threshold"],
+                    r["reorder_qty"],
+                    r["deficit"],
+                ]
+            )
+    return rows
 
 
 def _build_groups(db: Session) -> list[dict[str, Any]]:
@@ -108,14 +159,25 @@ def _build_groups(db: Session) -> list[dict[str, Any]]:
     return sup_groups + no_sup
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("")
 def reorder_dashboard(
     request: Request,
+    format: str = "",
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     """List active items at-or-below their reorder threshold, grouped by supplier."""
     groups = _build_groups(db)
+    if (
+        resp := csv_branch(
+            format,
+            filename="reorder.csv",
+            headers=_REORDER_CSV_HEADERS,
+            rows=_csv_rows_for_reorder(groups),
+        )
+    ) is not None:
+        return resp
+
     return templates.TemplateResponse(
         request,
         "reorder_dashboard.html",

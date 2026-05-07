@@ -7,6 +7,10 @@
         Grouped by supplier so you can see what to order from whom.
     </p>
 
+    <p>
+        <a href="/admin/reorder?format=csv" data-testid="reorder-csv-link">Download CSV</a>
+    </p>
+
     {% if groups %}
         {% for group in groups %}
             <section

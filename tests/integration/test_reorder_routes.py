@@ -33,9 +33,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AuditLog,
     Item,
     Role,
     Supplier,
@@ -698,3 +700,294 @@ class TestZeroThreshold:
         resp = client.get("/admin/reorder")
         assert "ZZ-2" not in resp.text
         assert 'data-testid="reorder-empty"' in resp.text
+
+
+# ---------------------------------------------------------------------------
+# R5j — CSV export on /admin/reorder
+# ---------------------------------------------------------------------------
+
+
+_REORDER_CSV_HEADER_LINE = (
+    "supplier_id,supplier_name,supplier_archived,item_id,sku,name,"
+    "unit,current_qty,threshold,reorder_qty,deficit"
+)
+
+
+class TestReorderCsvRoleEnforcement:
+    """``?format=csv`` inherits the same role gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
+        _login_as(client, u)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 403
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, off)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+
+
+class TestReorderCsvHeaders:
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_filename(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert 'filename="reorder.csv"' in cd
+
+
+class TestReorderCsvBody:
+    def test_header_row_is_first_line(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+        first_line = resp.text.split("\r\n")[0]
+        assert first_line == _REORDER_CSV_HEADER_LINE
+
+    def test_below_threshold_item_with_named_supplier_renders_full_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        sup = _make_supplier(db_session, name="ACME")
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="LOW-1",
+            name="Bronze rod",
+            current_qty=Decimal("3"),
+            threshold=Decimal("10"),
+            reorder_qty=Decimal("100"),
+            supplier=sup,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        body = resp.text
+        data_row = next(line for line in body.split("\r\n") if "LOW-1" in line)
+        cells = data_row.split(",")
+        assert cells[0] == str(sup.id)
+        assert cells[1] == "ACME"
+        assert cells[2] == "False"
+        # cells[3] is item id (numeric); skip exact value
+        assert cells[4] == "LOW-1"
+        assert cells[5] == "Bronze rod"
+        assert cells[6] == "g"
+        assert cells[7] == "3.0000"
+        assert cells[8] == "10.0000"
+        assert cells[9] == "100.0000"
+        assert cells[10] == "7.0000"
+
+    def test_no_supplier_bucket_renders_empty_supplier_id_and_label(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="ORPHAN-1",
+            current_qty=Decimal("0"),
+            threshold=Decimal("5"),
+            supplier=None,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        body = resp.text
+        data_row = next(line for line in body.split("\r\n") if "ORPHAN-1" in line)
+        cells = data_row.split(",")
+        assert cells[0] == ""
+        assert cells[1] == "(no supplier)"
+        assert cells[2] == "False"
+
+    def test_archived_supplier_renders_archived_suffix_and_true_flag(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        sup = _make_supplier(db_session, name="OldCo", archived=True)
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="ARC-1",
+            current_qty=Decimal("2"),
+            threshold=Decimal("8"),
+            supplier=sup,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        body = resp.text
+        data_row = next(line for line in body.split("\r\n") if "ARC-1" in line)
+        cells = data_row.split(",")
+        assert cells[0] == str(sup.id)
+        assert cells[1] == "OldCo (archived)"
+        assert cells[2] == "True"
+
+    def test_multiple_supplier_groups_ordered_alphabetically(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        beta = _make_supplier(db_session, name="Beta")
+        alpha = _make_supplier(db_session, name="Alpha")
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="B-1",
+            current_qty=Decimal("0"),
+            threshold=Decimal("1"),
+            supplier=beta,
+        )
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="A-1",
+            current_qty=Decimal("0"),
+            threshold=Decimal("1"),
+            supplier=alpha,
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        body = resp.text
+        # Alpha's row appears before Beta's row in the CSV body
+        assert body.index("A-1") < body.index("B-1")
+
+
+class TestReorderCsvEmptyState:
+    def test_no_below_threshold_items_renders_header_only_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        # Item is above threshold, so it does not appear on the dashboard.
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="HIGH-1",
+            current_qty=Decimal("100"),
+            threshold=Decimal("10"),
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+        # Header line, then the trailing CRLF, then nothing.
+        assert resp.text == f"{_REORDER_CSV_HEADER_LINE}\r\n"
+
+
+class TestReorderCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="reorder-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestReorderCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        _make_item(
+            db_session,
+            leaf=leaf,
+            sku="LOW-AUDIT",
+            current_qty=Decimal("0"),
+            threshold=Decimal("5"),
+        )
+        before = (
+            db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+        )
+        before_count = len(before)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder?format=csv")
+        assert resp.status_code == 200
+        after_count = len(
+            db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+        )
+        assert after_count == before_count
+
+
+class TestReorderCsvLink:
+    def test_html_renders_csv_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-testid="reorder-csv-link"' in body
+        assert "format=csv" in body
+
+    def test_csv_link_visible_even_on_empty_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A Manager auditing the empty state can still pull a header-only CSV."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reorder")
+        body = resp.text
+        assert 'data-testid="reorder-empty"' in body
+        assert 'data-testid="reorder-csv-link"' in body
