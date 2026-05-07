@@ -27,6 +27,15 @@ make check        # lint + typecheck + test + e2e — verification gate
 
 `make check` is what `loop.sh` runs between iterations as the independent verification signal. A slice is not done unless `make check` is green.
 
+## Git workflow
+
+Standing authorization for any agent (loop iteration or interactive session) working in this repo:
+
+- **Pull before working.** At the start of every session or iteration, run `git checkout main && git pull --rebase origin main` so you start from the latest remote state. Resolve any conflicts before touching anything else.
+- **Work on `main`.** All changes land directly on the `main` branch. If you find yourself on a detached HEAD or another branch, switch to `main` before committing. No feature branches unless the user explicitly asks.
+- **Commit and push every change.** Once a logical unit of work is complete and `make check` is green, commit it (using the `slice: <slice-name> (DoD #<n>)` format from Loop posture for loop work, or a conventional message otherwise) and `git push origin main`. Don't leave work uncommitted between iterations — the next pull must see it.
+- **If `make check` fails, don't commit.** Fix it or write `BLOCKED.md` and stop. A red commit on `main` poisons the next pull.
+
 Run a single test: `uv run pytest tests/integration/test_items_routes.py::TestItemCreate::test_creates_item -x`. Append `-k <expr>` for substring filters. The suite runs with `filterwarnings = ["error", ...]` so a stray DeprecationWarning fails the test — fix it, don't ignore it.
 
 Run the suite against Postgres for a parity smoke test: `TEST_DATABASE_URL=postgresql+psycopg:///test_uc make test`. The `db_session` fixture in `tests/conftest.py` dispatches on URL prefix — SQLite gets a fresh per-test engine, anything else gets the SAVEPOINT-rollback pattern.
