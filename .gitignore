@@ -1,6 +1,7 @@
 # Environment
 .env
 .env.local
+dev-login.html
 
 # Python
 __pycache__/
