@@ -164,7 +164,28 @@ To edit a supplier, click **Edit** on its row. To stop using a supplier without 
 
 ### Defining a new category and its custom fields
 
-_TODO_
+The taxonomy is a Manager-owned two-level tree (Category → Sub-category). Items live on a **leaf node** — a Category with no sub-categories, or any Sub-category. Each leaf has its own **field schema** (extra columns per item: text, number, decimal, date, boolean, single-select, multi-select). Items inherit the schema of their leaf.
+
+**Create a top-level category.**
+
+1. Sign in as a Manager (or Admin).
+2. Click **Taxonomy** in the top nav (or visit `/admin/taxonomy`).
+3. Click **New category**.
+4. Fill in **Name** (required, must be unique among active siblings). Sort order is optional — leave blank to append.
+5. Click **Create category**.
+
+**Optionally add sub-categories.** From the Taxonomy list, click **Manage** on a category, then **New sub-category**. Adding a sub-category turns the parent into a non-leaf — the parent's field schema is no longer editable, and items must live on a sub-category instead.
+
+**Define the field schema on a leaf node.** From the Taxonomy list (or sub-category list), click **Fields** on the leaf row, then **New field**.
+
+1. **Name** (required). Shown to users when creating items.
+2. **Type**: one of `text`, `number`, `decimal`, `date`, `boolean`, `select`, `multiselect`.
+3. **Options** (for `select` / `multiselect` only): one option per line in the textarea.
+4. **Required**: tick to force the field on item create/edit.
+5. **Sort order**: optional — leave blank to append.
+6. Click **Create field**.
+
+**Schema versioning posture.** Editing a field schema does not retroactively break existing items: stored values stay readable. New edits to those items must satisfy the current schema. To stop a field from appearing on new entry without losing history, click **Archive** on its row (toggle to the Archived tab to **Unarchive**). The same Archive/Unarchive posture applies to categories and sub-categories — archived nodes are hidden from new items but stay readable on historical items, audit log entries, and reports. Nodes and fields cannot be hard-deleted; the audit log assumes their IDs persist.
 
 ### Creating an item
 

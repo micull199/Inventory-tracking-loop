@@ -58,3 +58,44 @@ class TestAddingANewSupplierSection:
         body = _section("Adding a new supplier")
         assert "Archive" in body
         assert "Unarchive" in body
+
+
+class TestDefiningACategorySection:
+    """DOC2 — pin the taxonomy + field-defs walk-through against drift."""
+
+    def test_section_is_filled(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        assert "_TODO_" not in body, "category section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "category section looks unsubstantial"
+
+    def test_section_references_admin_taxonomy_route(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        assert "/admin/taxonomy" in body
+
+    def test_section_names_manager_role(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        assert "Manager" in body
+
+    def test_section_names_required_name_field(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        assert "Name" in body
+        assert "required" in body
+
+    def test_section_names_a_field_type(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        # Name at least one of the supported FieldType values so a future rename
+        # of the type vocabulary forces a docs update.
+        assert "select" in body
+        assert "multiselect" in body
+
+    def test_section_explains_archive_posture(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        assert "Archive" in body
+        assert "Unarchive" in body
+
+    def test_section_explains_leaf_node_concept(self) -> None:
+        body = _section("Defining a new category and its custom fields")
+        # The leaf-node rule is load-bearing for the taxonomy: fields attach to
+        # leaves only, and adding a sub-category turns a Category into a non-leaf.
+        assert "leaf" in body.lower()
+        assert "Sub-category" in body or "sub-category" in body
