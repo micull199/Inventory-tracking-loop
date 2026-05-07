@@ -93,6 +93,10 @@
     {% endif %}
 
     <h2>Movement history</h2>
+    <p>
+        <a href="/admin/items/{{ item.id }}/detail?format=csv"
+           data-testid="movements-csv-link">Download CSV &rarr;</a>
+    </p>
     {% if movements %}
         <table data-testid="movements-timeline">
             <thead>

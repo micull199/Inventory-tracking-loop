@@ -4415,3 +4415,478 @@ class TestStockTransferDetailLink:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert 'data-testid="stock-transfer-link"' not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# R5k — CSV export on /admin/items/{item_id}/detail
+# ---------------------------------------------------------------------------
+
+
+_MOVEMENTS_CSV_HEADER_LINE = (
+    "id,created_at,type,direction,qty,total_cost,actor_email,reason,note"
+)
+
+
+class TestItemDetailCsvRoleEnforcement:
+    """``?format=csv`` inherits the same role gate as the HTML branch."""
+
+    def test_anonymous_csv_is_401(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 401
+
+    def test_pending_csv_is_403(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        pending = _make_user(
+            db_session,
+            email="p@x.test",
+            role=Role.WORKSHOP,
+            status=UserStatus.PENDING,
+        )
+        _login_as(client, pending)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 403
+
+    def test_workshop_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+
+    def test_office_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, office)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+
+    def test_manager_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+
+    def test_admin_csv_is_200(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, admin)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+
+
+class TestItemDetailCsvHeaders:
+    def test_unknown_item_csv_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/99999/detail?format=csv")
+        assert resp.status_code == 404
+
+    def test_content_type_carries_csv_charset(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+    def test_content_disposition_filename_carries_item_id(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        cd = resp.headers["content-disposition"]
+        assert "attachment" in cd
+        assert f'filename="movements_item_{item.id}.csv"' in cd
+
+
+class TestItemDetailCsvBody:
+    def test_header_row_is_first_line(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        first_line = resp.text.split("\r\n")[0]
+        assert first_line == _MOVEMENTS_CSV_HEADER_LINE
+
+    def test_in_movement_renders_full_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        movement = _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2.50"),
+            actor=mgr,
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        body = resp.text
+        # Locate the movement row (the only data line).
+        data_rows = [
+            line for line in body.split("\r\n")[1:] if line.strip()
+        ]
+        assert len(data_rows) == 1
+        cells = data_rows[0].split(",")
+        assert cells[0] == str(movement.id)
+        # cells[1] is the ISO-format created_at — coarse check.
+        assert "T" in cells[1]
+        assert cells[2] == "in"
+        assert cells[3] == "+"
+        assert cells[4] == "10.0000"
+        assert cells[5] == "25.0000"
+        assert cells[6] == "m@x.test"
+        # reason + note both empty.
+        assert cells[7] == ""
+        assert cells[8] == ""
+
+    def test_out_movement_emits_minus_direction_and_total_cost(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2.50"),
+            actor=mgr,
+        )
+        _seed_consume(db_session, item=item, qty=Decimal("4"), actor=mgr)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        body = resp.text
+        data_rows = [
+            line for line in body.split("\r\n")[1:] if line.strip()
+        ]
+        # Two rows: the OUT (newest) then the IN.
+        assert len(data_rows) == 2
+        out_cells = data_rows[0].split(",")
+        assert out_cells[2] == "out"
+        assert out_cells[3] == "-"
+        assert out_cells[4] == "4.0000"
+        assert out_cells[5] == "10.0000"
+
+    def test_positive_adjustment_emits_plus_direction(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_adjust_increase(
+            db_session,
+            item=item,
+            qty=Decimal("3"),
+            unit_cost=Decimal("5"),
+            actor=mgr,
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        cells = data_rows[0].split(",")
+        assert cells[2] == "adjustment"
+        assert cells[3] == "+"
+        assert cells[4] == "3.0000"
+        assert cells[5] == "15.0000"
+        # reason carried through (seed sets it).
+        assert "seed adjust increase" in cells[7]
+
+    def test_negative_adjustment_emits_minus_direction(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("10"),
+            unit_cost=Decimal("2"),
+            actor=mgr,
+        )
+        _seed_adjust_decrease(
+            db_session, item=item, qty=Decimal("2"), actor=mgr
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        # Newest-first: adjust-decrease, then the IN seed.
+        cells = data_rows[0].split(",")
+        assert cells[2] == "adjustment"
+        assert cells[3] == "-"
+        assert cells[5] == "4.0000"
+
+    def test_transfer_emits_empty_direction_and_total_cost(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        loc = _make_location(db_session, "Bench")
+        target = _make_location(db_session, "Storage")
+        item = _make_item_at(db_session, leaf=leaf, location=loc)
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, ws)
+        # Drive a real transfer through the route so the movement row is real.
+        client.post(
+            f"/admin/items/{item.id}/transfer",
+            data=_payload_transfer(
+                to_location_id=str(target.id),
+                qty="5",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        assert len(data_rows) == 1
+        cells = data_rows[0].split(",")
+        assert cells[2] == "transfer"
+        # Transfers bypass the cost engine: empty direction + empty
+        # total_cost cells.
+        assert cells[3] == ""
+        assert cells[5] == ""
+
+    def test_movements_ordered_newest_first(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        first = _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("5"),
+            unit_cost=Decimal("1"),
+            actor=mgr,
+        )
+        second = _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("3"),
+            unit_cost=Decimal("2"),
+            actor=mgr,
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        body = resp.text
+        data_rows = [
+            line for line in body.split("\r\n")[1:] if line.strip()
+        ]
+        ids = [int(row.split(",")[0]) for row in data_rows]
+        assert ids == [second.id, first.id]
+
+    def test_archived_item_still_exports_movements(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("4"),
+            unit_cost=Decimal("1"),
+            actor=mgr,
+        )
+        # Archive after seeding so the movement persists.
+        item.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        assert len(data_rows) == 1
+
+    def test_csv_ignores_pagination_returns_all_rows(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # _PAGE_SIZE is 20; seed 25 to force a multi-page HTML response and
+        # assert the CSV returns every row.
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        for _ in range(25):
+            _seed_layer(
+                db_session,
+                item=item,
+                qty=Decimal("1"),
+                unit_cost=Decimal("1"),
+                actor=mgr,
+            )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        assert len(data_rows) == 25
+
+    def test_orphaned_actor_renders_empty_actor_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Seed with a real actor, then null out user_id directly so the
+        # CSV row's actor_email cell is empty (matches AC1's audit-CSV
+        # posture for orphaned actors).
+        movement = _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("1"),
+            unit_cost=Decimal("1"),
+            actor=mgr,
+        )
+        movement.user_id = None
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        data_rows = [
+            line for line in resp.text.split("\r\n")[1:] if line.strip()
+        ]
+        cells = data_rows[0].split(",")
+        # actor_email cell is empty (not "—").
+        assert cells[6] == ""
+
+
+class TestItemDetailCsvEmptyState:
+    def test_no_movements_renders_header_only_csv(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+        assert resp.text == f"{_MOVEMENTS_CSV_HEADER_LINE}\r\n"
+
+
+class TestItemDetailCsvHtmlBranch:
+    def test_format_blank_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+        assert 'data-testid="item-detail-heading"' in resp.text
+
+    def test_format_unknown_renders_html(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=garbage")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/html")
+
+
+class TestItemDetailCsvReadOnly:
+    def test_csv_writes_no_audit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("1"),
+            unit_cost=Decimal("1"),
+            actor=mgr,
+        )
+        before_count = len(
+            db_session.execute(
+                select(AuditLog).order_by(AuditLog.id)
+            ).scalars().all()
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
+        assert resp.status_code == 200
+        after_count = len(
+            db_session.execute(
+                select(AuditLog).order_by(AuditLog.id)
+            ).scalars().all()
+        )
+        assert after_count == before_count
+
+
+class TestItemDetailCsvLink:
+    def test_html_renders_csv_link(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _seed_layer(
+            db_session,
+            item=item,
+            qty=Decimal("1"),
+            unit_cost=Decimal("1"),
+            actor=mgr,
+        )
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        body = resp.text
+        assert 'data-testid="movements-csv-link"' in body
+        assert f'/admin/items/{item.id}/detail?format=csv' in body
+
+    def test_csv_link_visible_on_empty_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A user inspecting an item with no movements can still pull
+        a header-only CSV — same posture as every prior R5* surface."""
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        body = resp.text
+        assert 'data-testid="movements-timeline-empty"' in body
+        assert 'data-testid="movements-csv-link"' in body

@@ -100,6 +100,7 @@ from app.cost_engine import (
     open_value,
     record_receipt,
 )
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
     CostLayer,
@@ -1104,6 +1105,77 @@ def _attach_directions_and_breakdown(
             m["direction"] = ""
 
 
+_MOVEMENTS_CSV_HEADERS: list[str] = [
+    "id",
+    "created_at",
+    "type",
+    "direction",
+    "qty",
+    "total_cost",
+    "actor_email",
+    "reason",
+    "note",
+]
+
+
+def _all_movements_for_csv(
+    db: Session, item_id: int
+) -> list[dict[str, Any]]:
+    """Every movement for an item, newest-first, with directions attached.
+
+    The CSV branch ignores the HTML's 20-per-page pagination — the receiver
+    of a per-item movement export wants the whole timeline, same posture as
+    AC1's audit-CSV export. Reuses ``_attach_directions_and_breakdown`` so
+    the ``direction`` column reads ``+`` / ``-`` / ``""`` with identical
+    semantics to the HTML render. The breakdown side-effect attaches a
+    ``breakdown`` key per row that the CSV builder ignores — small
+    inefficiency in exchange for not duplicating the helper.
+    """
+    stmt = (
+        select(StockMovement, User.email)
+        .outerjoin(User, StockMovement.user_id == User.id)
+        .where(StockMovement.item_id == item_id)
+        .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+    )
+    out: list[dict[str, Any]] = []
+    for movement, actor_email in db.execute(stmt).all():
+        out.append(
+            {
+                "id": movement.id,
+                "type": movement.type.value,
+                "qty": movement.qty,
+                "total_cost": movement.total_cost,
+                "reason": movement.reason,
+                "note": movement.note,
+                "actor_email": actor_email,
+                "created_at": movement.created_at,
+            }
+        )
+    _attach_directions_and_breakdown(db, out)
+    return out
+
+
+def _csv_rows_for_movements(
+    movements: list[dict[str, Any]],
+) -> list[list[Any]]:
+    """One CSV row per movement; the layer-breakdown rows are intentionally
+    not included (different shape — see the R5k plan in PROGRESS.md)."""
+    return [
+        [
+            m["id"],
+            m["created_at"],
+            m["type"],
+            m["direction"],
+            m["qty"],
+            m["total_cost"],
+            m["actor_email"],
+            m["reason"],
+            m["note"],
+        ]
+        for m in movements
+    ]
+
+
 def _paginate(total: int, page: int, page_size: int) -> dict[str, Any]:
     """Compute pagination metadata. Out-of-range pages clamp to [1, page_count].
 
@@ -1131,16 +1203,17 @@ def _can_edit_item(user: User) -> bool:
     return user.role in (Role.MANAGER, Role.OFFICE, Role.ADMIN)
 
 
-@router.get("/{item_id}/detail", response_class=HTMLResponse)
+@router.get("/{item_id}/detail")
 def item_detail(
     request: Request,
     item_id: int,
     page: int = 1,
+    format: str = "",
     user: User = Depends(
         require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
     ),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
+) -> Response:
     """Read-only item detail page (M6).
 
     Surfaces the cost-engine outputs in one place: open layers + paginated
@@ -1148,8 +1221,22 @@ def item_detail(
     Archived items still render — detail is a read of history, including for
     archived items; the action links to in / out / adjust hide on archived
     rows (mirrors ``items_form.html``).
+
+    ``?format=csv`` exports every movement for the item (ignores pagination)
+    as a downloadable CSV — same posture as AC1's audit-CSV export.
     """
     item = _get_item_or_404(db, item_id)
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=f"movements_item_{item.id}.csv",
+            headers=_MOVEMENTS_CSV_HEADERS,
+            rows=_csv_rows_for_movements(_all_movements_for_csv(db, item.id)),
+        )
+    ) is not None:
+        return resp
+
     layers = _open_layers(db, item.id)
     total_movements = _count_movements(db, item.id)
     pagination = _paginate(total_movements, page, _PAGE_SIZE)
