@@ -27,12 +27,48 @@ If the same test or the same problem fails three iterations in a row without mea
 
 ## Current state
 
-**Iteration:** 70 (DOC10 shipped — closed the last two non-P4-gated README `_TODO` blocks: Contributing footer + License footer; License declared as Proprietary to match `pyproject.toml`'s canonical `license = { text = "Proprietary" }`; 8 new forcing-function tests in `TestContributingAndLicenseFooter` reuse DOC9a's `_h2_section()` helper + a 4-way open-source-licence absence pin against `MIT`/`Apache`/`GPL`/`BSD`; no DoD ticked)
+**Iteration:** 71 (R5i in progress — CSV export on `/admin/users` admin list; tenth CSV-export surface using R5e's `csv_branch` helper; mechanical pattern mirroring R5h's checkouts admin list (8th surface) and AC1's audit list (9th surface); pure mechanical extension; doesn't tick a DoD)
 **Last commit:** `03eee06` — slice: DOC10 — README Contributing + License footer (DoD #12). Prior: `f2e18d0` — slice: DOC9a — README changelog quick link + PDF library = reportlab (DoD #12); `a333b49` — slice: OAuth1-DC — drift-catcher integration tests for `_dev-login` ↔ `google_callback` parity (DoD #1); `343f955` — slice: DOC8 — README "Reading the audit trail for an item" workflow (DoD #12); `53e7f89` — docs: record DOC7 commit hash in PROGRESS.md; `696e0a5` — slice: DOC7 — README "Receiving stock against a PO" workflow (DoD #12).
 **Branch:** main
-**Tests:** ruff ✓, mypy ✓ (29 source files — no change; pure tests-only addition), pytest 2426 passed + 3 skipped (was 2418 passed + 3 skipped at iter-69 HEAD `f2e18d0`; **+8 DOC10 forcing-function tests**). e2e not re-run this iteration — DOC10 is a pure README + tests addition with no UI surface (same posture as every prior DOC slice; e2e count remains 16/16 passing).
+**Tests:** ruff ✓, mypy ✓ (29 source files — no change; the route extension lives in `app/main.py`), pytest 2426 passed + 3 skipped at iter-70 HEAD `03eee06` (target after R5i: ~2442 passing).
 
-**DOC10 shipped this iteration — see Completed slices log row-70 for the canonical record. After DOC10 every `_TODO` block in `README.md` that does not depend on un-shipped state is resolved: the Contributing footer explains the loop-driven posture + the no-external-PRs convention + points readers at `MISSION.md` + `PROGRESS.md` + `CHANGELOG.md` + `loop.sh`; the License footer declares the project as Proprietary, matching `pyproject.toml`. The 4-way open-source-licence absence pin (`MIT`/`Apache`/`GPL`/`BSD`) forces any future licence flip through `pyproject.toml` + `MISSION.md` + `PROGRESS.md` "Proposed scope changes" first — load-bearing legal scope can't drift silently from prose. The only remaining `_TODO`s are the three P4-gated ones: the deployed-URL Quick Link (line 14) + the Tech Stack deploy-target line (line 47) + the entire `## Deployment` section (line 390). OAuth1-DC's queued server-side OAuth stub plan still stands — see Next slice for the corrected technical plan + risk analysis.**
+**R5i — CSV export on the `/admin/users` admin list (DoD #7 polish, MISSION §3 "Export any list view to CSV"):** tenth CSV-export surface. Mechanical extension after R5h's checkouts admin list (8th) and AC1's audit list (9th). Extends `app/main.py::admin_list_users` with a `?format=csv` query branch using R5e's `csv_branch` helper. Adds an `admin-users-csv-link` "Download CSV" link to `admin_users.html`.
+
+- **Route extension** (`app/main.py::admin_list_users`):
+  - New `format: str = ""` query param. `format == "csv"` triggers CSV via `csv_branch`; anything else (blank / `html` / garbage) renders HTML — same silent-coerce posture as the nine prior CSV surfaces.
+  - **Role gate inherited**: existing `Depends(require_role(Role.ADMIN))` already blocks every non-Admin role at the dependency layer — pending / Workshop / Office / Manager all 403, anon 401. No inner role-split needed.
+  - Same data source as the HTML branch (`db.execute(select(User).order_by(_USER_LIST_ORDER, User.created_at.desc()))`).
+  - **Headers** (6 columns): `id`, `email`, `name`, `role`, `status`, `created_at`. Mirrors the HTML table cells one-for-one. The `id` column is explicit (HTML carries it as `data-user-id`, not a cell — making it a column lets a downstream consumer join). The HTML's "Created" cell renders `created_at.strftime("%Y-%m-%d")`; the CSV preserves the full ISO datetime via `csv_response`'s coercion so a downstream consumer can sort precisely.
+  - **`role` cell** pre-coerced from `Role.X` enum → its `.value` string (e.g. `"manager"`); renders empty when `role is None` (pending users with no role).
+  - **`status` cell** pre-coerced from `UserStatus.X` enum → its `.value` string (e.g. `"pending"` / `"active"` / `"disabled"`).
+  - **Filename**: `users.csv` (no `?show` filter on this view; only one partition — same as the audit list which also has no filter on the URL).
+  - Module-level `_ADMIN_USERS_CSV_HEADERS` constant + new `_csv_rows_for_admin_users(rows)` helper. Mirrors precedent from the nine prior surfaces.
+  - **Return type widened** on `admin_list_users` from `HTMLResponse` to `Response`; `@app.get("/admin/users", response_class=HTMLResponse)` decorator simplified to `@app.get("/admin/users")`.
+  - **Walrus form**: `if (resp := csv_branch(format, filename=..., headers=..., rows=...)) is not None: return resp` — same shape as the nine prior sites.
+
+- **Template** (`admin_users.html`): new `<a data-testid="admin-users-csv-link" href="/admin/users?format=csv">Download CSV</a>` link block above the users table (same posture as the nine prior surfaces).
+
+- **Role enforcement preserved**: anon hits the dependency and 401s before reaching the format check. Pending / Workshop / Office / Manager hit the same dependency and 403.
+
+- **Read-only invariant preserved**: GET-CSV writes no audit row.
+
+- **Tests** (~17 new in `tests/integration/test_admin_user_management.py`):
+  - `TestAdminUsersListCsvRoleEnforcement` (6): anon CSV 401; pending CSV 403; Workshop CSV 403; Office CSV 403; Manager CSV 403; Admin CSV 200.
+  - `TestAdminUsersListCsvHeaders` (2): Content-Type carries `text/csv; charset=utf-8`; default filename `users.csv`.
+  - `TestAdminUsersListCsvBody` (5): emits header-only when only the admin exists (admin always has at least themselves visible — they're the requesting user so empty is impossible; the row count matches the user count); pending user with no role renders empty `role` cell; role + status enums render their `.value` strings (e.g. `manager` not `Role.MANAGER`); ordering preserved (pending first, then active, then disabled); admin's own row appears with `admin` role.
+  - `TestAdminUsersListCsvHtmlBranch` (2): blank format renders HTML; unknown format (`?format=garbage`) renders HTML.
+  - `TestAdminUsersListCsvReadOnly` (1): GET-CSV writes no audit row.
+  - `TestAdminUsersListCsvLink` (1): HTML page renders the `admin-users-csv-link`.
+
+- **Manual sanity check** (no human required): the integration tests POST through the actual `/admin/users?format=csv` URL with a real Admin session, parse the CSV body, and pin every observable behaviour. Anon + pending + Workshop + Office + Manager get 401/403 at the dependency layer before the format branch runs.
+
+- **DoD impact**: **No DoD ticked.** DoD #7 is already ticked (D7 / iter-57); R5i is polish that extends "Export any list view to CSV" coverage to one more surface. After R5i the only remaining list views without CSV export are the reorder dashboard, the per-item movements timeline, and the sub-category list — each can be a future R5j/k/l slice if/when needed.
+
+<!-- DOC10 plan (now shipped) — kept for slice context; canonical record is in the Completed log at row I70.
+
+DOC10 shipped iter-70 — see Completed slices log row-70 for the canonical record. After DOC10 every `_TODO` block in `README.md` that does not depend on un-shipped state is resolved: the Contributing footer explains the loop-driven posture + the no-external-PRs convention + points readers at `MISSION.md` + `PROGRESS.md` + `CHANGELOG.md` + `loop.sh`; the License footer declares the project as Proprietary, matching `pyproject.toml`. The 4-way open-source-licence absence pin (`MIT`/`Apache`/`GPL`/`BSD`) forces any future licence flip through `pyproject.toml` + `MISSION.md` + `PROGRESS.md` "Proposed scope changes" first — load-bearing legal scope can't drift silently from prose. The only remaining `_TODO`s are the three P4-gated ones: the deployed-URL Quick Link + the Tech Stack deploy-target line + the entire `## Deployment` section. OAuth1-DC's queued server-side OAuth stub plan still stands — see Next slice for the corrected technical plan + risk analysis.
+
+-->
 
 <!-- DOC7 plan (now shipped) — kept for slice context; canonical record is in the Completed log at row I66.
 

@@ -29,6 +29,7 @@ from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
 from app.config import settings
 from app.csrf import CSRFMiddleware
+from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import Role, User, UserStatus
 from app.template_env import templates
@@ -99,17 +100,64 @@ _USER_LIST_ORDER = case(
 )
 
 
-@app.get("/admin/users", response_class=HTMLResponse)
+_ADMIN_USERS_CSV_HEADERS: list[str] = [
+    "id",
+    "email",
+    "name",
+    "role",
+    "status",
+    "created_at",
+]
+
+
+def _csv_rows_for_admin_users(rows: list[User]) -> list[list[object]]:
+    """Map ``User`` rows to CSV cell values.
+
+    Mirrors the HTML table cells one-for-one. ``id`` is added at the front so
+    a downstream consumer can join (the HTML carries it as ``data-user-id``
+    rather than a cell). Enums are pre-coerced to their ``.value`` strings so
+    the cell carries ``"manager"`` rather than Python's ``<Role.MANAGER: 'manager'>``
+    repr; ``role`` renders empty when ``None`` (pending users with no role).
+    ``created_at`` is preserved as a full ISO datetime via ``csv_response``'s
+    coercion — the HTML displays only the date, but a downstream consumer
+    benefits from the full precision.
+    """
+    return [
+        [
+            u.id,
+            u.email,
+            u.name,
+            u.role.value if u.role is not None else None,
+            u.status.value,
+            u.created_at,
+        ]
+        for u in rows
+    ]
+
+
+@app.get("/admin/users")
 def admin_list_users(
     request: Request,
+    format: str = "",
     admin: User = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_session),
-) -> HTMLResponse:
-    rows = (
+) -> Response:
+    rows = list(
         db.execute(select(User).order_by(_USER_LIST_ORDER, User.created_at.desc()))
         .scalars()
         .all()
     )
+
+    if (
+        resp := csv_branch(
+            format,
+            filename="users.csv",
+            headers=_ADMIN_USERS_CSV_HEADERS,
+            rows=_csv_rows_for_admin_users(rows),
+        )
+    ) is not None:
+        return resp
+
     return templates.TemplateResponse(
         request,
         "admin_users.html",
