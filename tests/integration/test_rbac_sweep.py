@@ -140,6 +140,9 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/taxonomy/99999/fields", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields/new", MANAGER),
     ("POST", "/admin/taxonomy/99999/fields", MANAGER),
+    # HTMX fragment: options-textarea visibility per type — Manager-only,
+    # same gate as the form that drives it.
+    ("GET", "/admin/taxonomy/fields/_options-partial", MANAGER),
     ("GET", "/admin/taxonomy/fields/99999/edit", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/archive", MANAGER),
@@ -148,6 +151,12 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/audit", MANAGER),
     # --- Manager-only: items create / archive / unarchive ---
     ("GET", "/admin/items/new", MANAGER),
+    # HTMX fragment: custom-fields swap on category change. Same gate as the
+    # edit form (Manager + Office + Workshop) — Office/Workshop see the
+    # category select disabled in read-only mode and won't fire the swap,
+    # but the permissive gate keeps a future widening of the form's
+    # writable surface from silently 403'ing on the fragment.
+    ("GET", "/admin/items/_custom-fields", WORKSHOP),
     ("POST", "/admin/items", MANAGER),
     ("POST", "/admin/items/99999/archive", MANAGER),
     ("POST", "/admin/items/99999/unarchive", MANAGER),

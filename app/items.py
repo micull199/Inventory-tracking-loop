@@ -1084,6 +1084,56 @@ def new_item_form(
     )
 
 
+@router.get("/_custom-fields", response_class=HTMLResponse)
+def custom_fields_fragment(
+    request: Request,
+    taxonomy_node_id: str = "",
+    _user: User = Depends(
+        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
+    ),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """HTMX fragment: custom-field inputs for the leaf identified by the picked
+    category.
+
+    Wired to the items form's ``<select name="taxonomy_node_id">`` via
+    ``hx-get`` / ``hx-trigger="change"``. HTMX automatically includes the
+    triggering element's ``name=value`` in the request query string, so this
+    route accepts ``taxonomy_node_id`` (matching the form field) rather than
+    a renamed ``node_id``. Returns the same partial the full form renders,
+    so server-side rendering on initial load and HTMX swap on category
+    change share one source of truth.
+
+    Empty / unparseable / archived / non-leaf ids resolve to an empty body
+    (the partial renders nothing when ``field_defs`` is empty), which is
+    what the user should see — no fields to fill in. The POST handler
+    re-validates on submit, so a hostile id here can't sneak past.
+
+    Same role gating as the edit form (Manager + Office + Workshop). Office
+    and Workshop see the form read-only, but ``hx-trigger="change"`` won't
+    fire on a disabled select anyway; the permissive gate is just so a
+    future widening of the edit form's writable surface doesn't silently
+    403 on the fragment.
+    """
+    field_defs: list[TaxonomyFieldDef] = []
+    try:
+        parsed_id = int(taxonomy_node_id)
+    except (TypeError, ValueError):
+        parsed_id = 0
+    if parsed_id > 0:
+        field_defs = _get_active_field_defs(db, parsed_id)
+    form = {"custom": _form_for_custom_fields(field_defs, {})}
+    return templates.TemplateResponse(
+        request,
+        "items_form_custom_fields.html",
+        {
+            "field_defs": field_defs,
+            "form": form,
+            "ro": False,
+        },
+    )
+
+
 @router.post("")
 async def create_item(
     request: Request,

@@ -61,13 +61,24 @@ class TestBaseLayoutAccessibility:
         assert 'id="main"' in resp.text
 
     def test_htmx_script_is_loaded(self, client: TestClient) -> None:
+        # HTMX is vendored at /static/htmx.min.js — see app/static/. Loading
+        # from a CDN broke deploys behind a strict CSP / egress filter.
         resp = client.get("/")
-        assert "htmx.org" in resp.text
+        assert "/static/htmx.min.js" in resp.text
 
     def test_htmx_script_loaded_only_once(self, client: TestClient) -> None:
         resp = client.get("/")
-        # Tolerate version bumps; just count the import.
-        assert resp.text.count("unpkg.com/htmx.org") == 1
+        assert resp.text.count("/static/htmx.min.js") == 1
+
+    def test_htmx_script_is_served(self, client: TestClient) -> None:
+        # The static mount actually serves the vendored file — without this,
+        # the script tag in base.html points at a 404.
+        resp = client.get("/static/htmx.min.js")
+        assert resp.status_code == 200
+        assert "htmx" in resp.text.lower()
+        assert resp.headers.get("content-type", "").startswith(
+            ("application/javascript", "text/javascript")
+        )
 
 
 class TestRoleAwareNav:

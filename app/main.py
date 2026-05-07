@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -55,6 +58,15 @@ app.add_middleware(
     CSRFMiddleware,
     secure=settings.app_env == "prod",
     exempt_paths=_csrf_exempt,
+)
+
+# Vendored static assets (htmx, etc.). Mounted at /static so templates can
+# reference them without a CDN dependency — production deploys behind a
+# strict CSP or egress filter would otherwise fail to load HTMX.
+app.mount(
+    "/static",
+    StaticFiles(directory=str(Path(__file__).parent / "static")),
+    name="static",
 )
 
 app.include_router(auth_router)

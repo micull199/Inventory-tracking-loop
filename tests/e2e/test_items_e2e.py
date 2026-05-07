@@ -134,28 +134,35 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
         and u.endswith("/fields")
     )
 
-    # Capture the category id from the fields-list URL *before* navigating
-    # away — we'll use it to deep-link the new-item form.
-    fields_url = mgr_page.url
-    cat_id = fields_url.rstrip("/").split("/")[-2]
-
     # Step 7: Click into Items.
     mgr_page.get_by_test_id("nav-items").click()
     mgr_page.wait_for_url(lambda u: u.startswith(f"{app_server}/admin/items"))
     expect(mgr_page.get_by_test_id("items-empty")).to_be_visible()
 
-    # Step 8: Open the new-item form *with the category preselected* so the
-    # I2 custom-field inputs render. (The unfiltered new-item form doesn't
-    # know which category to render fields for — POSTing from there with a
-    # required field unfilled would 400.)
-    mgr_page.goto(f"{app_server}/admin/items/new?node_id={cat_id}")
+    # Step 8: Open the new-item form. The form starts with no category
+    # picked — and no custom-field inputs visible. This is the user-reported
+    # fix path: previously the inputs only rendered if the URL carried
+    # ``?node_id=…``; now picking the category in the dropdown HTMX-swaps
+    # the leaf's custom fields into ``#cf-container``.
+    mgr_page.goto(f"{app_server}/admin/items/new")
+
+    # Initial state: no category-fields fieldset because no leaf is picked.
+    expect(
+        mgr_page.get_by_test_id("item-custom-fields")
+    ).not_to_be_visible()
 
     mgr_page.get_by_test_id("item-sku-input").fill("RM-E2E-001")
     mgr_page.get_by_test_id("item-name-input").fill("Silver wire (e2e)")
-    # Category is pre-selected via ?node_id, but verify it's correct.
+    # Pick the leaf — HTMX fires on change, fetches the partial, swaps in
+    # the custom-field inputs.
     mgr_page.get_by_test_id("item-category-input").select_option(
         label="Items E2E Cat"
     )
+    # The fieldset and its inputs appear after the swap.
+    expect(mgr_page.get_by_test_id("item-custom-fields")).to_be_visible()
+    expect(mgr_page.get_by_test_id("item-cf-alloy-input")).to_be_visible()
+    expect(mgr_page.get_by_test_id("item-cf-karat-input")).to_be_visible()
+
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("100")
     mgr_page.get_by_test_id("item-reorder-qty-input").fill("500")

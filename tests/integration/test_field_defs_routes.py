@@ -362,7 +362,11 @@ class TestFieldDefCreate:
         assert resp.status_code == 200
         assert 'name="name"' in resp.text
         assert 'name="type"' in resp.text
-        assert 'name="options_text"' in resp.text
+        # options_text is HTMX-swapped in only when type is select/multiselect.
+        # The default type on a new form is text, so the textarea is absent.
+        # The container is always present so the HTMX target exists.
+        assert 'id="fd-options-container"' in resp.text
+        assert 'name="options_text"' not in resp.text
         assert 'name="required"' in resp.text
         assert 'name="csrf_token"' in resp.text
 
@@ -1532,3 +1536,183 @@ class TestSubCategoryCreateGuardedByActiveFieldDefs:
             follow_redirects=False,
         )
         assert resp.status_code == 303
+
+
+class TestFieldDefOptionsFragmentRoute:
+    """``GET /admin/taxonomy/fields/_options-partial`` — HTMX fragment for the
+    field-def form's type ``<select>``.
+
+    When the user picks ``select`` or ``multiselect`` the options textarea
+    appears; when the user picks any other type the textarea disappears.
+    Without this swap the textarea was always rendered and the server 400'd
+    on submit when the user typed options under a non-select type.
+    Manager-only — same gate as the field-def form itself.
+    """
+
+    def test_anon_blocked(self, client: TestClient) -> None:
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=select"
+        )
+        assert resp.status_code == 401
+
+    def test_office_blocked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=select"
+        )
+        assert resp.status_code == 403
+
+    def test_workshop_blocked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=select"
+        )
+        assert resp.status_code == 403
+
+    def test_select_renders_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=select"
+        )
+        assert resp.status_code == 200
+        assert 'name="options_text"' in resp.text
+        assert 'data-testid="field-def-options-input"' in resp.text
+
+    def test_multiselect_renders_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=multiselect"
+        )
+        assert resp.status_code == 200
+        assert 'name="options_text"' in resp.text
+
+    def test_text_hides_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=text"
+        )
+        assert resp.status_code == 200
+        assert 'name="options_text"' not in resp.text
+
+    def test_number_hides_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=number"
+        )
+        assert resp.status_code == 200
+        assert 'name="options_text"' not in resp.text
+
+    def test_boolean_hides_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=boolean"
+        )
+        assert resp.status_code == 200
+        assert 'name="options_text"' not in resp.text
+
+    def test_blank_type_hides_options_textarea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/taxonomy/fields/_options-partial")
+        assert resp.status_code == 200
+        assert 'name="options_text"' not in resp.text
+
+    def test_options_text_round_trips(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(
+            "/admin/taxonomy/fields/_options-partial?type=select&options_text=9%0A14%0A18"
+        )
+        assert resp.status_code == 200
+        # Newlines round-trip via the textarea body so a user mid-edit
+        # doesn't lose typed options when flipping select <-> multiselect.
+        assert "9" in resp.text
+        assert "14" in resp.text
+        assert "18" in resp.text
+
+
+class TestFieldDefFormHtmxWiring:
+    """The field-def form's type ``<select>`` carries the HTMX attributes
+    that drive the options-partial swap."""
+
+    def test_new_form_type_select_has_htmx_get(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        node = _make_node(db_session)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/taxonomy/{node.id}/fields/new")
+        assert resp.status_code == 200
+        assert 'hx-get="/admin/taxonomy/fields/_options-partial"' in resp.text
+        assert 'hx-target="#fd-options-container"' in resp.text
+        assert 'id="fd-options-container"' in resp.text
+
+    def test_edit_form_with_select_field_pre_renders_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        node = _make_node(db_session)
+        fd = TaxonomyFieldDef(
+            node_id=node.id,
+            name="Karat",
+            key="karat",
+            type=FieldType.SELECT,
+            options_json=["9", "14", "18"],
+        )
+        db_session.add(fd)
+        db_session.commit()
+        db_session.refresh(fd)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/taxonomy/fields/{fd.id}/edit")
+        assert resp.status_code == 200
+        # Server-side render: select-typed field already has options visible
+        # without HTMX needing to fire.
+        assert 'name="options_text"' in resp.text
+        assert "9" in resp.text
+        assert "18" in resp.text
+
+    def test_edit_form_with_text_field_does_not_render_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        node = _make_node(db_session)
+        fd = TaxonomyFieldDef(
+            node_id=node.id,
+            name="Alloy",
+            key="alloy",
+            type=FieldType.TEXT,
+        )
+        db_session.add(fd)
+        db_session.commit()
+        db_session.refresh(fd)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/taxonomy/fields/{fd.id}/edit")
+        assert resp.status_code == 200
+        assert 'name="options_text"' not in resp.text
+        # Container still present so HTMX can swap when type is changed.
+        assert 'id="fd-options-container"' in resp.text

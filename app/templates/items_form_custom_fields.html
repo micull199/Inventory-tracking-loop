@@ -1,0 +1,82 @@
+{# Custom-field block for the items form. Rendered both as the static
+   server-side block on initial form load and as the HTMX swap target when
+   the user picks a different category in the dropdown.
+
+   Empty when ``field_defs`` is empty (no leaf picked yet, or leaf has no
+   active field defs) — the surrounding ``<div id="cf-container">`` stays
+   in the DOM so HTMX can target it again on the next change. #}
+{% if field_defs %}
+    <fieldset data-testid="item-custom-fields">
+        <legend>Category fields</legend>
+        {% for fd in field_defs %}
+            {% set fkey = fd.key %}
+            {% set fname = "cf_" ~ fkey %}
+            {% set fid = "cf-" ~ fkey %}
+            {% set tid_base = "item-cf-" ~ fkey %}
+            <p data-testid="item-cf-row" data-cf-key="{{ fkey }}">
+                {% if fd.type.value == "boolean" %}
+                    <label>
+                        <input type="checkbox" id="{{ fid }}" name="{{ fname }}"
+                               value="true"
+                               data-testid="{{ tid_base }}-input"
+                               {% if form.custom[fkey] %}checked{% endif %}
+                               {% if ro %}disabled{% endif %}>
+                        {{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}
+                    </label>
+                {% elif fd.type.value == "select" %}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <select id="{{ fid }}" name="{{ fname }}"
+                            {% if fd.required %}required{% endif %}
+                            data-testid="{{ tid_base }}-input"
+                            {% if ro %}disabled{% endif %}>
+                        <option value="">— pick one —</option>
+                        {% for opt in fd.options_json or [] %}
+                            <option value="{{ opt }}"
+                                    {% if form.custom[fkey] == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                {% elif fd.type.value == "multiselect" %}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <select id="{{ fid }}" name="{{ fname }}" multiple
+                            {% if fd.required %}required{% endif %}
+                            data-testid="{{ tid_base }}-input"
+                            {% if ro %}disabled{% endif %}>
+                        {% for opt in fd.options_json or [] %}
+                            <option value="{{ opt }}"
+                                    {% if opt in form.custom[fkey] %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                {% elif fd.type.value == "number" %}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <input type="number" step="1" id="{{ fid }}" name="{{ fname }}"
+                           value="{{ form.custom[fkey] }}"
+                           {% if fd.required %}required{% endif %}
+                           data-testid="{{ tid_base }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% elif fd.type.value == "decimal" %}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <input type="text" inputmode="decimal" id="{{ fid }}" name="{{ fname }}"
+                           value="{{ form.custom[fkey] }}"
+                           {% if fd.required %}required{% endif %}
+                           data-testid="{{ tid_base }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% elif fd.type.value == "date" %}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <input type="date" id="{{ fid }}" name="{{ fname }}"
+                           value="{{ form.custom[fkey] }}"
+                           {% if fd.required %}required{% endif %}
+                           data-testid="{{ tid_base }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% else %}
+                    {# Default: text. #}
+                    <label for="{{ fid }}">{{ fd.name }}{% if fd.required %} <span aria-hidden="true">*</span>{% endif %}</label><br>
+                    <input type="text" id="{{ fid }}" name="{{ fname }}"
+                           value="{{ form.custom[fkey] }}"
+                           {% if fd.required %}required{% endif %}
+                           data-testid="{{ tid_base }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% endif %}
+            </p>
+        {% endfor %}
+    </fieldset>
+{% endif %}

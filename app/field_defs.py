@@ -397,6 +397,7 @@ def new_field_def_form(
                 "sort_order": "",
             },
             "field_types": [t.value for t in FieldType],
+            "show_options": False,  # default type is TEXT — no options
             "title": f"New field on {node.name}",
             "action": f"/admin/taxonomy/{node.id}/fields",
             "back_url": _form_back_url(node),
@@ -479,6 +480,41 @@ def create_field_def(
 
 
 # ---------------------------------------------------------------------------
+# HTMX fragment: options textarea visibility per field type
+# ---------------------------------------------------------------------------
+
+
+@router.get("/fields/_options-partial", response_class=HTMLResponse)
+def options_partial(
+    request: Request,
+    type: str = "",
+    options_text: str = "",
+    _user: User = Depends(require_role(Role.MANAGER)),
+) -> HTMLResponse:
+    """HTMX fragment: options textarea, shown only for select / multiselect.
+
+    Wired to the field-def form's type ``<select>`` via ``hx-get`` /
+    ``hx-trigger="change"``. Returns a non-empty body (the options ``<p>``)
+    when the user picks select or multiselect; an empty body otherwise so
+    the textarea disappears from the form.
+
+    ``options_text`` round-trips any text the user already typed before
+    flipping types; if the user picks a non-select type, the textarea
+    vanishes and the value is dropped (server-side validation would 400 on
+    submit anyway). Manager-only — same gate as the form itself.
+    """
+    show_options = type in {t.value for t in _OPTIONS_TYPES}
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_field_def_options_partial.html",
+        {
+            "show_options": show_options,
+            "form": {"options_text": options_text},
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Edit / update
 # ---------------------------------------------------------------------------
 
@@ -518,6 +554,7 @@ def edit_field_def_form(
                 "sort_order": str(field.sort_order),
             },
             "field_types": [t.value for t in FieldType],
+            "show_options": field.type in _OPTIONS_TYPES,
             "title": f"Edit {field.name}",
             "action": f"/admin/taxonomy/fields/{field.id}",
             "back_url": _form_back_url(node),

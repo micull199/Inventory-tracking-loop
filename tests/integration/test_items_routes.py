@@ -3603,3 +3603,180 @@ class TestItemsListCsvLink:
             resp.text
         )
 
+
+
+class TestItemCustomFieldsFragmentRoute:
+    """``GET /admin/items/_custom-fields`` — HTMX fragment for category change.
+
+    Wired to the items form's category ``<select>``: when the user picks a
+    different category, the form fetches this endpoint and swaps the
+    ``#cf-container`` div's contents with the rendered partial. Same role
+    gating as the form (Manager / Office / Workshop; Admin always passes).
+    Closes the user-reported bug where picking a category in the new-item
+    form left the custom-field inputs stuck at whatever the initial
+    ``?node_id=`` query param produced (typically nothing).
+    """
+
+    def test_anon_blocked(self, client: TestClient) -> None:
+        resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=1")
+        assert resp.status_code == 401
+
+    def test_pending_blocked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(
+            db_session, email="p@x.test", role=None, status=UserStatus.PENDING
+        )
+        _login_as(client, u)
+        resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=1")
+        assert resp.status_code == 403
+
+    def test_manager_renders_partial_with_field_inputs(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+            required=True,
+        )
+        _make_field_def(
+            db_session, leaf, name="Karat", field_type=FieldType.SELECT,
+            options=["9", "14", "18"],
+        )
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+        # Both inputs render with their HTMX-friendly testids.
+        assert 'data-testid="item-cf-alloy-input"' in resp.text
+        assert 'data-testid="item-cf-karat-input"' in resp.text
+        # Required marker round-trips on the server-side render.
+        assert 'name="cf_alloy"' in resp.text
+        # The fieldset renders so the user sees a "Category fields" heading.
+        assert "Category fields" in resp.text
+        # No <html> wrapper — this is a fragment, not a full page.
+        assert "<!doctype" not in resp.text.lower()
+
+    def test_office_can_render_partial(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+        )
+        u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+
+    def test_workshop_can_render_partial(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        # Workshop sees the items edit form read-only, but ``hx-trigger`` won't
+        # fire on a disabled select; the permissive gate is just so a future
+        # role-widening of the form doesn't 403 here silently.
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+        )
+        u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+
+    def test_admin_always_passes(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+
+    def test_blank_node_id_returns_empty_body(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items/_custom-fields")
+        assert resp.status_code == 200
+        # No fieldset rendered when there's no leaf to inherit from.
+        assert "Category fields" not in resp.text
+        assert 'data-testid="item-custom-fields"' not in resp.text
+
+    def test_garbage_node_id_returns_empty_body(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=not-a-number")
+        assert resp.status_code == 200
+        assert "Category fields" not in resp.text
+
+    def test_unknown_node_id_returns_empty_body(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=9999")
+        assert resp.status_code == 200
+        assert "Category fields" not in resp.text
+
+    def test_leaf_with_no_field_defs_returns_empty_body(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert "Category fields" not in resp.text
+
+    def test_archived_field_def_excluded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        _make_field_def(
+            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+        )
+        _make_field_def(
+            db_session, leaf, name="Old", field_type=FieldType.TEXT,
+            archived=True,
+        )
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="item-cf-alloy-input"' in resp.text
+        assert 'data-testid="item-cf-old-input"' not in resp.text
+
+
+class TestItemFormHtmxWiring:
+    """The items form's category ``<select>`` carries the HTMX attributes that
+    drive the partial swap. Without these, the user picks a category and the
+    custom-field block never updates."""
+
+    def test_new_form_category_select_has_htmx_get(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get("/admin/items/new")
+        assert resp.status_code == 200
+        assert 'hx-get="/admin/items/_custom-fields"' in resp.text
+        assert 'hx-trigger="change"' in resp.text
+        assert 'hx-target="#cf-container"' in resp.text
+        # Wrapper div is always present, even when there are no fields.
+        assert 'id="cf-container"' in resp.text
+
+    def test_edit_form_category_select_has_htmx_get(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf)
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, u)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'hx-get="/admin/items/_custom-fields"' in resp.text
+        assert 'id="cf-container"' in resp.text

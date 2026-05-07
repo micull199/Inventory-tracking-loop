@@ -22,18 +22,23 @@
 
         <p>
             <label for="type">Type</label><br>
-            <select id="type" name="type" data-testid="field-def-type-input">
+            {# HTMX wiring: swap the options textarea in/out based on the
+               picked type. Server-side validation still rejects options
+               on non-select fields (defence in depth). #}
+            <select id="type" name="type" data-testid="field-def-type-input"
+                    hx-get="/admin/taxonomy/fields/_options-partial"
+                    hx-trigger="change"
+                    hx-target="#fd-options-container"
+                    hx-swap="innerHTML">
                 {% for t in field_types %}
                     <option value="{{ t }}" {% if form.type == t %}selected{% endif %}>{{ t }}</option>
                 {% endfor %}
             </select>
         </p>
 
-        <p>
-            <label for="options_text">Options (one per line — for select / multiselect only)</label><br>
-            <textarea id="options_text" name="options_text" rows="4" cols="40"
-                      data-testid="field-def-options-input">{{ form.options_text }}</textarea>
-        </p>
+        <div id="fd-options-container">
+            {% include "taxonomy_field_def_options_partial.html" %}
+        </div>
 
         <p>
             <label>
