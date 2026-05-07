@@ -10,7 +10,7 @@ Inventory tracking for UC's workshop and office. Tracks raw materials, consumabl
 
 - [Mission and scope](./MISSION.md) — single source of truth for what this app does and does not do.
 - [Build progress](./PROGRESS.md) — what's been built, what's next, what's stuck.
-- _TODO: changelog_
+- [Changelog](./CHANGELOG.md) — high-level "what shipped" log, one line per slice.
 - _TODO: deployed URL_
 
 ---
@@ -39,7 +39,7 @@ Not a job/order management system. Not an accounting integration. Not customer-f
 - **Templating:** Jinja2 + HTMX
 - **Database:** SQLite (dev), Postgres (prod), via SQLAlchemy + Alembic migrations
 - **Auth:** Google SSO via Authlib
-- **PDF:** _TODO (WeasyPrint or reportlab, decided during PO slice)_
+- **PDF:** reportlab (chosen during PO3; see `pyproject.toml` for the dep and `app/pdf.py` for the renderer).
 - **Email:** SMTP (console backend in dev)
 - **Background jobs:** APScheduler in-process
 - **Tests:** pytest + httpx, Playwright (Python) for end-to-end

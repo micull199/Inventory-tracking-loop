@@ -33,6 +33,18 @@ def _section(heading: str) -> str:
     return text[body_start:end]
 
 
+def _h2_section(heading: str) -> str:
+    """Return the body between ``## {heading}`` and the next ``## `` or end-of-doc."""
+    text = _README.read_text(encoding="utf-8")
+    marker = f"## {heading}"
+    start = text.find(marker)
+    assert start != -1, f"README missing section: {marker!r}"
+    body_start = start + len(marker)
+    next_h2 = text.find("\n## ", body_start)
+    end = next_h2 if next_h2 != -1 else len(text)
+    return text[body_start:end]
+
+
 class TestAddingANewSupplierSection:
     """DOC1 — pin the supplier walk-through against drift."""
 
@@ -522,4 +534,81 @@ class TestReadingAuditTrailSection:
         # workaround rather than leaving them to discover it.
         assert (
             "cmd+f" in lower or "ctrl+f" in lower or "cmd-f" in lower
+        )
+
+
+class TestQuickLinksAndTechStackTodoResolution:
+    """DOC9a — pin the Quick Links + Tech Stack ``_TODO`` resolutions against drift.
+
+    Two ``_TODO`` blocks were closed by DOC9a:
+
+    1. **Quick links → changelog**: ``CHANGELOG.md`` exists at repo root and is
+       now linked from the Quick links section.
+    2. **Tech stack → PDF library**: ``reportlab`` was chosen during PO3 (see
+       ``pyproject.toml`` dep + ``app/pdf.py`` renderer) — the README now names
+       the choice instead of carrying the original "WeasyPrint or reportlab"
+       placeholder.
+
+    Two ``_TODO`` blocks remain *intentionally* unresolved (deferred to P4 +
+    DOC10): the deployed-URL link in Quick links + the deploy target line in
+    Tech stack + the ``## Deployment`` section + the Contributing + License
+    footer. DOC9a does not pin the un-resolved ``_TODO``s so a future P4 / DOC10
+    can flip them without touching this test class.
+    """
+
+    def test_quick_links_changelog_link_resolved(self) -> None:
+        body = _h2_section("Quick links")
+        # The link must exist with the canonical ``[Changelog](./CHANGELOG.md)``
+        # markdown shape. A future PR that drops the link or renames the file
+        # without updating the link fails the first assertion.
+        assert "[Changelog](./CHANGELOG.md)" in body
+        # The placeholder must be gone. A future PR that adds the link
+        # without removing the ``_TODO`` placeholder fails the second
+        # assertion. Two-pin shape catches both forward-direction
+        # regressions (drop link / leave placeholder).
+        assert "_TODO: changelog" not in body
+
+    def test_tech_stack_pdf_library_resolved(self) -> None:
+        body = _h2_section("Tech stack")
+        # ``reportlab`` is the canonical lowercase library name (matches
+        # PyPI + the import path). Case-sensitive substring catches a
+        # future demotion to ``ReportLab`` / ``Reportlab`` that would
+        # mismatch the actual import / dep name.
+        assert "reportlab" in body
+        # The pre-resolution placeholder phrase must be gone. Same
+        # two-pin shape as ``test_quick_links_changelog_link_resolved``.
+        assert "_TODO (WeasyPrint or reportlab" not in body
+
+    def test_pdf_choice_matches_pyproject(self) -> None:
+        # Forces a docs update on a future swap of the PDF library: if
+        # ``pyproject.toml`` ever switches to ``weasyprint`` or removes
+        # ``reportlab``, the README would no longer match and this test
+        # fires. Same docs ↔ source consistency-pinning posture as A2's
+        # ``test_audit_coverage.py`` cross-cutting source-text sweep.
+        pyproject = (
+            Path(__file__).resolve().parents[2] / "pyproject.toml"
+        )
+        text = pyproject.read_text(encoding="utf-8").lower()
+        assert "reportlab" in text, (
+            "reportlab missing from pyproject.toml — README claims it is "
+            "the PDF library; either restore the dep or update README"
+        )
+        assert "weasyprint" not in text, (
+            "weasyprint present in pyproject.toml — README claims reportlab "
+            "is the chosen PDF library; either remove the weasyprint dep "
+            "or update README"
+        )
+
+    def test_changelog_file_exists_at_linked_path(self) -> None:
+        # Forces a docs update on a future PR that moves
+        # ``CHANGELOG.md`` without updating the README link (would be a
+        # broken-link regression in user-facing docs). Pinned at the
+        # exact path the README links to (``./CHANGELOG.md`` relative to
+        # the README, which is repo root).
+        changelog = (
+            Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+        )
+        assert changelog.exists(), (
+            "CHANGELOG.md missing at repo root — README links to "
+            "./CHANGELOG.md from Quick links but the file does not exist"
         )
