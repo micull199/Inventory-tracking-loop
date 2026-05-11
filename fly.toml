@@ -6,8 +6,8 @@
 # (Migrations run on machine start via scripts/fly-entrypoint.sh so they see
 # the mounted volume; that's why there's no release_command here.)
 
-app = "uc-inventory"
-primary_region = "lhr"
+app = "inventory-tracking-loop"
+primary_region = "syd"
 
 [build]
   dockerfile = "Dockerfile"
