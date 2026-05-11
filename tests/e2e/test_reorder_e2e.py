@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from playwright.sync_api import BrowserContext, Page, expect
 
+from tests.e2e.conftest import pick_item_category
+
 
 def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
@@ -94,6 +96,8 @@ def test_manager_reorder_dashboard_walk(context: BrowserContext, app_server: str
     # Category.
     mgr_page.goto(f"{app_server}/admin/taxonomy/new")
     mgr_page.get_by_test_id("taxonomy-name-input").fill("Reorder E2E Cat")
+    mgr_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("REO")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -101,7 +105,7 @@ def test_manager_reorder_dashboard_walk(context: BrowserContext, app_server: str
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("RD-LOW")
     mgr_page.get_by_test_id("item-name-input").fill("Low stock alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(label="Reorder E2E Cat")
+    pick_item_category(mgr_page, "Reorder E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-supplier-input").select_option(label="Reorder Bullion Co")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("10")
@@ -118,7 +122,7 @@ def test_manager_reorder_dashboard_walk(context: BrowserContext, app_server: str
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("RD-OK")
     mgr_page.get_by_test_id("item-name-input").fill("OK alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(label="Reorder E2E Cat")
+    pick_item_category(mgr_page, "Reorder E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-supplier-input").select_option(label="Reorder Bullion Co")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("10")

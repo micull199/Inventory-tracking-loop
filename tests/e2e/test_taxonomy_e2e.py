@@ -86,10 +86,13 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
     expect(mgr_page.get_by_test_id("taxonomy-empty")).to_be_visible()
 
-    # Step 7: Create "Raw Materials".
+    # Step 7: Create "Raw Materials" with archetype + sku_prefix (taxonomy
+    # refinement: top-level needs both at create time).
     mgr_page.get_by_test_id("new-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
     mgr_page.get_by_test_id("taxonomy-name-input").fill("Raw Materials")
+    mgr_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("RAW")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -122,10 +125,12 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.wait_for_url(lambda u: "/children" in u)
     expect(mgr_page.get_by_test_id("sub-empty")).to_be_visible()
 
-    # Step 12: Create a "Silver" sub-category.
+    # Step 12: Create a "Silver" sub-category (sku_prefix required;
+    # archetype is inherited from the top-level).
     mgr_page.get_by_test_id("new-sub-category").click()
     mgr_page.wait_for_url(lambda u: "/children/new" in u)
     mgr_page.get_by_test_id("taxonomy-name-input").fill("Silver")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("SIL")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/children"))
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Silver")
@@ -185,6 +190,17 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
     restored_karat = mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
     expect(restored_karat).to_be_visible()
+
+    # Step 21: Walk into the depth-2 grandchildren list (taxonomy refinement).
+    mgr_page.goto(f"{app_server}/admin/taxonomy")
+    raw_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Raw Materials")
+    raw_row.get_by_test_id("open-children").click()
+    mgr_page.wait_for_url(lambda u: "/children" in u and "show" not in u)
+    silver_row = mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
+    silver_row.get_by_test_id("open-grandchildren").click()
+    mgr_page.wait_for_url(lambda u: "/grandchildren" in u)
+    expect(mgr_page.get_by_test_id("grandchildren-heading")).to_be_visible()
+    expect(mgr_page.get_by_test_id("grandchildren-archetype-inherited")).to_contain_text("bulk")
 
     mgr_page.close()
     if mgr_context is not context:

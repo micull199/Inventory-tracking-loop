@@ -58,35 +58,61 @@
                            {% if ro %}disabled{% endif %}>
                 </div>
 
-                <div class="uc-field">
-                    <label class="uc-label" for="taxonomy_node_id">Category <span class="uc-required" aria-hidden="true">*</span></label>
-                    {# HTMX wiring: when the user picks a different category, fetch
-                       the leaf's custom-field schema and swap it into #cf-container.
-                       GET-only fragment endpoint, same role gating as the form. #}
-                    <select class="uc-select" id="taxonomy_node_id" name="taxonomy_node_id" required
-                            data-testid="item-category-input"
-                            hx-get="/admin/items/_custom-fields"
-                            hx-trigger="change"
-                            hx-target="#cf-container"
-                            hx-swap="innerHTML"
-                            {# On create, ask the fragment to also OOB-swap core
-                               defaults from the leaf's defaults_json. On edit, omit
-                               the flag so the existing item's typed values aren't
-                               silently overwritten when the user re-classifies. #}
-                            {% if not item %}hx-vals='{"include_defaults": "1"}'{% endif %}
-                            {% if ro %}disabled{% endif %}>
-                        <option value="">— pick a category —</option>
-                        {% for opt in leaf_options %}
-                            {% if opt.is_group %}
-                                <option disabled>── {{ opt.label }} (pick a sub-category) ──</option>
-                            {% else %}
-                                <option value="{{ opt.id }}"
-                                        {% if form.taxonomy_node_id == (opt.id | string) %}selected{% endif %}>
-                                    {{ opt.label }}
-                                </option>
-                            {% endif %}
-                        {% endfor %}
-                    </select>
+                {# Searchable, leaf-only category picker (taxonomy refinement, Agent 4).
+
+                   The hidden ``#taxonomy_node_id`` carries the actual id submitted with
+                   the form. The visible ``#taxonomy_node_search`` is a vanilla combobox
+                   driven by ``app/static/js/category-picker.js`` plus an HTMX-fed
+                   ``#taxonomy_node_results`` list. Selecting an option sets the hidden
+                   field's value and dispatches ``change``, which kicks off the existing
+                   ``_custom-fields`` HTMX chain (custom field schema + OOB-swap of
+                   per-leaf core defaults on create).
+
+                   ``data-current-breadcrumb`` is initialised from
+                   ``form_taxonomy_breadcrumb`` (route-side helper that resolves the
+                   currently-selected node's breadcrumb on edit / re-render) so the
+                   visible input shows the chosen breadcrumb on initial render. #}
+                <div class="uc-field" data-testid="item-category-picker">
+                    <label class="uc-label" for="taxonomy_node_search">Category <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input type="hidden" name="taxonomy_node_id" id="taxonomy_node_id"
+                           value="{{ form.taxonomy_node_id }}"
+                           data-testid="item-category-hidden"
+                           data-current-breadcrumb="{{ form_taxonomy_breadcrumb|default('') }}"
+                           {# Use the existing _custom-fields fragment endpoint as the
+                              picker's "on change" trigger so picking a category swaps
+                              custom-field inputs AND (on create) returns an OOB swap of
+                              core defaults + a ``#sku-preview`` next-SKU caption. #}
+                           hx-get="/admin/items/_custom-fields"
+                           hx-trigger="change"
+                           hx-target="#cf-container"
+                           hx-swap="innerHTML"
+                           {% if not item %}hx-vals='{"include_defaults": "1"}'{% endif %}>
+                    <input type="text" id="taxonomy_node_search"
+                           class="uc-input uc-picker-input"
+                           name="q"
+                           placeholder="Search categories..."
+                           autocomplete="off"
+                           role="combobox"
+                           aria-autocomplete="list"
+                           aria-expanded="false"
+                           aria-controls="taxonomy_node_results"
+                           value="{{ form_taxonomy_breadcrumb|default('') }}"
+                           data-testid="item-category-input"
+                           {# HTMX wires the search input directly to the partial route.
+                              The picker JS layers on click / keyboard nav / hide-on-pick
+                              behaviour around this; the search itself is HTMX-only so
+                              there's no debounced fetch logic to maintain in JS. #}
+                           hx-get="/admin/items/_category-search"
+                           hx-trigger="input changed delay:120ms, focus"
+                           hx-target="#taxonomy_node_results"
+                           hx-swap="innerHTML"
+                           {% if ro %}disabled{% endif %}>
+                    <ul id="taxonomy_node_results" role="listbox" class="uc-picker-results"
+                        data-testid="item-category-results"
+                        hidden>
+                        {% include "items_category_options_partial.html" %}
+                    </ul>
+                    <output id="sku-preview" data-testid="sku-preview" class="uc-sku-preview" for="taxonomy_node_id">{{ form_sku_preview|default('') }}</output>
                 </div>
             </section>
 
@@ -277,4 +303,6 @@
             {% endif %}
         </form>
     {% endcall %}
+
+    <script src="/static/js/category-picker.js" defer></script>
 {% endblock %}

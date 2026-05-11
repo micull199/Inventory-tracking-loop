@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from playwright.sync_api import BrowserContext, Page, expect
 
+from tests.e2e.conftest import pick_item_category
+
 
 def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
@@ -89,6 +91,8 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     mgr_page.get_by_test_id("new-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
     mgr_page.get_by_test_id("taxonomy-name-input").fill("Items E2E Cat")
+    mgr_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("ITE")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -146,7 +150,7 @@ def test_manager_creates_views_archives_and_unarchives_an_item(
     mgr_page.get_by_test_id("item-name-input").fill("Silver wire (e2e)")
     # Pick the leaf — HTMX fires on change, fetches the partial, swaps in
     # the custom-field inputs.
-    mgr_page.get_by_test_id("item-category-input").select_option(label="Items E2E Cat")
+    pick_item_category(mgr_page, "Items E2E Cat")
     # The fieldset and its inputs appear after the swap.
     expect(mgr_page.get_by_test_id("item-custom-fields")).to_be_visible()
     expect(mgr_page.get_by_test_id("item-cf-alloy-input")).to_be_visible()
@@ -311,6 +315,8 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
     admin_page.get_by_test_id("new-taxonomy").click()
     admin_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
     admin_page.get_by_test_id("taxonomy-name-input").fill("Admin Items E2E Cat")
+    admin_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    admin_page.get_by_test_id("taxonomy-sku-prefix-input").fill("ADM")
     admin_page.get_by_test_id("taxonomy-submit").click()
     admin_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -330,7 +336,7 @@ def test_admin_creates_qty_then_unique_item_end_to_end(
     # ("ADM-0001" from "Admin Items E2E Cat").
     expect(admin_page.get_by_test_id("item-sku-input")).to_be_visible()
     admin_page.get_by_test_id("item-name-input").fill("Admin item (e2e)")
-    admin_page.get_by_test_id("item-category-input").select_option(label="Admin Items E2E Cat")
+    pick_item_category(admin_page, "Admin Items E2E Cat")
     admin_page.get_by_test_id("item-unit-input").fill("ea")
     admin_page.get_by_test_id("item-submit").click()
     admin_page.wait_for_url(f"{app_server}/admin/items")

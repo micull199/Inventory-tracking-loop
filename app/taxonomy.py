@@ -1086,6 +1086,9 @@ def list_sub_categories(
             "parent": parent,
             "nodes": rows,
             "show": show,
+            "inherited_archetype": (
+                ea.value if (ea := effective_archetype(db, parent)) else None
+            ),
         },
     )
 

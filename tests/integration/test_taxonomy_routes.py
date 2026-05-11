@@ -2854,3 +2854,259 @@ class TestContainerOrLeafInvariant:
             follow_redirects=False,
         )
         assert resp.status_code == 400
+
+
+# ===========================================================================
+# Taxonomy refinement (Agent 4): grandchildren list template + form context
+# ===========================================================================
+
+
+class TestGrandchildrenListTemplate:
+    """``GET /admin/taxonomy/{parent_id}/sub/{sub_id}/grandchildren`` —
+    new depth-2 admin list page.
+
+    Mirrors the children-list shape: tabs, CSV link, per-row Edit/Archive.
+    Top of page shows ``Archetype: <value> (inherited)`` and back link
+    points at the depth-1 children list.
+    """
+
+    def test_renders_for_bulk_tree(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Silver", parent_id=top.id, sku_prefix="SIL")
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        leaf = TaxonomyNode(name="925", parent_id=sub.id, sku_prefix="925")
+        db_session.add(leaf)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren")
+        assert resp.status_code == 200
+        # Heading, table, back link, archetype label.
+        assert 'data-testid="grandchildren-heading"' in resp.text
+        assert 'data-testid="grandchildren-table"' in resp.text
+        assert "Raw Materials" in resp.text
+        assert "Silver" in resp.text
+        assert "925" in resp.text
+        assert 'data-testid="grandchildren-archetype-inherited"' in resp.text
+        assert "bulk" in resp.text
+        # Back link to the children list.
+        assert f"/admin/taxonomy/{top.id}/children" in resp.text
+
+    def test_renders_add_button_for_bulk(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(name="Raw", archetype=Archetype.BULK, sku_prefix="RAW")
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Silver", parent_id=top.id, sku_prefix="SIL")
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren")
+        assert resp.status_code == 200
+        assert 'data-testid="new-grandchild"' in resp.text
+
+    def test_renders_unique_variant_note_no_add_button(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Under a unique-variant tree, depth-2 leaves are auto-created on
+        item creation; manual creates are blocked. The template shows a
+        note instead of the "Add" button."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS"
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Emma", parent_id=top.id, sku_prefix="EM")
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren")
+        assert resp.status_code == 200
+        assert 'data-testid="grandchildren-unique-variant-note"' in resp.text
+        # The "+ New sub-sub-category" CTA is intentionally absent.
+        assert 'data-testid="new-grandchild"' not in resp.text
+
+    def test_renders_empty_state(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(name="Raw", archetype=Archetype.BULK, sku_prefix="RAW")
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Silver", parent_id=top.id, sku_prefix="SIL")
+        db_session.add(sub)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren")
+        assert resp.status_code == 200
+        assert 'data-testid="grandchildren-empty"' in resp.text
+
+
+class TestGrandchildrenFormTemplate:
+    """``GET /admin/taxonomy/{parent_id}/sub/{sub_id}/grandchildren/new`` —
+    re-uses ``taxonomy_form.html`` with depth=2.
+    """
+
+    def test_form_shows_archetype_inherited(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Silver", parent_id=top.id, sku_prefix="SIL")
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren/new"
+        )
+        assert resp.status_code == 200
+        # The shared template renders the inherited archetype block at
+        # depth > 0 instead of the archetype <select>.
+        assert 'data-testid="taxonomy-archetype-inherited"' in resp.text
+        assert 'data-testid="taxonomy-archetype-inherited-value"' in resp.text
+        assert "bulk" in resp.text
+        # SKU prefix input is required + editable on create.
+        assert 'data-testid="taxonomy-sku-prefix-input"' in resp.text
+        # Submit button labelled for depth 2.
+        assert "Create sub-sub-category" in resp.text
+
+
+class TestTaxonomyFormDepthRendering:
+    """The shared ``taxonomy_form.html`` template renders archetype +
+    sku_prefix differently by depth and lock state."""
+
+    def test_top_level_create_form_shows_archetype_select(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy/new")
+        assert resp.status_code == 200
+        # Top-level: archetype <select> is editable; sku_prefix input is editable.
+        assert 'data-testid="taxonomy-archetype-input"' in resp.text
+        assert 'data-testid="taxonomy-sku-prefix-input"' in resp.text
+        # Submit button reads "Create top-level category" at depth 0.
+        assert "Create top-level category" in resp.text
+
+    def test_top_level_edit_locks_when_items_exist(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(name="Tools", archetype=Archetype.BULK, sku_prefix="TOOL")
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        db_session.add(
+            Item(
+                sku="TOOL-0001",
+                name="A",
+                taxonomy_node_id=top.id,
+                unit="ea",
+                tracking_mode=TrackingMode.QTY,
+                assigned_sequence=1,
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/edit")
+        assert resp.status_code == 200
+        # Archetype + sku_prefix are locked (read-only spans, not editable
+        # inputs) because items exist under the tree.
+        assert 'data-testid="taxonomy-archetype-readonly"' in resp.text
+        assert 'data-testid="taxonomy-sku-prefix-readonly"' in resp.text
+        assert 'data-testid="taxonomy-archetype-input"' not in resp.text
+        assert 'data-testid="taxonomy-sku-prefix-input"' not in resp.text
+
+    def test_sub_category_form_shows_inherited_archetype(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS"
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/children/new")
+        assert resp.status_code == 200
+        assert 'data-testid="taxonomy-archetype-inherited"' in resp.text
+        assert "unique_variant" in resp.text
+        # No editable archetype select on depth-1.
+        assert 'data-testid="taxonomy-archetype-input"' not in resp.text
+        # Submit button labelled for depth 1.
+        assert "Create sub-category" in resp.text
+
+
+class TestTaxonomyListColumns:
+    """``GET /admin/taxonomy`` — list view shows new SKU prefix + Archetype
+    columns alongside the existing Name / Sub-categories cells."""
+
+    def test_list_shows_sku_prefix_and_archetype(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        db_session.add(
+            TaxonomyNode(
+                name="RTS Rings",
+                archetype=Archetype.UNIQUE_VARIANT,
+                sku_prefix="RTS",
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/taxonomy")
+        assert resp.status_code == 200
+        assert 'data-testid="taxonomy-sku-prefix"' in resp.text
+        assert "RTS" in resp.text
+        assert 'data-testid="taxonomy-archetype"' in resp.text
+        assert "unique_variant" in resp.text
+
+
+class TestSubCategoryListColumns:
+    """The children list now exposes per-row SKU prefix, an inherited
+    archetype label, and links the per-row "Manage" action at the
+    depth-2 grandchildren list."""
+
+    def test_children_list_shows_sku_prefix_and_inherited_archetype(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Silver", parent_id=top.id, sku_prefix="SIL")
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/taxonomy/{top.id}/children")
+        assert resp.status_code == 200
+        # Inherited-archetype banner at the top of the page.
+        assert 'data-testid="sub-archetype-inherited"' in resp.text
+        assert "bulk" in resp.text
+        # SKU prefix column shows the child's prefix.
+        assert 'data-testid="sub-sku-prefix"' in resp.text
+        assert "SIL" in resp.text
+        # "Manage" link routes at the depth-2 grandchildren list.
+        assert f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren" in resp.text

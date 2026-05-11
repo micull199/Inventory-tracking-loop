@@ -32,7 +32,9 @@
                 <thead>
                     <tr>
                         <th class="uc-right">Order</th>
+                        <th>SKU prefix</th>
                         <th>Name</th>
+                        <th>Archetype</th>
                         <th>Sub-categories</th>
                         <th class="uc-right">Actions</th>
                     </tr>
@@ -41,10 +43,18 @@
                     {% for n in nodes %}
                         <tr data-testid="taxonomy-row" data-node-id="{{ n.id }}">
                             <td class="uc-num uc-right" data-testid="taxonomy-sort-order">{{ n.sort_order }}</td>
+                            <td data-testid="taxonomy-sku-prefix"><code>{{ n.sku_prefix }}</code></td>
                             <td data-testid="taxonomy-name">
                                 {{ n.name }}
                                 {% if n.archived_at is not none %}
                                     {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td data-testid="taxonomy-archetype">
+                                {% if n.archetype %}
+                                    {{ c.pill(n.archetype.value) }}
+                                {% else %}
+                                    <span class="uc-muted">—</span>
                                 {% endif %}
                             </td>
                             <td>

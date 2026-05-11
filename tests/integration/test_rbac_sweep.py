@@ -159,6 +159,10 @@ ROUTES: list[tuple[str, str, str]] = [
     # but the permissive gate keeps a future widening of the form's
     # writable surface from silently 403'ing on the fragment.
     ("GET", "/admin/items/_custom-fields", WORKSHOP),
+    # HTMX fragment: leaf-only category picker search. Same permissive gate
+    # as ``_custom-fields`` so the picker renders + searches under all
+    # roles; the create POST itself is Manager-only.
+    ("GET", "/admin/items/_category-search", WORKSHOP),
     ("POST", "/admin/items", MANAGER),
     ("POST", "/admin/items/99999/archive", MANAGER),
     ("POST", "/admin/items/99999/unarchive", MANAGER),

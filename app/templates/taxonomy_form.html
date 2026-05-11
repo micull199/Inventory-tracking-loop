@@ -2,6 +2,12 @@
 {% import "_components.html" as c %}
 {% block title %}{{ title }} — UC Inventory{% endblock %}
 {% block content %}
+    {% set _depth = depth if depth is defined else 0 %}
+    {% set _archetype_locked = archetype_locked if archetype_locked is defined else false %}
+    {% set _sku_prefix_locked = sku_prefix_locked if sku_prefix_locked is defined else false %}
+    {% set _inherited_archetype = inherited_archetype if inherited_archetype is defined else none %}
+    {% set _archetype_options = archetype_options if archetype_options is defined else [] %}
+
     {% call c.page_header(title) %}
         <a class="uc-btn uc-btn--ghost" href="{{ back_url|default('/admin/taxonomy') }}" data-testid="taxonomy-back">&larr; Back</a>
     {% endcall %}
@@ -13,17 +19,48 @@
         </p>
     {% endif %}
 
+    {% if grandparent is defined and grandparent %}
+        <p data-testid="taxonomy-grandparent-context" class="uc-muted uc-mb-4">
+            Path:
+            <strong>{{ grandparent.name }} / {{ parent.name }}</strong>
+        </p>
+    {% endif %}
+
     {% call c.card() %}
         <form method="post" action="{{ action }}" data-testid="taxonomy-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            <section class="uc-section">
+            {# ---- Identity: Name, SKU prefix, Sort order ---- #}
+            <section class="uc-section" data-testid="taxonomy-identity">
+                <h3 class="uc-section-title">Identity</h3>
+
                 <div class="uc-field">
                     <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
                     <input class="uc-input" type="text" id="name" name="name" required
                            value="{{ form.name }}"
                            data-testid="taxonomy-name-input"
                            maxlength="255">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="sku_prefix">SKU prefix <span class="uc-required" aria-hidden="true">*</span></label>
+                    {% if _sku_prefix_locked %}
+                        <div class="uc-num uc-strong" data-testid="taxonomy-sku-prefix-readonly">
+                            {{ form.sku_prefix }}
+                            {{ c.pill("Locked") }}
+                        </div>
+                        <input type="hidden" name="sku_prefix" value="{{ form.sku_prefix }}">
+                        <small class="uc-helper">Locked: items have been created under this category.</small>
+                    {% else %}
+                        <input class="uc-input" type="text" id="sku_prefix" name="sku_prefix"
+                               value="{{ form.sku_prefix }}"
+                               data-testid="taxonomy-sku-prefix-input"
+                               pattern="[A-Za-z0-9]{1,8}"
+                               maxlength="8"
+                               placeholder="e.g. RTS, RAW, TOOL"
+                               required>
+                        <small class="uc-helper">Used to compose item SKUs. 1-8 letters or digits. Cannot be changed once items have been created under this category.</small>
+                    {% endif %}
                 </div>
 
                 <div class="uc-field">
@@ -35,6 +72,54 @@
                     <small class="uc-helper">Optional. Lower numbers appear first. Leave blank on a new entry to append it to the end (steps of 10).</small>
                 </div>
             </section>
+
+            {# ---- Archetype: depth 0 only ---- #}
+            {% if _depth == 0 %}
+                <section class="uc-section" data-testid="taxonomy-archetype">
+                    <h3 class="uc-section-title">Archetype</h3>
+                    <p class="uc-helper uc-mb-4">Governs how items in this tree behave. Cannot be changed once items have been created.</p>
+
+                    {% if _archetype_locked %}
+                        <div class="uc-field">
+                            <span class="uc-label">Archetype</span>
+                            <div class="uc-num uc-strong" data-testid="taxonomy-archetype-readonly">
+                                {{ form.archetype }}
+                                {{ c.pill("Locked") }}
+                            </div>
+                            <input type="hidden" name="archetype" value="{{ form.archetype }}">
+                            <small class="uc-helper">Locked: items exist under this category.</small>
+                        </div>
+                    {% else %}
+                        <div class="uc-field">
+                            <label class="uc-label" for="archetype">Archetype <span class="uc-required" aria-hidden="true">*</span></label>
+                            <select class="uc-select" id="archetype" name="archetype" required
+                                    data-testid="taxonomy-archetype-input">
+                                <option value="">— pick one —</option>
+                                {% for a in _archetype_options %}
+                                    <option value="{{ a }}"
+                                            {% if form.archetype == a %}selected{% endif %}>{{ a }}</option>
+                                {% endfor %}
+                            </select>
+                            <ul class="uc-helper" style="margin: var(--s-2) 0 0; padding-left: 1.2em;">
+                                <li><strong>unique</strong>: one-of-a-kind items. Used for handmade or commissioned pieces with no design family.</li>
+                                <li><strong>bulk</strong>: quantity-tracked stock. Used for findings, packaging, consumables.</li>
+                                <li><strong>unique_variant</strong>: design family where each piece is unique. Auto-numbered. Requires a three-level taxonomy.</li>
+                            </ul>
+                        </div>
+                    {% endif %}
+                </section>
+            {% elif _inherited_archetype %}
+                <section class="uc-section" data-testid="taxonomy-archetype-inherited">
+                    <div class="uc-field">
+                        <span class="uc-label">Archetype</span>
+                        <div class="uc-num" data-testid="taxonomy-archetype-inherited-value">
+                            {{ _inherited_archetype }}
+                            {{ c.pill("inherited") }}
+                        </div>
+                        <small class="uc-helper">Inherited from the top-level category. Cannot be changed here.</small>
+                    </div>
+                </section>
+            {% endif %}
 
             {# Per-category defaults — pre-fill the items create form for items
                that live on this leaf. All optional. Leaving everything blank
@@ -122,7 +207,15 @@
 
             {% call c.form_actions() %}
                 <button class="uc-btn uc-btn--primary" type="submit" data-testid="taxonomy-submit">
-                    {% if node %}Save changes{% else %}{% if parent %}Create sub-category{% else %}Create category{% endif %}{% endif %}
+                    {% if node %}
+                        Save changes
+                    {% elif _depth == 2 %}
+                        Create sub-sub-category
+                    {% elif _depth == 1 %}
+                        Create sub-category
+                    {% else %}
+                        Create top-level category
+                    {% endif %}
                 </button>
                 <a class="uc-btn uc-btn--secondary" href="{{ back_url|default('/admin/taxonomy') }}">Cancel</a>
             {% endcall %}

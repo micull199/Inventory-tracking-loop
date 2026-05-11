@@ -25,6 +25,33 @@ from pathlib import Path
 import pytest
 
 
+def pick_item_category(page: object, label: str) -> None:
+    """Pick an item-form category by breadcrumb label via the new picker.
+
+    The pre-refinement items form used a ``<select>`` element so e2e tests
+    called ``select_option(label=...)``. The taxonomy refinement replaces
+    that with a vanilla searchable combobox (see
+    ``app/templates/items_form.html`` + ``app/static/js/category-picker.js``).
+    Pickign now means: focus the search input, type the breadcrumb, click
+    the resulting ``<li role="option">``. This helper hides those steps
+    from individual e2e tests.
+
+    The picker fires HTMX on input changes; tests should already be running
+    against a real uvicorn so the fetch lands.
+    """
+    # Import here so callers that don't use the picker don't pull Playwright.
+    from playwright.sync_api import expect
+
+    search = page.get_by_test_id("item-category-input")
+    search.click()
+    search.fill(label)
+    option = page.locator(
+        f'[data-testid="item-category-option"][data-breadcrumb="{label}"]'
+    ).first
+    expect(option).to_be_visible()
+    option.click()
+
+
 def _wait_for_port(host: str, port: int, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

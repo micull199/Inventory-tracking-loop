@@ -39,6 +39,8 @@ from __future__ import annotations
 
 from playwright.sync_api import BrowserContext, Page, expect
 
+from tests.e2e.conftest import pick_item_category
+
 _E2E_QR_PAYLOAD = "E2E-CAM-PAYLOAD"
 
 # Stub injected before any other script runs on every new document in the
@@ -168,13 +170,15 @@ def test_workshop_scans_via_camera_on_mobile_viewport(
     mgr_page.get_by_test_id("new-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
     mgr_page.get_by_test_id("taxonomy-name-input").fill("Camera E2E Cat")
+    mgr_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("CAM")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("SC2C-CAM-001")
     mgr_page.get_by_test_id("item-name-input").fill("Camera test item")
-    mgr_page.get_by_test_id("item-category-input").select_option(label="Camera E2E Cat")
+    pick_item_category(mgr_page, "Camera E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("ea")
     mgr_page.get_by_test_id("item-qr-input").fill(_E2E_QR_PAYLOAD)
     mgr_page.get_by_test_id("item-submit").click()

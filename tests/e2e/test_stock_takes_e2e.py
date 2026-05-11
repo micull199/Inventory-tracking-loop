@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from playwright.sync_api import BrowserContext, Page, expect
 
+from tests.e2e.conftest import pick_item_category
+
 
 def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
@@ -105,6 +107,8 @@ def test_office_schedules_a_stock_take(context: BrowserContext, app_server: str)
     mgr_page.get_by_test_id("new-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy/new")
     mgr_page.get_by_test_id("taxonomy-name-input").fill("ST1 Materials")
+    mgr_page.get_by_test_id("taxonomy-archetype-input").select_option("bulk")
+    mgr_page.get_by_test_id("taxonomy-sku-prefix-input").fill("STM")
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -114,7 +118,7 @@ def test_office_schedules_a_stock_take(context: BrowserContext, app_server: str)
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("ST2-E2E-001")
     mgr_page.get_by_test_id("item-name-input").fill("Casting wax")
-    mgr_page.get_by_test_id("item-category-input").select_option(label="ST1 Materials")
+    pick_item_category(mgr_page, "ST1 Materials")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")

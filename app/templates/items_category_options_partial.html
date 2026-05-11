@@ -1,0 +1,31 @@
+{# Items category picker option list.
+
+   Rendered both inline by the New / Edit Item form (initial load) and by the
+   ``/admin/items/_category-search`` HTMX fragment route as the user types in
+   the picker search box.
+
+   Each ``<li>`` is a leaf-destination (or a depth-1 unique-variant sub-cat)
+   with all the data the picker JS needs: numeric id, formatted breadcrumb,
+   effective archetype label, and the sku_prefix. The picker JS reads these
+   ``data-*`` attributes on click (or Enter) to populate the hidden
+   ``#taxonomy_node_id`` input, mirror the breadcrumb into the visible search
+   box, and trigger the ``_custom-fields`` HTMX chain. #}
+
+{% if pickable_options %}
+    {% for opt in pickable_options %}
+        <li role="option" data-id="{{ opt.id }}"
+            id="taxonomy-opt-{{ opt.id }}"
+            data-breadcrumb="{{ opt.breadcrumb }}"
+            data-archetype="{{ opt.archetype or '' }}"
+            data-sku-prefix="{{ opt.sku_prefix }}"
+            data-testid="item-category-option"
+            tabindex="-1">
+            <span class="uc-picker-breadcrumb">{{ opt.breadcrumb }}</span>
+            <span class="uc-picker-meta">{{ opt.archetype or 'bulk' }}</span>
+        </li>
+    {% endfor %}
+{% else %}
+    <li class="uc-picker-empty" data-testid="item-category-empty" role="option" aria-disabled="true">
+        <em>No matching categories.</em>
+    </li>
+{% endif %}

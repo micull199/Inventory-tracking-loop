@@ -20,6 +20,19 @@
 
 {% set oob = oob_keys if oob_keys is defined else [] %}
 
+{# SKU preview OOB swap (taxonomy refinement, Agent 4): when the create form
+   asks for defaults, the route resolves the picked leaf to its server-side
+   "next SKU" string. HTMX lifts this ``<output>`` element out of the
+   response and swaps it into the form's static ``#sku-preview`` placeholder
+   so the user sees what the server will allocate at POST time. The caption
+   is empty for non-pickable / archived / data-integrity-broken ids; the
+   ``hx-swap-oob`` swap still fires so a previously-set caption clears. #}
+{% if sku_preview_oob is defined and sku_preview_oob %}
+    <output id="sku-preview" data-testid="sku-preview" class="uc-sku-preview"
+            for="taxonomy_node_id"
+            hx-swap-oob="true">{{ sku_preview_caption or '' }}</output>
+{% endif %}
+
 {% if "unit" in oob %}
     <input class="uc-input" type="text" id="unit" name="unit" required
            value="{{ form.unit }}"

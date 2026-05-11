@@ -2,6 +2,7 @@
 {% import "_components.html" as c %}
 {% block title %}{{ parent.name }} — Sub-categories — UC Inventory{% endblock %}
 {% block content %}
+    {% set _inherited = inherited_archetype if inherited_archetype is defined else none %}
     <p><a href="/admin/taxonomy" data-testid="taxonomy-back">&larr; Back to categories</a></p>
 
     {% call c.page_header(
@@ -13,6 +14,12 @@
             {{ c.button("+ New sub-category", href="/admin/taxonomy/" ~ parent.id ~ "/children/new", testid="new-sub-category") }}
         {% endif %}
     {% endcall %}
+
+    {% if _inherited %}
+        <p class="uc-muted uc-mb-4" data-testid="sub-archetype-inherited">
+            Archetype: <strong>{{ _inherited }}</strong> {{ c.pill("inherited") }}
+        </p>
+    {% endif %}
 
     {% if parent.archived_at %}
         <p data-testid="parent-archived-note" class="uc-muted">
@@ -42,6 +49,7 @@
                 <thead>
                     <tr>
                         <th class="uc-right">Order</th>
+                        <th>SKU prefix</th>
                         <th>Name</th>
                         <th class="uc-right">Actions</th>
                     </tr>
@@ -50,6 +58,7 @@
                     {% for n in nodes %}
                         <tr data-testid="sub-row" data-node-id="{{ n.id }}">
                             <td class="uc-num uc-right" data-testid="sub-sort-order">{{ n.sort_order }}</td>
+                            <td data-testid="sub-sku-prefix"><code>{{ n.sku_prefix }}</code></td>
                             <td data-testid="sub-name">
                                 {{ n.name }}
                                 {% if n.archived_at is not none %}
@@ -57,6 +66,7 @@
                                 {% endif %}
                             </td>
                             <td class="uc-actions">
+                                <a href="/admin/taxonomy/{{ parent.id }}/sub/{{ n.id }}/grandchildren" data-testid="open-grandchildren">Manage</a>
                                 <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-sub-fields">Fields</a>
                                 <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-sub">Edit</a>
                                 {% if n.archived_at is none %}

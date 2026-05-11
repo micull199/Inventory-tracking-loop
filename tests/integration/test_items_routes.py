@@ -4107,3 +4107,210 @@ class TestListFilterDescendantTree:
         assert resp.status_code == 200
         assert "RTS-EM-001" in resp.text
         assert "RTS-EM-002" in resp.text
+
+
+# ===========================================================================
+# Taxonomy refinement (Agent 4): searchable picker + SKU preview
+# ===========================================================================
+
+
+class TestCategorySearchFragment:
+    """``GET /admin/items/_category-search`` — leaf-picker HTMX search.
+
+    The picker JS layers click + keyboard nav over an HTMX-fed result list.
+    The fragment route filters pickable options by a case-insensitive
+    substring against the breadcrumb. Cap of 20 results per request.
+    """
+
+    def test_returns_partial_with_leaf_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Raw Materials")
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/_category-search")
+        assert resp.status_code == 200
+        # Each option is a list item with the picker data attributes used by
+        # the JS to populate the hidden id + visible breadcrumb on click.
+        assert 'data-testid="item-category-option"' in resp.text
+        assert f'data-id="{leaf.id}"' in resp.text
+        assert 'data-breadcrumb="Raw Materials"' in resp.text
+
+    def test_filters_by_breadcrumb_substring(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Two top-level bulk leaves with very different breadcrumbs so a
+        # substring match is unambiguous.
+        _make_leaf(db_session, "Findings")
+        rings = _make_leaf(db_session, "Cast Rings")
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/_category-search?q=ring")
+        assert resp.status_code == 200
+        # Only "Cast Rings" matches "ring" (case-insensitive substring).
+        assert "Cast Rings" in resp.text
+        assert "Findings" not in resp.text
+        assert f'data-id="{rings.id}"' in resp.text
+
+    def test_empty_query_returns_all_up_to_limit(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        # Seed > 20 active leaves; the route caps at 20.
+        for i in range(25):
+            db_session.add(
+                TaxonomyNode(
+                    name=f"Leaf {i:02d}",
+                    sku_prefix=f"L{i:02d}",
+                    archetype=Archetype.BULK,
+                )
+            )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/_category-search")
+        assert resp.status_code == 200
+        # 20 options max — count distinct row testids.
+        count = resp.text.count('data-testid="item-category-option"')
+        assert count == 20
+
+    def test_empty_match_renders_empty_state(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _make_leaf(db_session, "Raw Materials")
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/_category-search?q=zzzzzzzzz-no-match")
+        assert resp.status_code == 200
+        assert 'data-testid="item-category-empty"' in resp.text
+
+    def test_anonymous_is_401(self, client: TestClient) -> None:
+        resp = client.get("/admin/items/_category-search")
+        assert resp.status_code == 401
+
+
+class TestNewItemFormCategoryPicker:
+    """The New Item form renders the searchable picker container."""
+
+    def test_new_form_renders_picker(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _make_leaf(db_session, "Raw Materials")
+        _login_as(client, mgr)
+        resp = client.get("/admin/items/new")
+        assert resp.status_code == 200
+        # The picker container, search input, results list, and SKU preview
+        # all appear so the JS can find them.
+        assert 'data-testid="item-category-picker"' in resp.text
+        assert 'id="taxonomy_node_search"' in resp.text
+        assert 'id="taxonomy_node_results"' in resp.text
+        assert 'data-testid="item-category-results"' in resp.text
+        assert 'data-testid="sku-preview"' in resp.text
+        # Picker script is linked.
+        assert "/static/js/category-picker.js" in resp.text
+
+
+class TestSkuPreviewOnCustomFieldsFragment:
+    """``GET /admin/items/_custom-fields?include_defaults=1`` emits an OOB
+    swap for ``#sku-preview`` with the next-SKU caption for the picked leaf.
+
+    Mirrors ``_allocate_sku`` minus the increment — the preview is a guess
+    shown before submit; the actual SKU is allocated atomically in POST.
+    """
+
+    def test_preview_for_bulk_leaf(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Tools")
+        leaf.sku_prefix = "TOOL"
+        leaf.archetype = Archetype.BULK
+        leaf.next_sequence = 8
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        # OOB swap for sku-preview present with the composed caption.
+        assert 'id="sku-preview"' in resp.text
+        assert 'hx-swap-oob="true"' in resp.text
+        assert "Next SKU: TOOL-0008" in resp.text
+
+    def test_preview_for_unique_archetype(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = TaxonomyNode(
+            name="Commissioned",
+            archetype=Archetype.UNIQUE,
+            sku_prefix="COMM",
+            next_sequence=3,
+        )
+        db_session.add(leaf)
+        db_session.commit()
+        db_session.refresh(leaf)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        assert "Next SKU: COMM-0003" in resp.text
+
+    def test_preview_for_unique_variant(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(name="RTS", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS")
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(
+            name="Emma", parent_id=top.id, sku_prefix="EM", next_sequence=7
+        )
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields?taxonomy_node_id={sub.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        # 3-segment unique-variant SKU: <root>-<sub>-<NNN>.
+        assert "Next SKU: RTS-EM-007" in resp.text
+
+    def test_preview_omitted_without_include_defaults(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """On edit (no ``include_defaults`` flag), the fragment does not emit
+        a preview OOB swap — SKU is immutable post-create."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Tools")
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
+        assert resp.status_code == 200
+        # No OOB swap for #sku-preview when include_defaults flag is absent.
+        # The custom-fields swap itself may still emit hx-swap-oob elements
+        # for core defaults, so we check for the sku-preview id specifically.
+        assert 'id="sku-preview"' not in resp.text
+
+    def test_preview_blank_for_non_pickable_node(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A depth-0 unique-variant node is not pickable (need a depth-1
+        sub-cat). The preview caption is blank but the OOB swap still fires
+        to clear any prior preview."""
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="RTS",
+            archetype=Archetype.UNIQUE_VARIANT,
+            sku_prefix="RTS",
+            next_sequence=1,
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        _login_as(client, mgr)
+        resp = client.get(
+            f"/admin/items/_custom-fields?taxonomy_node_id={top.id}&include_defaults=1"
+        )
+        assert resp.status_code == 200
+        # OOB element still present (so a prior caption clears) but empty.
+        assert 'id="sku-preview"' in resp.text
+        assert "Next SKU:" not in resp.text

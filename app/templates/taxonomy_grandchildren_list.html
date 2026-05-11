@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ parent.name }} — Sub-sub-categories — UC Inventory{% endblock %}
+{% block content %}
+    {% set _inherited = inherited_archetype if inherited_archetype is defined else none %}
+    {% set _is_unique_variant = _inherited == "unique_variant" %}
+
+    <p>
+        <a href="/admin/taxonomy/{{ grandparent.id }}/children" data-testid="grandchildren-back">
+            &larr; Back to {{ grandparent.name }} / {{ parent.name }}
+        </a>
+    </p>
+
+    {% call c.page_header(
+        "Sub-sub-categories of " ~ parent.name,
+        subtitle="Depth-2 categories under " ~ grandparent.name ~ " / " ~ parent.name ~ ".",
+        heading_testid="grandchildren-heading"
+    ) %}
+        {% if not parent.archived_at and not _is_unique_variant %}
+            {{ c.button(
+                "+ New sub-sub-category",
+                href="/admin/taxonomy/" ~ grandparent.id ~ "/sub/" ~ parent.id ~ "/grandchildren/new",
+                testid="new-grandchild",
+            ) }}
+        {% endif %}
+    {% endcall %}
+
+    {% if _inherited %}
+        <p class="uc-muted uc-mb-4" data-testid="grandchildren-archetype-inherited">
+            Archetype: <strong>{{ _inherited }}</strong> {{ c.pill("inherited") }}
+        </p>
+    {% endif %}
+
+    {% if _is_unique_variant %}
+        <p class="uc-helper uc-mb-4" data-testid="grandchildren-unique-variant-note">
+            <em>Sub-sub-categories under unique-variant trees are created automatically when items are added.</em>
+        </p>
+    {% endif %}
+
+    {% if parent.archived_at %}
+        <p data-testid="grandparent-archived-note" class="uc-muted">
+            <em>This sub-category is archived. Existing sub-sub-categories remain editable, but new ones cannot be added.</em>
+        </p>
+    {% endif %}
+
+    <nav class="uc-tabs" aria-label="Filter sub-sub-categories" data-testid="grandchildren-tabs">
+        <a href="/admin/taxonomy/{{ grandparent.id }}/sub/{{ parent.id }}/grandchildren?show=active"
+           data-testid="grandchildren-tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/taxonomy/{{ grandparent.id }}/sub/{{ parent.id }}/grandchildren?show=archived"
+           data-testid="grandchildren-tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    <div class="uc-toolbar">
+        <span class="uc-toolbar-spacer"></span>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="grandchildren-csv-link"
+           href="/admin/taxonomy/{{ grandparent.id }}/sub/{{ parent.id }}/grandchildren?format=csv&amp;show={{ show }}">Download CSV</a>
+    </div>
+
+    {% if nodes %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="grandchildren-table">
+                <thead>
+                    <tr>
+                        <th class="uc-right">Order</th>
+                        <th>SKU prefix</th>
+                        <th>Name</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for n in nodes %}
+                        <tr data-testid="grandchild-row" data-node-id="{{ n.id }}">
+                            <td class="uc-num uc-right" data-testid="grandchild-sort-order">{{ n.sort_order }}</td>
+                            <td data-testid="grandchild-sku-prefix"><code>{{ n.sku_prefix }}</code></td>
+                            <td data-testid="grandchild-name">
+                                {{ n.name }}
+                                {% if n.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-actions">
+                                <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-grandchild-fields">Fields</a>
+                                <a href="/admin/taxonomy/sub/{{ n.id }}/edit" data-testid="edit-grandchild">Edit</a>
+                                {% if n.archived_at is none %}
+                                    <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-grandchild">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/taxonomy/sub/{{ n.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-grandchild">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="grandchildren-empty">
+            {{ c.empty_state(
+                "No archived sub-sub-categories" if show == "archived" else "No sub-sub-categories yet",
+                "" if show == "archived" or _is_unique_variant else "Create your first sub-sub-category above to get started."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

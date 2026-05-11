@@ -701,6 +701,83 @@ def _pickable_options(db: Session, *, current_id: int | None = None) -> list[dic
 _leaf_options = _pickable_options
 
 
+def _breadcrumb_for_form(db: Session, taxonomy_node_id: str | int | None) -> str:
+    """Resolve a node id to its breadcrumb for the items form picker.
+
+    Used by the form template to pre-populate the visible
+    ``#taxonomy_node_search`` input on edit / re-render. Empty / unparseable
+    / missing ids return an empty string so the picker starts blank.
+    """
+    if taxonomy_node_id is None or taxonomy_node_id == "":
+        return ""
+    try:
+        parsed = int(taxonomy_node_id)
+    except (TypeError, ValueError):
+        return ""
+    if parsed <= 0:
+        return ""
+    node = db.get(TaxonomyNode, parsed)
+    if node is None:
+        return ""
+    return _node_breadcrumb(db, node)
+
+
+def _compose_sku_preview(db: Session, picked: TaxonomyNode) -> str:
+    """Compose a non-allocating SKU preview for the items form.
+
+    Mirrors ``_allocate_sku`` but reads ``next_sequence`` directly without
+    incrementing — the preview is a guess shown to the user before submit,
+    not an allocation. The actual SKU is allocated atomically inside the
+    POST handler's transaction.
+
+    Returns ``""`` if the node is missing an archetype (data integrity) or
+    is not a valid destination for its archetype. The caller maps the empty
+    string to "no preview" in the template.
+    """
+    archetype = effective_archetype(db, picked)
+    if archetype is None:
+        return ""
+    if archetype == Archetype.UNIQUE_VARIANT:
+        # Allocator lives on the depth-1 sub-cat; depth-2 auto-leaf does not
+        # exist yet at preview time. Mirror ``_allocate_sku``'s shape: chain
+        # is [root, sub] then synthesise the leaf's ``f"{seq:03d}"`` prefix.
+        if node_depth(db, picked) != 1:
+            return ""
+        seq = picked.next_sequence
+        chain = ancestor_chain(db, picked)
+        prefixes = [n.sku_prefix for n in chain] + [f"{seq:03d}"]
+        return compose_sku(prefixes, seq, archetype)
+    # bulk / unique: peek at the leaf's next_sequence and compose.
+    seq = picked.next_sequence
+    chain = ancestor_chain(db, picked)
+    prefixes = [n.sku_prefix for n in chain]
+    return compose_sku(prefixes, seq, archetype)
+
+
+def _sku_preview_for_form(db: Session, taxonomy_node_id: str | int | None) -> str:
+    """Render-ready SKU preview string for the items form.
+
+    Returns ``""`` when no node is picked yet (so the ``<output>`` element
+    starts empty). Otherwise returns ``"Next SKU: <sku>"`` for the picker's
+    selected node.
+    """
+    if taxonomy_node_id is None or taxonomy_node_id == "":
+        return ""
+    try:
+        parsed = int(taxonomy_node_id)
+    except (TypeError, ValueError):
+        return ""
+    if parsed <= 0:
+        return ""
+    node = db.get(TaxonomyNode, parsed)
+    if node is None:
+        return ""
+    composed = _compose_sku_preview(db, node)
+    if not composed:
+        return ""
+    return f"Next SKU: {composed}"
+
+
 def _supplier_options(db: Session, *, current_id: int | None = None) -> list[dict[str, Any]]:
     """Active suppliers + the assigned archived row (with "(archived)" suffix) if any."""
     rows = list(
@@ -1256,6 +1333,8 @@ def new_item_form(
             "can_edit_thresholds": True,
             "can_save": True,
             "field_defs": field_defs,
+            "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form["taxonomy_node_id"]),
+            "form_sku_preview": _sku_preview_for_form(db, form["taxonomy_node_id"]),
         },
     )
 
@@ -1317,6 +1396,16 @@ def custom_fields_fragment(
             if leaf.defaults_json.get("requires_checkout") is True:
                 oob_keys.add("requires_checkout")
     form["custom"] = _form_for_custom_fields(field_defs, {})
+    # SKU preview OOB swap: when the create form posts a category change, also
+    # update the ``#sku-preview`` caption alongside the custom-fields swap so
+    # the user sees the server-allocated SKU shape for the picked leaf. On
+    # edit (``include_defaults`` omitted) the SKU is already fixed, so no
+    # preview is emitted; the form's static empty ``<output>`` stays empty.
+    sku_preview_caption = ""
+    if include_defaults == "1" and leaf is not None:
+        composed = _compose_sku_preview(db, leaf)
+        if composed:
+            sku_preview_caption = f"Next SKU: {composed}"
     return templates.TemplateResponse(
         request,
         "items_form_custom_fields.html",
@@ -1328,7 +1417,47 @@ def custom_fields_fragment(
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
+            "sku_preview_oob": include_defaults == "1",
+            "sku_preview_caption": sku_preview_caption,
         },
+    )
+
+
+_PICKER_RESULTS_LIMIT = 20
+
+
+@router.get("/_category-search", response_class=HTMLResponse)
+def category_search(
+    request: Request,
+    q: str = "",
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """HTMX fragment: filtered pickable-options list for the items form picker.
+
+    The leaf-only searchable picker (taxonomy refinement, Agent 4) replaces
+    the previous ``<select>``-based category dropdown. As the user types in
+    ``#taxonomy_node_search`` the JS dispatches an HTMX request here; this
+    route returns the matching ``<li>`` rows that swap into
+    ``#taxonomy_node_results``.
+
+    Matching is a case-insensitive substring against the breadcrumb (e.g.
+    ``"emma"`` matches ``"RTS Rings / Emma"``). Empty query returns the
+    first ``_PICKER_RESULTS_LIMIT`` options in sort order.
+
+    Same permissive role gating as ``_custom-fields`` (Manager + Office +
+    Workshop): the picker shows up on the read-only Workshop view too;
+    submit-time auth is enforced by the POST handlers.
+    """
+    query = (q or "").strip().lower()
+    options = _pickable_options(db)
+    if query:
+        options = [opt for opt in options if query in str(opt["breadcrumb"]).lower()]
+    options = options[:_PICKER_RESULTS_LIMIT]
+    return templates.TemplateResponse(
+        request,
+        "items_category_options_partial.html",
+        {"pickable_options": options},
     )
 
 
@@ -1401,6 +1530,8 @@ async def create_item(
                 "can_save": True,
                 "field_defs": view_field_defs,
                 "error": error,
+                "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
+                "form_sku_preview": _sku_preview_for_form(db, form_view["taxonomy_node_id"]),
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -1544,6 +1675,10 @@ def edit_item_form(
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
             "field_defs": field_defs,
+            "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, item.taxonomy_node_id),
+            # Edit form does not preview a "next SKU" — SKU is already
+            # allocated and immutable.
+            "form_sku_preview": "",
         },
     )
 
@@ -1624,6 +1759,8 @@ async def update_item(
                 "can_save": can_save,
                 "field_defs": view_field_defs,
                 "error": error,
+                "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
+                "form_sku_preview": "",
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
