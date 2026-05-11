@@ -109,7 +109,7 @@ def index(
         {
             "current_user": current_user,
             "dev_login_enabled": settings.app_env in {"dev", "test"},
-            "dev_login_email": settings.bootstrap_admin_email or "",
+            "dev_login_email": "dev@dev.com",
         },
     )
 
