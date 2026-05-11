@@ -30,8 +30,16 @@ def db() -> Iterator[Session]:
         yield session
 
 
-def _node(db: Session, name: str = "Tools") -> TaxonomyNode:
-    n = TaxonomyNode(name=name)
+def _node(
+    db: Session, name: str = "Tools", sku_prefix: str | None = None
+) -> TaxonomyNode:
+    # ``sku_prefix`` defaults to the name-derived value; callers that build
+    # multiple sibling nodes from similar names must pass an explicit
+    # value to dodge the partial unique index on ``(sku_prefix)``.
+    kwargs: dict[str, object] = {"name": name}
+    if sku_prefix is not None:
+        kwargs["sku_prefix"] = sku_prefix
+    n = TaxonomyNode(**kwargs)
     db.add(n)
     db.commit()
     db.refresh(n)
@@ -45,7 +53,8 @@ def _item(
     name: str = "Mould",
     tracking_mode: TrackingMode = TrackingMode.UNIQUE,
 ) -> Item:
-    node = _node(db, name=f"Cat-{sku}")
+    alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    node = _node(db, name=f"Cat-{sku}", sku_prefix=alnum)
     item = Item(
         sku=sku,
         name=name,

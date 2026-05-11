@@ -41,7 +41,11 @@ def db() -> Iterator[Session]:
 
 
 def _item(db: Session, *, sku: str = "RM-001") -> Item:
-    node = TaxonomyNode(name=f"Cat-{sku}")
+    # Explicit ``sku_prefix`` keyed off ``sku`` so sibling factories don't
+    # share the name-derived default ``CAT`` prefix and clash on the
+    # partial unique index.
+    alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    node = TaxonomyNode(name=f"Cat-{sku}", sku_prefix=alnum)
     db.add(node)
     db.commit()
     db.refresh(node)

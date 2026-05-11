@@ -26,9 +26,35 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.db import Base
+
+
+def _derive_sku_prefix(name: str | None) -> str:
+    """Derive a default ``sku_prefix`` from ``name`` for a single row.
+
+    Mirrors the migration 0016 backfill rule for the candidate prefix step
+    (without sibling disambiguation — that happens in the migration or at
+    write time in the application layer):
+
+    1. Try the first three alphabetic chars of ``name``, uppercased.
+    2. If empty, fall back to the first three alphanumeric chars uppercased.
+    3. If still empty (or ``name`` is ``None``/empty), use ``"CAT"``.
+    4. Truncate to 8 chars.
+
+    The result is always 1-8 uppercase alphanumeric chars, the same shape
+    enforced by the ``sku_prefix`` validator.
+    """
+
+    raw = name or ""
+    alpha = "".join(ch for ch in raw if ch.isalpha())[:3]
+    if alpha:
+        candidate = alpha.upper()
+    else:
+        alnum = "".join(ch for ch in raw if ch.isalnum())[:3]
+        candidate = alnum.upper() if alnum else "CAT"
+    return candidate[:8]
 
 
 class Role(enum.StrEnum):
@@ -41,6 +67,25 @@ class Role(enum.StrEnum):
     MANAGER = "manager"
     OFFICE = "office"
     WORKSHOP = "workshop"
+
+
+class Archetype(enum.StrEnum):
+    """Per-top-level category behaviour flag (taxonomy refinement).
+
+    Stored only on depth-0 ``TaxonomyNode`` rows; depth-1 + depth-2 rows
+    leave ``archetype IS NULL`` and inherit the value from their root by
+    walking the ``parent_id`` chain at read time.
+
+    - ``unique`` — one-of-a-kind items; tracking_mode forced to ``unique``.
+    - ``bulk``   — quantity-tracked items; tracking_mode forced to ``qty``.
+    - ``unique_variant`` — design family with auto-numbered pieces; each
+      item lives on its own auto-created depth-2 leaf below a user-picked
+      depth-1 sub-category. See ``docs/taxonomy-refinement-plan.md``.
+    """
+
+    UNIQUE = "unique"
+    BULK = "bulk"
+    UNIQUE_VARIANT = "unique_variant"
 
 
 class UserStatus(enum.StrEnum):
@@ -200,6 +245,26 @@ class TaxonomyNode(Base):
             sqlite_where=text("parent_id IS NOT NULL"),
             postgresql_where=text("parent_id IS NOT NULL"),
         ),
+        # Sibling-scoped uniqueness on sku_prefix. Same shape as the
+        # name-uniqueness pair: one partial index for the top-level
+        # (parent_id IS NULL), one for the children (parent_id IS NOT NULL).
+        # Scoped across active *and* archived rows to keep SKUs stable across
+        # the archive lifecycle.
+        Index(
+            "uq_taxonomy_sku_prefix_top",
+            "sku_prefix",
+            unique=True,
+            sqlite_where=text("parent_id IS NULL"),
+            postgresql_where=text("parent_id IS NULL"),
+        ),
+        Index(
+            "uq_taxonomy_sku_prefix_child",
+            "parent_id",
+            "sku_prefix",
+            unique=True,
+            sqlite_where=text("parent_id IS NOT NULL"),
+            postgresql_where=text("parent_id IS NOT NULL"),
+        ),
         Index("ix_taxonomy_nodes_parent_id", "parent_id"),
         Index("ix_taxonomy_nodes_archived_at", "archived_at"),
     )
@@ -211,6 +276,41 @@ class TaxonomyNode(Base):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Per-top-level archetype flag (see ``Archetype``). NULL at depth 1+2;
+    # the application code resolves ``effective_archetype`` by walking up
+    # to depth 0 at read time. SQL CHECK to enforce "NULL ↔ not root" is
+    # deliberately left to the route layer for cross-dialect simplicity.
+    archetype: Mapped[Archetype | None] = mapped_column(
+        SAEnum(
+            Archetype,
+            name="taxonomy_archetype",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=True,
+    )
+    # SKU prefix segment for this node. Composed with ancestor prefixes to
+    # produce an item's SKU (e.g. ``RAW-SIL-925-0008``). Required after the
+    # 0016 backfill; uppercased + 1-8 alphanumeric chars (validator below).
+    # The Python-side ``default`` derives a sensible value from ``name`` so
+    # legacy call sites and demo fixtures that pass ``TaxonomyNode(name=...)``
+    # without ``sku_prefix`` keep working; explicit callers can override.
+    sku_prefix: Mapped[str] = mapped_column(
+        String(8),
+        nullable=False,
+        default=lambda context: _derive_sku_prefix(
+            context.get_current_parameters().get("name")
+            if context is not None
+            else None
+        ),
+    )
+    # Per-leaf SKU sequence allocator (used by the SKU helper to mint the
+    # next ``<PREFIX>-<NNNN>`` suffix). Always defaults to 1 on insert;
+    # incremented atomically by the allocator at item-create time.
+    next_sequence: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -232,10 +332,32 @@ class TaxonomyNode(Base):
         nullable=False,
     )
 
+    @validates("sku_prefix")
+    def _validate_sku_prefix(self, _key: str, value: str | None) -> str:
+        """Normalise + validate ``sku_prefix`` on assignment.
+
+        Enforces: 1-8 alphanumeric chars, stored uppercased. Raises
+        ``ValueError`` on an empty / non-alnum / too-long input so the route
+        layer surfaces a clear 400 instead of a deferred constraint error.
+        """
+
+        if value is None:
+            raise ValueError("sku_prefix is required")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("sku_prefix must not be blank")
+        if not stripped.isalnum():
+            raise ValueError("sku_prefix must contain only alphanumeric characters")
+        if len(stripped) > 8:
+            raise ValueError("sku_prefix must be 8 characters or fewer")
+        return stripped.upper()
+
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
             f"<TaxonomyNode id={self.id} name={self.name!r} "
-            f"parent_id={self.parent_id} archived={self.archived_at is not None}>"
+            f"parent_id={self.parent_id} archetype={self.archetype} "
+            f"sku_prefix={self.sku_prefix!r} "
+            f"archived={self.archived_at is not None}>"
         )
 
 
@@ -435,6 +557,12 @@ class Item(Base):
     )
     qr_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Integer rendered as the final segment of this item's SKU at create
+    # time (e.g. SKU ``RAW-SIL-0008`` stores ``assigned_sequence=8``). Set
+    # on every item create going forward; NULL on rows that pre-date the
+    # 0016 migration. Round-trips the relationship to the leaf's
+    # ``next_sequence`` without re-parsing the SKU string.
+    assigned_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

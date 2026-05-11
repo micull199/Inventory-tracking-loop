@@ -85,12 +85,21 @@ def _make_node(
     name: str = "Tools",
     parent: TaxonomyNode | None = None,
     archived: bool = False,
+    sku_prefix: str | None = None,
 ) -> TaxonomyNode:
-    n = TaxonomyNode(
-        name=name,
-        parent_id=parent.id if parent is not None else None,
-        archived_at=datetime(2026, 1, 1, tzinfo=UTC) if archived else None,
-    )
+    # ``sku_prefix`` defaults to the name-derived value. Two sibling nodes
+    # whose names start with the same three letters (e.g. ``Cat A`` and
+    # ``Cat B`` — both derive to ``CAT``) collide on the partial unique
+    # index on ``taxonomy_nodes(sku_prefix)``. Callers pass an explicit
+    # value to dodge.
+    kwargs: dict[str, object] = {
+        "name": name,
+        "parent_id": parent.id if parent is not None else None,
+        "archived_at": datetime(2026, 1, 1, tzinfo=UTC) if archived else None,
+    }
+    if sku_prefix is not None:
+        kwargs["sku_prefix"] = sku_prefix
+    n = TaxonomyNode(**kwargs)
     db.add(n)
     db.commit()
     db.refresh(n)
@@ -1410,8 +1419,8 @@ class TestStartHappyPathNodeScope:
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf_a = _make_node(db_session, name="Cat A")
-        leaf_b = _make_node(db_session, name="Cat B")
+        leaf_a = _make_node(db_session, name="Cat A", sku_prefix="CATA")
+        leaf_b = _make_node(db_session, name="Cat B", sku_prefix="CATB")
         in_a = _make_item(db_session, leaf=leaf_a, sku="IN-A")
         _make_item(db_session, leaf=leaf_b, sku="IN-B")
         st = _make_stock_take(

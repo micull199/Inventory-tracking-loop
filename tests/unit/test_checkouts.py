@@ -68,7 +68,11 @@ def _item(
     tracking_mode: TrackingMode = TrackingMode.UNIQUE,
     requires_checkout: bool = True,
 ) -> Item:
-    node = TaxonomyNode(name=f"Cat-{sku}")
+    # Explicit ``sku_prefix`` keyed off ``sku`` so sibling factories don't
+    # share the name-derived default ``CAT`` prefix and clash on the
+    # partial unique index on ``taxonomy_nodes(sku_prefix)``.
+    _alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    node = TaxonomyNode(name=f"Cat-{sku}", sku_prefix=_alnum)
     db.add(node)
     db.commit()
     db.refresh(node)

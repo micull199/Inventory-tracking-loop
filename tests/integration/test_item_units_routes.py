@@ -83,8 +83,17 @@ def _audit_rows(
     return list(db.execute(stmt).scalars().all())
 
 
-def _make_leaf(db: Session, name: str = "Tools") -> TaxonomyNode:
-    node = TaxonomyNode(name=name)
+def _make_leaf(
+    db: Session, name: str = "Tools", sku_prefix: str | None = None
+) -> TaxonomyNode:
+    # Default ``sku_prefix`` is derived from ``name`` (see ``TaxonomyNode``).
+    # Callers that build sibling leaves from similar names (e.g. ``Cat-X``,
+    # ``Cat-Y``) must pass an explicit prefix to dodge the partial unique
+    # index on ``taxonomy_nodes(sku_prefix)``.
+    kwargs: dict[str, object] = {"name": name}
+    if sku_prefix is not None:
+        kwargs["sku_prefix"] = sku_prefix
+    node = TaxonomyNode(**kwargs)
     db.add(node)
     db.commit()
     db.refresh(node)
@@ -98,7 +107,8 @@ def _make_unique_item(
     name: str = "Mould",
     archived: bool = False,
 ) -> Item:
-    leaf = _make_leaf(db, name=f"Cat-{sku}")
+    _alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    leaf = _make_leaf(db, name=f"Cat-{sku}", sku_prefix=_alnum)
     item = Item(
         sku=sku,
         name=name,
@@ -116,7 +126,8 @@ def _make_unique_item(
 def _make_qty_item(
     db: Session, *, sku: str = "RM-001", name: str = "Wire"
 ) -> Item:
-    leaf = _make_leaf(db, name=f"Cat-{sku}")
+    _alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    leaf = _make_leaf(db, name=f"Cat-{sku}", sku_prefix=_alnum)
     item = Item(
         sku=sku,
         name=name,

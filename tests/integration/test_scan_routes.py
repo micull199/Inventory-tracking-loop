@@ -77,8 +77,17 @@ def _csrf(client: TestClient) -> str:
     return client.cookies["csrftoken"]
 
 
-def _make_leaf(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
-    n = TaxonomyNode(name=name)
+def _make_leaf(
+    db: Session, name: str = "Raw Materials", sku_prefix: str | None = None
+) -> TaxonomyNode:
+    # Sibling leaves built from similar names (e.g. ``Cat-A`` and ``Cat-B``)
+    # collide on the partial unique index on ``taxonomy_nodes(sku_prefix)``
+    # because the name-derived default truncates to ``CAT``. Callers pass an
+    # explicit ``sku_prefix`` to dodge.
+    kwargs: dict[str, object] = {"name": name}
+    if sku_prefix is not None:
+        kwargs["sku_prefix"] = sku_prefix
+    n = TaxonomyNode(**kwargs)
     db.add(n)
     db.commit()
     db.refresh(n)
@@ -93,7 +102,8 @@ def _make_item(
     name: str | None = None,
     archived: bool = False,
 ) -> Item:
-    leaf = _make_leaf(db, name=f"Cat-{sku}")
+    _alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
+    leaf = _make_leaf(db, name=f"Cat-{sku}", sku_prefix=_alnum)
     item = Item(
         sku=sku,
         name=name or f"Item {sku}",
