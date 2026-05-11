@@ -1,34 +1,32 @@
-# fly.toml — Fly.io configuration for UC Inventory.
+# fly.toml app configuration file generated for inventory-tracking-loop-tospkq on 2026-05-11T06:13:15Z
 #
-# Set the `app` name to whatever you registered via `fly apps create`.
-# The SQLite volume must be created once via:
-#   fly volumes create data --size 1 --region <region>
-# (Migrations run on machine start via scripts/fly-entrypoint.sh so they see
-# the mounted volume; that's why there's no release_command here.)
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "uc-inventory"
-primary_region = "lhr"
+app = 'inventory-tracking-loop-tospkq'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [[mounts]]
-  source = "data"
-  destination = "/data"
+  source = 'data'
+  destination = '/data'
 
 [http_service]
-  internal_port = 8000
+  internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
   [http_service.concurrency]
-    type = "connections"
+    type = 'connections'
     hard_limit = 25
     soft_limit = 20
 
 [[vm]]
-  memory = "512mb"
-  cpu_kind = "shared"
+  memory = '512mb'
+  cpu_kind = 'shared'
   cpus = 1
+  memory_mb = 256
