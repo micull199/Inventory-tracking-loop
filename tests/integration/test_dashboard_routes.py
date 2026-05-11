@@ -132,9 +132,7 @@ def _seed_in(
     """Seed an IN movement + cost layer via the engine."""
     qd = qty if isinstance(qty, Decimal) else Decimal(qty)
     cd = unit_cost if isinstance(unit_cost, Decimal) else Decimal(unit_cost)
-    m = StockMovement(
-        item_id=item.id, type=MovementType.IN, qty=qd, user_id=actor.id
-    )
+    m = StockMovement(item_id=item.id, type=MovementType.IN, qty=qd, user_id=actor.id)
     if when is not None:
         m.created_at = when
     db.add(m)
@@ -164,9 +162,7 @@ def _seed_out(
 ) -> StockMovement:
     """Seed an OUT movement consuming FIFO from the item's open layers."""
     qd = qty if isinstance(qty, Decimal) else Decimal(qty)
-    m = StockMovement(
-        item_id=item.id, type=MovementType.OUT, qty=qd, user_id=actor.id
-    )
+    m = StockMovement(item_id=item.id, type=MovementType.OUT, qty=qd, user_id=actor.id)
     if when is not None:
         m.created_at = when
     db.add(m)
@@ -296,9 +292,7 @@ class TestDashboardRoleEnforcement:
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 401
 
-    def test_pending_user_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -309,34 +303,26 @@ class TestDashboardRoleEnforcement:
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_403(self, client: TestClient, db_session: Session) -> None:
         """Workshop cannot see aggregated cost data (MISSION §3)."""
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 403
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/dashboard")
@@ -349,18 +335,14 @@ class TestDashboardRoleEnforcement:
 
 
 class TestDashboardTotalValue:
-    def test_empty_state_is_zero(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_state_is_zero(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 200
         assert 'data-testid="dashboard-total-value">0' in resp.text
 
-    def test_single_layer_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_single_layer_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -370,9 +352,7 @@ class TestDashboardTotalValue:
         # 10 * 2.50 = 25; the columns are scale-4 so the product is "25.0000".
         assert 'data-testid="dashboard-total-value">25.0000' in resp.text
 
-    def test_multi_item_sum(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_item_sum(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         a = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -384,9 +364,7 @@ class TestDashboardTotalValue:
         # 10*2 + 5*3 = 35
         assert 'data-testid="dashboard-total-value">35.0000' in resp.text
 
-    def test_archived_item_layers_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_layers_excluded(self, client: TestClient, db_session: Session) -> None:
         """An archived item's open layers don't contribute to total value."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -426,17 +404,13 @@ class TestDashboardTotalValue:
 
 
 class TestDashboardLowStockCount:
-    def test_empty_is_zero(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_is_zero(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         assert 'data-testid="dashboard-low-stock-count">0' in resp.text
 
-    def test_positive_count(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_positive_count(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         # Two below-threshold items + one above.
@@ -465,9 +439,7 @@ class TestDashboardLowStockCount:
         resp = client.get("/admin/dashboard")
         assert 'data-testid="dashboard-low-stock-count">2' in resp.text
 
-    def test_archived_items_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_items_excluded(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _make_item(
@@ -496,9 +468,7 @@ class TestDashboardLowStockCount:
 
 
 class TestDashboardOpenPOsCount:
-    def test_empty_is_zero(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_is_zero(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
@@ -526,18 +496,14 @@ class TestDashboardOpenPOsCount:
 
 
 class TestDashboardTopConsumed:
-    def test_empty_state_when_no_outs(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_state_when_no_outs(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         assert 'data-testid="dashboard-top-consumed-empty"' in resp.text
         assert 'data-testid="dashboard-top-consumed-row"' not in resp.text
 
-    def test_orders_by_sum_qty_desc(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_orders_by_sum_qty_desc(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         a = _make_item(db_session, leaf=leaf, sku="A-1", name="Apple")
@@ -557,9 +523,7 @@ class TestDashboardTopConsumed:
         a_idx = resp.text.find('data-testid="dashboard-top-consumed-sku">A-1')
         assert 0 < b_idx < c_idx < a_idx
 
-    def test_window_excludes_old_movements(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_window_excludes_old_movements(self, client: TestClient, db_session: Session) -> None:
         """OUTs older than the window don't appear."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -586,9 +550,7 @@ class TestDashboardTopConsumed:
         assert 'data-testid="dashboard-top-consumed-row"' in resp.text
         assert 'data-testid="dashboard-top-consumed-qty">42' in resp.text
 
-    def test_bad_top_days_coerces_to_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_top_days_coerces_to_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard?top_days=foo")
@@ -606,9 +568,7 @@ class TestDashboardTopConsumed:
         assert resp.status_code == 200
         assert 'value="30"' in resp.text
 
-    def test_transfer_movements_not_counted(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_transfer_movements_not_counted(self, client: TestClient, db_session: Session) -> None:
         """TRANSFER doesn't show in top-consumed."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -627,17 +587,13 @@ class TestDashboardTopConsumed:
 
 
 class TestDashboardCOGS:
-    def test_empty_is_zero(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_is_zero(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         assert 'data-testid="dashboard-cogs-amount">0' in resp.text
 
-    def test_sums_out_total_cost(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sums_out_total_cost(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -658,17 +614,13 @@ class TestDashboardCOGS:
         # Decrease consumes layers — counts toward COGS.
         _seed_adjust_decrease(db_session, item=item, qty="2", actor=mgr)
         # Increase creates a layer — must NOT count toward COGS.
-        _seed_adjust_increase(
-            db_session, item=item, qty="5", unit_cost="9", actor=mgr
-        )
+        _seed_adjust_increase(db_session, item=item, qty="5", unit_cost="9", actor=mgr)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         # Only the decrease counts: 2 * 2 = 4.
         assert 'data-testid="dashboard-cogs-amount">4.0000' in resp.text
 
-    def test_in_movements_not_counted(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_movements_not_counted(self, client: TestClient, db_session: Session) -> None:
         """IN movements have total_cost set but should not appear in COGS."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -708,23 +660,17 @@ class TestDashboardCOGS:
         # Widen: from 90 days ago through today.
         start = (datetime.now(UTC) - timedelta(days=90)).date().isoformat()
         end = datetime.now(UTC).date().isoformat()
-        resp = client.get(
-            f"/admin/dashboard?cogs_start={start}&cogs_end={end}"
-        )
+        resp = client.get(f"/admin/dashboard?cogs_start={start}&cogs_end={end}")
         # Now the 7-unit OUT counts: 7 * 2 = 14.
         assert 'data-testid="dashboard-cogs-amount">14.0000' in resp.text
 
-    def test_bad_cogs_start_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_cogs_start_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard?cogs_start=not-a-date")
         assert resp.status_code == 400
 
-    def test_bad_cogs_end_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_cogs_end_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard?cogs_end=2026-13-99")
@@ -737,26 +683,20 @@ class TestDashboardCOGS:
 
 
 class TestDashboardReadOnly:
-    def test_get_writes_no_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_writes_no_audit_row(self, client: TestClient, db_session: Session) -> None:
         """The dashboard is a pure read; no audit row should land."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         _seed_in(db_session, item=item, qty="10", unit_cost="2", actor=mgr)
 
-        before = db_session.execute(
-            select(AuditLog).order_by(AuditLog.id.desc())
-        ).scalars().all()
+        before = db_session.execute(select(AuditLog).order_by(AuditLog.id.desc())).scalars().all()
         before_ids = [a.id for a in before]
 
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
         assert resp.status_code == 200
 
-        after = db_session.execute(
-            select(AuditLog).order_by(AuditLog.id.desc())
-        ).scalars().all()
+        after = db_session.execute(select(AuditLog).order_by(AuditLog.id.desc())).scalars().all()
         # No new rows — only ones present before the GET.
         assert all(a.id in before_ids for a in after)

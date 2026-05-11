@@ -153,14 +153,8 @@ def _payload(
     }
 
 
-def _audit_rows(
-    db: Session, *, action: str | None = None
-) -> list[AuditLog]:
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "checkout")
-        .order_by(AuditLog.id)
-    )
+def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
+    stmt = select(AuditLog).where(AuditLog.entity_type == "checkout").order_by(AuditLog.id)
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
     return list(db.execute(stmt).scalars().all())
@@ -172,17 +166,13 @@ def _audit_rows(
 
 
 class TestRoleEnforcement:
-    def test_anonymous_get_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 401
 
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.post(
@@ -192,9 +182,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_get_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -207,9 +195,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 403
 
-    def test_pending_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -226,9 +212,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -236,9 +220,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 200
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         """Workshop self-checkout is the primary use case (MISSION §3)."""
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -252,9 +234,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 303
         assert db_session.execute(select(Checkout)).first() is not None
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -262,9 +242,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -276,9 +254,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -286,9 +262,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 200
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -300,9 +274,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -321,13 +293,9 @@ class TestRoleEnforcement:
 
 
 class TestCheckoutForm:
-    def test_qty_tracked_form_no_unit_select(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_qty_tracked_form_no_unit_select(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, tracking_mode=TrackingMode.QTY
-        )
+        item = _make_item(db_session, leaf=leaf, tracking_mode=TrackingMode.QTY)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/checkout")
@@ -377,9 +345,7 @@ class TestCheckoutForm:
             sku="U-TOOL",
         )
         active = _make_unit(db_session, item=item, serial="ACTIVE-1")
-        gone = _make_unit(
-            db_session, item=item, serial="ARCH-1", archived=True
-        )
+        gone = _make_unit(db_session, item=item, serial="ARCH-1", archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/checkout")
@@ -470,17 +436,13 @@ class TestCheckoutForm:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert 'data-testid="checkout-status-block"' not in resp.text
 
-    def test_unknown_item_form_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_form_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/items/999/checkout")
         assert resp.status_code == 404
 
-    def test_archived_item_form_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_form_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -488,13 +450,9 @@ class TestCheckoutForm:
         resp = client.get(f"/admin/items/{item.id}/checkout")
         assert resp.status_code == 400
 
-    def test_non_flagged_item_form_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_flagged_item_form_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, requires_checkout=False
-        )
+        item = _make_item(db_session, leaf=leaf, requires_checkout=False)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/checkout")
@@ -507,30 +465,22 @@ class TestCheckoutForm:
 
 
 class TestCheckoutValidation:
-    def _setup_qty(
-        self, db_session: Session, client: TestClient
-    ) -> tuple[Item, User]:
+    def _setup_qty(self, db_session: Session, client: TestClient) -> tuple[Item, User]:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         return item, ws
 
-    def _setup_unique(
-        self, db_session: Session, client: TestClient
-    ) -> tuple[Item, ItemUnit, User]:
+    def _setup_unique(self, db_session: Session, client: TestClient) -> tuple[Item, ItemUnit, User]:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE
-        )
+        item = _make_item(db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE)
         unit = _make_unit(db_session, item=item, serial="U-1")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         return item, unit, ws
 
-    def test_bad_expected_return_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_expected_return_400(self, client: TestClient, db_session: Session) -> None:
         item, _ = self._setup_qty(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/checkout",
@@ -540,9 +490,7 @@ class TestCheckoutValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(Checkout)).first() is None
 
-    def test_blank_unit_id_for_unique_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_unit_id_for_unique_400(self, client: TestClient, db_session: Session) -> None:
         item, _, _ = self._setup_unique(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/checkout",
@@ -563,9 +511,7 @@ class TestCheckoutValidation:
         )
         assert resp.status_code == 400
 
-    def test_unknown_unit_id_for_unique_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_unit_id_for_unique_400(self, client: TestClient, db_session: Session) -> None:
         item, _, _ = self._setup_unique(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/checkout",
@@ -574,9 +520,7 @@ class TestCheckoutValidation:
         )
         assert resp.status_code == 400
 
-    def test_unit_on_different_item_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unit_on_different_item_400(self, client: TestClient, db_session: Session) -> None:
         item, _, _ = self._setup_unique(db_session, client)
         # A second unique-tracked item with its own unit; submitting that
         # unit's id against the first item's URL must reject.
@@ -590,24 +534,16 @@ class TestCheckoutValidation:
         other_unit = _make_unit(db_session, item=other, serial="X-1")
         resp = client.post(
             f"/admin/items/{item.id}/checkout",
-            data=_payload(
-                item_unit_id=str(other_unit.id), csrf=_csrf(client)
-            ),
+            data=_payload(item_unit_id=str(other_unit.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
         assert db_session.execute(select(Checkout)).first() is None
 
-    def test_archived_unit_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_unit_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE
-        )
-        unit = _make_unit(
-            db_session, item=item, serial="GONE", archived=True
-        )
+        item = _make_item(db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE)
+        unit = _make_unit(db_session, item=item, serial="GONE", archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -617,13 +553,9 @@ class TestCheckoutValidation:
         )
         assert resp.status_code == 400
 
-    def test_lost_unit_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_lost_unit_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE
-        )
+        item = _make_item(db_session, leaf=leaf, tracking_mode=TrackingMode.UNIQUE)
         unit = _make_unit(
             db_session,
             item=item,
@@ -661,9 +593,7 @@ class TestCheckoutValidation:
         rows = list(db_session.execute(select(Checkout)).scalars().all())
         assert len(rows) == 1
 
-    def test_already_open_unique_unit_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_already_open_unique_unit_400(self, client: TestClient, db_session: Session) -> None:
         item, unit, _ = self._setup_unique(db_session, client)
         resp1 = client.post(
             f"/admin/items/{item.id}/checkout",
@@ -680,9 +610,7 @@ class TestCheckoutValidation:
         rows = list(db_session.execute(select(Checkout)).scalars().all())
         assert len(rows) == 1
 
-    def test_oversize_condition_note_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_oversize_condition_note_400(self, client: TestClient, db_session: Session) -> None:
         item, _ = self._setup_qty(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/checkout",
@@ -692,9 +620,7 @@ class TestCheckoutValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(Checkout)).first() is None
 
-    def test_archived_item_post_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_post_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -707,13 +633,9 @@ class TestCheckoutValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(Checkout)).first() is None
 
-    def test_non_flagged_item_post_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_flagged_item_post_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, requires_checkout=False
-        )
+        item = _make_item(db_session, leaf=leaf, requires_checkout=False)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -723,9 +645,7 @@ class TestCheckoutValidation:
         )
         assert resp.status_code == 400
 
-    def test_unknown_item_post_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_post_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -773,10 +693,7 @@ class TestCheckoutQtyHappyPath:
         after = datetime.now(UTC)
 
         assert resp.status_code == 303
-        assert (
-            resp.headers["location"]
-            == f"/admin/items/{item.id}/checkout"
-        )
+        assert resp.headers["location"] == f"/admin/items/{item.id}/checkout"
 
         co = db_session.execute(select(Checkout)).scalar_one()
         assert co.item_id == item.id
@@ -788,9 +705,7 @@ class TestCheckoutQtyHappyPath:
         assert co.expected_return.date().isoformat() == "2026-06-15"
         # SQLite drops tz info on round-trip; compare naive-vs-naive.
         checked_out = co.checked_out_at.replace(tzinfo=None)
-        assert before.replace(tzinfo=None) <= checked_out <= after.replace(
-            tzinfo=None
-        )
+        assert before.replace(tzinfo=None) <= checked_out <= after.replace(tzinfo=None)
 
         # Engine isolation: no movement, item.current_qty unchanged.
         assert db_session.execute(select(StockMovement)).first() is None
@@ -827,9 +742,7 @@ class TestCheckoutQtyHappyPath:
         co = db_session.execute(select(Checkout)).scalar_one()
         assert co.condition_note is None
 
-    def test_audit_row_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_shape(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Banding Iron")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -862,9 +775,7 @@ class TestCheckoutQtyHappyPath:
         assert "checked_out_at" in row.after_json
         assert "T" in row.after_json["checked_out_at"]
 
-    def test_flash_message_set(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_message_set(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Polishing Mop")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -885,9 +796,7 @@ class TestCheckoutQtyHappyPath:
 
 
 class TestCheckoutUniqueHappyPath:
-    def test_creates_row_with_unit_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_creates_row_with_unit_id(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(
             db_session,
@@ -910,9 +819,7 @@ class TestCheckoutUniqueHappyPath:
         assert co.user_id == ws.id
         assert co.returned_at is None
 
-    def test_audit_carries_unit_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_carries_unit_id(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(
             db_session,
@@ -990,9 +897,7 @@ class TestCheckoutLinkVisibility:
         self, client: TestClient, db_session: Session
     ) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, requires_checkout=True, archived=True
-        )
+        item = _make_item(db_session, leaf=leaf, requires_checkout=True, archived=True)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
@@ -1015,9 +920,7 @@ class TestCheckoutLinkVisibility:
 
 
 class TestEngineIsolation:
-    def test_no_stock_movement_or_qty_change(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_stock_movement_or_qty_change(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         # Seed a non-zero current_qty so we can assert it doesn't move.
@@ -1040,9 +943,7 @@ class TestEngineIsolation:
 # ---------------------------------------------------------------------------
 
 
-def _return_payload(
-    *, condition_note: str = "", csrf: str = ""
-) -> dict[str, str]:
+def _return_payload(*, condition_note: str = "", csrf: str = "") -> dict[str, str]:
     return {"condition_note": condition_note, "csrf_token": csrf}
 
 
@@ -1068,14 +969,10 @@ def _open_checkout(
 
 
 class TestCheckinRoleEnforcement:
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         resp = client.post(
             f"/admin/items/checkouts/{co.id}/return",
@@ -1084,14 +981,10 @@ class TestCheckinRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         pending = _make_user(
             db_session,
@@ -1112,9 +1005,7 @@ class TestCheckinRoleEnforcement:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.MANAGER
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.MANAGER)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
@@ -1127,14 +1018,10 @@ class TestCheckinRoleEnforcement:
         db_session.refresh(co)
         assert co.returned_at is not None
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
@@ -1145,14 +1032,10 @@ class TestCheckinRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -1163,14 +1046,10 @@ class TestCheckinRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
@@ -1183,9 +1062,7 @@ class TestCheckinRoleEnforcement:
 
 
 class TestCheckinValidation:
-    def test_unknown_checkout_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_checkout_is_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -1197,14 +1074,10 @@ class TestCheckinValidation:
         # No audit row written for an unknown checkout.
         assert _audit_rows(db_session, action="checkout.returned") == []
 
-    def test_already_returned_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_already_returned_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         # Close it manually so the route hits the already-returned guard.
         co.returned_at = datetime(2026, 5, 2, tzinfo=UTC)
@@ -1224,14 +1097,10 @@ class TestCheckinValidation:
         # No checkout.returned audit row was written.
         assert _audit_rows(db_session, action="checkout.returned") == []
 
-    def test_oversize_merged_note_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_oversize_merged_note_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         # Existing note already 1500 chars; new note 700 chars + the 5-char
         # separator pushes the merged value past 2000.
         co = _open_checkout(
@@ -1244,9 +1113,7 @@ class TestCheckinValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/checkouts/{co.id}/return",
-            data=_return_payload(
-                condition_note="B" * 700, csrf=_csrf(client)
-            ),
+            data=_return_payload(condition_note="B" * 700, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -1260,17 +1127,13 @@ class TestCheckinValidation:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/checkouts/{co.id}/return",
-            data=_return_payload(
-                condition_note="X" * 2001, csrf=_csrf(client)
-            ),
+            data=_return_payload(condition_note="X" * 2001, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -1279,14 +1142,10 @@ class TestCheckinValidation:
 
 
 class TestCheckinHappyPathQty:
-    def test_returns_qty_tracked_checkout(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_returns_qty_tracked_checkout(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
@@ -1305,11 +1164,7 @@ class TestCheckinHappyPathQty:
         assert co.returned_at is not None
         # SQLite drops tz info on round-trip; compare naive-vs-naive.
         returned = co.returned_at.replace(tzinfo=None)
-        assert (
-            before.replace(tzinfo=None)
-            <= returned
-            <= after.replace(tzinfo=None)
-        )
+        assert before.replace(tzinfo=None) <= returned <= after.replace(tzinfo=None)
         # No fresh note → existing (None here) preserved.
         assert co.condition_note is None
 
@@ -1331,14 +1186,10 @@ class TestCheckinHappyPathQty:
         # returned_at is an ISO timestamp.
         assert row.after_json["returned_at"].startswith("2026-")
 
-    def test_flash_includes_item_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_includes_item_name(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Hammer")
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
@@ -1353,9 +1204,7 @@ class TestCheckinHappyPathQty:
 
 
 class TestCheckinHappyPathUnique:
-    def test_returns_unique_tracked_checkout(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_returns_unique_tracked_checkout(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(
             db_session,
@@ -1364,12 +1213,8 @@ class TestCheckinHappyPathUnique:
             sku="U-1",
         )
         unit = _make_unit(db_session, item=item, serial="U-A")
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
-        co = _open_checkout(
-            db_session, item=item, user=borrower, item_unit=unit
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
+        co = _open_checkout(db_session, item=item, user=borrower, item_unit=unit)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
 
@@ -1387,9 +1232,7 @@ class TestCheckinHappyPathUnique:
         assert rows[0].after_json is not None
         assert rows[0].after_json["item_unit_id"] == unit.id
 
-    def test_flash_includes_unit_label(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_includes_unit_label(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(
             db_session,
@@ -1399,12 +1242,8 @@ class TestCheckinHappyPathUnique:
             name="Sledgehammer",
         )
         unit = _make_unit(db_session, item=item, serial="SH-9")
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
-        co = _open_checkout(
-            db_session, item=item, user=borrower, item_unit=unit
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
+        co = _open_checkout(db_session, item=item, user=borrower, item_unit=unit)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -1417,14 +1256,10 @@ class TestCheckinHappyPathUnique:
 
 
 class TestCheckinNoteMerging:
-    def test_blank_note_preserves_existing(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_note_preserves_existing(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(
             db_session,
             item=item,
@@ -1454,17 +1289,13 @@ class TestCheckinNoteMerging:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/checkouts/{co.id}/return",
-            data=_return_payload(
-                condition_note="returned chipped", csrf=_csrf(client)
-            ),
+            data=_return_payload(condition_note="returned chipped", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -1476,9 +1307,7 @@ class TestCheckinNoteMerging:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(
             db_session,
             item=item,
@@ -1489,9 +1318,7 @@ class TestCheckinNoteMerging:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/checkouts/{co.id}/return",
-            data=_return_payload(
-                condition_note="returned chipped", csrf=_csrf(client)
-            ),
+            data=_return_payload(condition_note="returned chipped", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -1503,9 +1330,7 @@ class TestCheckinNoteMerging:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(
             db_session,
             item=item,
@@ -1525,16 +1350,12 @@ class TestCheckinNoteMerging:
 
 
 class TestCheckinEngineIsolation:
-    def test_no_stock_movement_on_return(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_stock_movement_on_return(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         item.current_qty = Decimal("42.0000")
         db_session.commit()
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
@@ -1627,9 +1448,7 @@ class TestCheckinFormReshrinks:
     ) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
-        borrower = _make_user(
-            db_session, email="b@x.test", role=Role.WORKSHOP
-        )
+        borrower = _make_user(db_session, email="b@x.test", role=Role.WORKSHOP)
         co = _open_checkout(db_session, item=item, user=borrower)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)

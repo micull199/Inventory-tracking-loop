@@ -151,9 +151,7 @@ def _combine_aggregates(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return totals
 
 
-def _scope_label(
-    st: StockTake, *, node: TaxonomyNode | None, location: Location | None
-) -> str:
+def _scope_label(st: StockTake, *, node: TaxonomyNode | None, location: Location | None) -> str:
     """Human-readable scope label.
 
     Local copy of ``app.stock_takes._scope_label`` to keep the modules
@@ -189,15 +187,11 @@ def _load_trend_rows(db: Session, *, days: int) -> list[dict[str, Any]]:
         return []
 
     node_ids = {st.scope_node_id for st in stocktakes if st.scope_node_id is not None}
-    loc_ids = {
-        st.scope_location_id for st in stocktakes if st.scope_location_id is not None
-    }
+    loc_ids = {st.scope_location_id for st in stocktakes if st.scope_location_id is not None}
     nodes = (
         {
             n.id: n
-            for n in db.execute(
-                select(TaxonomyNode).where(TaxonomyNode.id.in_(node_ids))
-            )
+            for n in db.execute(select(TaxonomyNode).where(TaxonomyNode.id.in_(node_ids)))
             .scalars()
             .all()
         }
@@ -207,11 +201,7 @@ def _load_trend_rows(db: Session, *, days: int) -> list[dict[str, Any]]:
     locations = (
         {
             loc.id: loc
-            for loc in db.execute(
-                select(Location).where(Location.id.in_(loc_ids))
-            )
-            .scalars()
-            .all()
+            for loc in db.execute(select(Location).where(Location.id.in_(loc_ids))).scalars().all()
         }
         if loc_ids
         else {}
@@ -221,9 +211,7 @@ def _load_trend_rows(db: Session, *, days: int) -> list[dict[str, Any]]:
     st_ids = [st.id for st in stocktakes]
     lines_by_st: dict[int, list[StockTakeLine]] = {st_id: [] for st_id in st_ids}
     for line in (
-        db.execute(
-            select(StockTakeLine).where(StockTakeLine.stock_take_id.in_(st_ids))
-        )
+        db.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id.in_(st_ids)))
         .scalars()
         .all()
     ):
@@ -232,11 +220,7 @@ def _load_trend_rows(db: Session, *, days: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for st in stocktakes:
         node = nodes.get(st.scope_node_id) if st.scope_node_id is not None else None
-        loc = (
-            locations.get(st.scope_location_id)
-            if st.scope_location_id is not None
-            else None
-        )
+        loc = locations.get(st.scope_location_id) if st.scope_location_id is not None else None
         agg = _aggregate_lines(lines_by_st.get(st.id, []))
         rows.append(
             {

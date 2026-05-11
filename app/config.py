@@ -44,9 +44,7 @@ class Settings(BaseSettings):
     def _validate_prod_secrets(self) -> Self:
         if self.app_env == "prod":
             if not self.secret_key or self.secret_key == "change-me":  # noqa: S105
-                raise ValueError(
-                    "SECRET_KEY must be set to a non-default value when APP_ENV=prod"
-                )
+                raise ValueError("SECRET_KEY must be set to a non-default value when APP_ENV=prod")
             if not self.google_client_id or not self.google_client_secret:
                 raise ValueError(
                     "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required when APP_ENV=prod"

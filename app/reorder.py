@@ -138,9 +138,7 @@ def _build_groups(db: Session) -> list[dict[str, Any]]:
                 }
             else:
                 archived = supplier.archived_at is not None
-                label = (
-                    f"{supplier.name} (archived)" if archived else supplier.name
-                )
+                label = f"{supplier.name} (archived)" if archived else supplier.name
                 buckets[sup_id] = {
                     "supplier_id": supplier.id,
                     "supplier_label": label,

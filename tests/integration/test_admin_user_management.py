@@ -76,9 +76,7 @@ class TestAdminSetRole:
         assert refreshed is not None
         assert refreshed.role is Role.MANAGER
 
-    def test_admin_can_clear_a_role(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_can_clear_a_role(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -97,9 +95,7 @@ class TestAdminSetRole:
         db_session.expire_all()
         assert db_session.get(User, target.id).role is None  # type: ignore[union-attr]
 
-    def test_invalid_role_value_returns_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_invalid_role_value_returns_400(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -113,9 +109,7 @@ class TestAdminSetRole:
         )
         assert resp.status_code == 400
 
-    def test_admin_cannot_demote_self(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_cannot_demote_self(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -131,9 +125,7 @@ class TestAdminSetRole:
         db_session.expire_all()
         assert db_session.get(User, admin.id).role is Role.ADMIN  # type: ignore[union-attr]
 
-    def test_admin_cannot_clear_own_role(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_cannot_clear_own_role(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -146,9 +138,7 @@ class TestAdminSetRole:
         )
         assert resp.status_code == 400
 
-    def test_unknown_user_id_returns_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_user_id_returns_404(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -163,9 +153,7 @@ class TestAdminSetRole:
 
 
 class TestAdminSetStatus:
-    def test_admin_activates_user_with_role(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_activates_user_with_role(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -240,9 +228,7 @@ class TestAdminSetStatus:
         db_session.expire_all()
         assert db_session.get(User, target.id).status is UserStatus.PENDING  # type: ignore[union-attr]
 
-    def test_admin_cannot_disable_self(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_cannot_disable_self(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -258,9 +244,7 @@ class TestAdminSetStatus:
         db_session.expire_all()
         assert db_session.get(User, admin.id).status is UserStatus.ACTIVE  # type: ignore[union-attr]
 
-    def test_admin_cannot_set_self_pending(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_cannot_set_self_pending(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
@@ -275,9 +259,7 @@ class TestAdminSetStatus:
 
 
 class TestNonAdminCannotMutate:
-    def test_workshop_post_role_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_role_is_403(self, client: TestClient, db_session: Session) -> None:
         attacker = _make_user(
             db_session, email="w@x.test", role=Role.WORKSHOP, status=UserStatus.ACTIVE
         )
@@ -294,9 +276,7 @@ class TestNonAdminCannotMutate:
         db_session.expire_all()
         assert db_session.get(User, target.id).role is None  # type: ignore[union-attr]
 
-    def test_manager_post_status_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_status_is_403(self, client: TestClient, db_session: Session) -> None:
         attacker = _make_user(
             db_session, email="m@x.test", role=Role.MANAGER, status=UserStatus.ACTIVE
         )
@@ -312,9 +292,7 @@ class TestNonAdminCannotMutate:
         )
         assert resp.status_code == 403
 
-    def test_unauthenticated_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unauthenticated_post_is_401(self, client: TestClient, db_session: Session) -> None:
         """Anon user with valid CSRF gets 401 — auth check runs after CSRF."""
         target = _make_user(db_session, email="t@x.test")
         # GET first to bootstrap a CSRF token; without that the request would
@@ -328,16 +306,12 @@ class TestNonAdminCannotMutate:
 
 
 class TestAdminUsersListOrdering:
-    def test_pending_users_come_first(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_users_come_first(self, client: TestClient, db_session: Session) -> None:
         """Pending users are what the admin acts on — they sort to the top."""
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )
-        _make_user(
-            db_session, email="active@x.test", role=Role.OFFICE, status=UserStatus.ACTIVE
-        )
+        _make_user(db_session, email="active@x.test", role=Role.OFFICE, status=UserStatus.ACTIVE)
         _make_user(
             db_session, email="disabled@x.test", role=Role.OFFICE, status=UserStatus.DISABLED
         )
@@ -364,51 +338,33 @@ class TestAdminUsersListCsvRoleEnforcement:
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="p@x.test")  # default pending
         _login_as(client, u)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        ws = _make_user(
-            db_session, email="w@x.test", role=Role.WORKSHOP, status=UserStatus.ACTIVE
-        )
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
+        ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP, status=UserStatus.ACTIVE)
         _login_as(client, ws)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 403
 
-    def test_office_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        off = _make_user(
-            db_session, email="o@x.test", role=Role.OFFICE, status=UserStatus.ACTIVE
-        )
+    def test_office_csv_is_403(self, client: TestClient, db_session: Session) -> None:
+        off = _make_user(db_session, email="o@x.test", role=Role.OFFICE, status=UserStatus.ACTIVE)
         _login_as(client, off)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         """User-management is Admin-only (MISSION §3) — Manager sees 403."""
-        mgr = _make_user(
-            db_session, email="m@x.test", role=Role.MANAGER, status=UserStatus.ACTIVE
-        )
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER, status=UserStatus.ACTIVE)
         _login_as(client, mgr)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 403
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 200
@@ -418,20 +374,14 @@ class TestAdminUsersListCsvHeaders:
     def test_content_type_carries_csv_charset(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "text/csv; charset=utf-8"
 
-    def test_content_disposition_filename(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_content_disposition_filename(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         cd = resp.headers["content-disposition"]
@@ -440,12 +390,8 @@ class TestAdminUsersListCsvHeaders:
 
 
 class TestAdminUsersListCsvBody:
-    def test_header_row_is_first_line(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_header_row_is_first_line(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         assert resp.status_code == 200
@@ -455,9 +401,7 @@ class TestAdminUsersListCsvBody:
     def test_pending_user_has_empty_role_cell(
         self, client: TestClient, db_session: Session
     ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         pending = _make_user(db_session, email="newbie@x.test")  # role=None, pending
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
@@ -476,19 +420,13 @@ class TestAdminUsersListCsvBody:
         self, client: TestClient, db_session: Session
     ) -> None:
         """Enums are pre-coerced to their ``.value``, not Python's repr."""
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
-        _make_user(
-            db_session, email="manager@x.test", role=Role.MANAGER, status=UserStatus.ACTIVE
-        )
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
+        _make_user(db_session, email="manager@x.test", role=Role.MANAGER, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         body = resp.text
         # Locate the manager row.
-        manager_line = next(
-            line for line in body.split("\r\n") if "manager@x.test" in line
-        )
+        manager_line = next(line for line in body.split("\r\n") if "manager@x.test" in line)
         cells = manager_line.split(",")
         assert cells[3] == "manager"  # not "Role.MANAGER" or "<Role.MANAGER: 'manager'>"
         assert cells[4] == "active"  # not "UserStatus.ACTIVE"
@@ -522,12 +460,8 @@ class TestAdminUsersListCsvBody:
         assert body.index("pending@x.test") < body.index("active-other@x.test")
         assert body.index("active-other@x.test") < body.index("disabled@x.test")
 
-    def test_admin_self_row_has_admin_role(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="me@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_admin_self_row_has_admin_role(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="me@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
         body = resp.text
@@ -538,24 +472,16 @@ class TestAdminUsersListCsvBody:
 
 
 class TestAdminUsersListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="admin-users-table"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=garbage")
         assert resp.status_code == 200
@@ -563,16 +489,10 @@ class TestAdminUsersListCsvHtmlBranch:
 
 
 class TestAdminUsersListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _make_user(db_session, email="other@x.test")  # at least one peer row
-        before = db_session.execute(
-            select(AuditLog).order_by(AuditLog.id)
-        ).scalars().all()
+        before = db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
         before_count = len(before)
         _login_as(client, admin)
         resp = client.get("/admin/users?format=csv")
@@ -584,12 +504,8 @@ class TestAdminUsersListCsvReadOnly:
 
 
 class TestAdminUsersListCsvLink:
-    def test_html_renders_csv_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        admin = _make_user(
-            db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
-        )
+    def test_html_renders_csv_link(self, client: TestClient, db_session: Session) -> None:
+        admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE)
         _login_as(client, admin)
         resp = client.get("/admin/users")
         assert resp.status_code == 200

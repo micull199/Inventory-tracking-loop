@@ -73,42 +73,32 @@ class TestRoleEnforcement:
         resp = client.get("/admin/suppliers")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/admin/suppliers")
         assert resp.status_code == 403
 
-    def test_office_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         """Suppliers are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/admin/suppliers")
         assert resp.status_code == 403
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/suppliers")
         assert resp.status_code == 200
 
-    def test_workshop_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_create_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.post(
@@ -119,9 +109,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 403
         assert db_session.execute(select(Supplier)).first() is None
 
-    def test_pending_user_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         pending = _make_user(
             db_session, email="p@x.test", role=Role.MANAGER, status=UserStatus.PENDING
         )
@@ -136,9 +124,7 @@ class TestRoleEnforcement:
 
 
 class TestSuppliersList:
-    def test_list_shows_active_by_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add_all(
             [
@@ -154,9 +140,7 @@ class TestSuppliersList:
         assert "Acme Wax Co" in resp.text
         assert "Old Vendor" not in resp.text
 
-    def test_list_show_archived_filter(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_show_archived_filter(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add_all(
             [
@@ -172,9 +156,7 @@ class TestSuppliersList:
         assert "Old Vendor" in resp.text
         assert "Acme Wax Co" not in resp.text
 
-    def test_list_renders_new_supplier_cta(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_renders_new_supplier_cta(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers")
@@ -187,9 +169,7 @@ class TestSuppliersList:
 
 
 class TestSupplierCreate:
-    def test_get_new_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers/new")
@@ -197,9 +177,7 @@ class TestSupplierCreate:
         assert 'name="name"' in resp.text
         assert 'name="csrf_token"' in resp.text
 
-    def test_create_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -264,9 +242,7 @@ class TestSupplierCreate:
         assert s.phone is None
         assert s.notes is None
 
-    def test_create_rejects_empty_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_empty_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -292,9 +268,7 @@ class TestSupplierCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(Supplier)).first() is None
 
-    def test_create_rejects_duplicate_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_duplicate_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add(Supplier(name="Acme"))
         db_session.commit()
@@ -309,9 +283,7 @@ class TestSupplierCreate:
         rows = list(db_session.execute(select(Supplier)).scalars().all())
         assert len(rows) == 1  # original survived
 
-    def test_create_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -362,9 +334,7 @@ class TestSupplierCreate:
 
 
 class TestSupplierEdit:
-    def test_get_edit_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme", email="o@a.test")
         db_session.add(s)
@@ -376,17 +346,13 @@ class TestSupplierEdit:
         assert "Acme" in resp.text
         assert "o@a.test" in resp.text
 
-    def test_get_edit_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers/9999/edit")
         assert resp.status_code == 404
 
-    def test_post_update_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme", email="o@a.test")
         db_session.add(s)
@@ -414,9 +380,7 @@ class TestSupplierEdit:
         assert refreshed.phone == "0123"
         assert refreshed.notes == "renamed"
 
-    def test_post_update_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -426,9 +390,7 @@ class TestSupplierEdit:
         )
         assert resp.status_code == 404
 
-    def test_post_update_can_keep_same_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_can_keep_same_name(self, client: TestClient, db_session: Session) -> None:
         """Updating without renaming must not trip the unique constraint."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme", email="o@a.test")
@@ -468,9 +430,7 @@ class TestSupplierEdit:
         db_session.expire_all()
         assert db_session.get(Supplier, b.id).name == "Brindleys"  # type: ignore[union-attr]
 
-    def test_post_update_rejects_empty_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_rejects_empty_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme")
         db_session.add(s)
@@ -544,9 +504,7 @@ class TestSupplierEdit:
 
 
 class TestSupplierArchive:
-    def test_archive_sets_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_sets_archived_at(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme")
         db_session.add(s)
@@ -565,9 +523,7 @@ class TestSupplierArchive:
         assert refreshed is not None
         assert refreshed.archived_at is not None
 
-    def test_archive_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme")
         db_session.add(s)
@@ -604,9 +560,7 @@ class TestSupplierArchive:
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="supplier.archived") == []
 
-    def test_unarchive_clears_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_clears_archived_at(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(s)
@@ -625,9 +579,7 @@ class TestSupplierArchive:
         assert refreshed is not None
         assert refreshed.archived_at is None
 
-    def test_unarchive_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(name="Acme", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(s)
@@ -662,9 +614,7 @@ class TestSupplierArchive:
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="supplier.unarchived") == []
 
-    def test_archive_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -687,9 +637,7 @@ class TestSuppliersListCsvRoleEnforcement:
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -700,34 +648,26 @@ class TestSuppliersListCsvRoleEnforcement:
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 403
 
-    def test_office_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         """Suppliers are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 200
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/suppliers?format=csv")
@@ -765,18 +705,14 @@ class TestSuppliersListCsvHeaders:
 
 
 class TestSuppliersListCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/suppliers?format=csv")
         assert resp.status_code == 200
         assert resp.text == "id,name,email,phone,notes\r\n"
 
-    def test_one_supplier_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_supplier_one_data_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         s = Supplier(
             name="Acme Wax Co",
@@ -799,9 +735,7 @@ class TestSuppliersListCsvBody:
         assert cells[3] == "0123 456789"
         assert cells[4] == "Trade #44"
 
-    def test_show_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         active = Supplier(name="Acme Wax Co")
         archived = Supplier(
@@ -843,15 +777,11 @@ class TestSuppliersListCsvBody:
         assert cells[3] == ""
         assert cells[4] == ""
 
-    def test_alphabetical_ordering_in_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_alphabetical_ordering_in_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         # Insert deliberately out-of-order; the route orders by name within
         # the bucket.
-        db_session.add_all(
-            [Supplier(name="Zebra Ltd"), Supplier(name="Acme Wax Co")]
-        )
+        db_session.add_all([Supplier(name="Zebra Ltd"), Supplier(name="Acme Wax Co")])
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers?format=csv")
@@ -862,9 +792,7 @@ class TestSuppliersListCsvBody:
 
 
 class TestSuppliersListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/suppliers")
@@ -872,9 +800,7 @@ class TestSuppliersListCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="suppliers-tabs"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/suppliers?format=garbage")
@@ -883,9 +809,7 @@ class TestSuppliersListCsvHtmlBranch:
 
 
 class TestSuppliersListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add(Supplier(name="Acme"))
         db_session.commit()

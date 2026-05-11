@@ -40,9 +40,7 @@ from app.models import (
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
@@ -69,9 +67,7 @@ def _item(db: Session, *, sku: str = "RM-001") -> Item:
     return item
 
 
-def _make_movement(
-    db: Session, *, item: Item, type_: MovementType, qty: Decimal
-) -> StockMovement:
+def _make_movement(db: Session, *, item: Item, type_: MovementType, qty: Decimal) -> StockMovement:
     """Mimic a route handler: create a movement, flush so it has an id, then
     pass it to the engine. The route layer would commit on success."""
     m = StockMovement(item_id=item.id, type=type_, qty=qty)
@@ -88,9 +84,7 @@ def _make_movement(
 class TestRecordReceipt:
     def test_creates_layer_with_correct_fields(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("10")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("10"))
         received = datetime(2026, 5, 6, 9, 0, 0, tzinfo=UTC)
 
         layer = record_receipt(
@@ -110,18 +104,14 @@ class TestRecordReceipt:
         assert layer.qty_remaining == Decimal("10")
         assert layer.unit_cost == Decimal("2.50")
         # SQLite drops tzinfo on round-trip; compare naive forms.
-        assert layer.received_at.replace(tzinfo=None) == received.replace(
-            tzinfo=None
-        )
+        assert layer.received_at.replace(tzinfo=None) == received.replace(tzinfo=None)
         assert layer.source is CostLayerSource.MANUAL_IN
         assert layer.source_movement_id == movement.id
 
     def test_increments_item_current_qty(self, db: Session) -> None:
         item = _item(db)
         assert item.current_qty == Decimal("0")
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("7")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("7"))
 
         record_receipt(
             db,
@@ -137,9 +127,7 @@ class TestRecordReceipt:
 
     def test_sets_movement_total_cost(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("4")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("4"))
 
         record_receipt(
             db,
@@ -155,9 +143,7 @@ class TestRecordReceipt:
 
     def test_received_at_defaults_to_now(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("1")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("1"))
         before = datetime.now(UTC).replace(tzinfo=None)
 
         layer = record_receipt(
@@ -172,15 +158,11 @@ class TestRecordReceipt:
         after = datetime.now(UTC).replace(tzinfo=None)
         # SQLite drops tzinfo on round-trip; compare against naive bounds.
         received_naive = layer.received_at.replace(tzinfo=None)
-        assert before - timedelta(seconds=1) <= received_naive <= after + timedelta(
-            seconds=1
-        )
+        assert before - timedelta(seconds=1) <= received_naive <= after + timedelta(seconds=1)
 
     def test_rejects_zero_qty(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("0")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("0"))
         with pytest.raises(ValueError, match="qty must be positive"):
             record_receipt(
                 db,
@@ -193,9 +175,7 @@ class TestRecordReceipt:
 
     def test_rejects_negative_qty(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("-1")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("-1"))
         with pytest.raises(ValueError, match="qty must be positive"):
             record_receipt(
                 db,
@@ -208,9 +188,7 @@ class TestRecordReceipt:
 
     def test_rejects_negative_unit_cost(self, db: Session) -> None:
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("1")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("1"))
         with pytest.raises(ValueError, match="unit_cost cannot be negative"):
             record_receipt(
                 db,
@@ -224,9 +202,7 @@ class TestRecordReceipt:
     def test_zero_unit_cost_is_allowed(self, db: Session) -> None:
         """Gifted / sample stock has a real qty but zero cost basis."""
         item = _item(db)
-        movement = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("5")
-        )
+        movement = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("5"))
 
         layer = record_receipt(
             db,
@@ -243,9 +219,7 @@ class TestRecordReceipt:
 
     def test_requires_flushed_movement(self, db: Session) -> None:
         item = _item(db)
-        movement = StockMovement(
-            item_id=item.id, type=MovementType.IN, qty=Decimal("1")
-        )
+        movement = StockMovement(item_id=item.id, type=MovementType.IN, qty=Decimal("1"))
         # Not flushed: movement.id is None.
         with pytest.raises(ValueError, match="movement must be flushed"):
             record_receipt(
@@ -266,9 +240,7 @@ class TestRecordReceipt:
 class TestConsumeFifoSingleLayer:
     def test_partial_consumption(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("10")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("10"))
         record_receipt(
             db,
             item=item,
@@ -279,9 +251,7 @@ class TestConsumeFifoSingleLayer:
         )
         db.commit()
 
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("4")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("4"))
         total = consume_fifo(db, item=item, qty=Decimal("4"), movement=out_mvt)
         db.commit()
 
@@ -303,9 +273,7 @@ class TestConsumeFifoSingleLayer:
 
     def test_exact_layer_consumption_leaves_zero_remaining(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("5")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("5"))
         record_receipt(
             db,
             item=item,
@@ -316,9 +284,7 @@ class TestConsumeFifoSingleLayer:
         )
         db.commit()
 
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("5")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("5"))
         total = consume_fifo(db, item=item, qty=Decimal("5"), movement=out_mvt)
         db.commit()
 
@@ -334,9 +300,7 @@ class TestConsumeFifoMultiLayer:
     def test_spans_two_layers_oldest_first(self, db: Session) -> None:
         item = _item(db)
         # Two receipts at different times, different unit costs.
-        in_a = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("4")
-        )
+        in_a = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("4"))
         record_receipt(
             db,
             item=item,
@@ -346,9 +310,7 @@ class TestConsumeFifoMultiLayer:
             movement=in_a,
             received_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        in_b = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("6")
-        )
+        in_b = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("6"))
         record_receipt(
             db,
             item=item,
@@ -361,9 +323,7 @@ class TestConsumeFifoMultiLayer:
         db.commit()
 
         # Consume 7: takes all 4 from layer A (@ 2 = 8) + 3 from layer B (@ 5 = 15) → 23.
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("7")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("7"))
         total = consume_fifo(db, item=item, qty=Decimal("7"), movement=out_mvt)
         db.commit()
 
@@ -371,17 +331,11 @@ class TestConsumeFifoMultiLayer:
         db.refresh(item)
         assert item.current_qty == Decimal("3")
 
-        layers = (
-            db.query(CostLayer).order_by(CostLayer.received_at.asc()).all()
-        )
+        layers = db.query(CostLayer).order_by(CostLayer.received_at.asc()).all()
         assert layers[0].qty_remaining == Decimal("0")
         assert layers[1].qty_remaining == Decimal("3")
 
-        consumptions = (
-            db.query(CostLayerConsumption)
-            .order_by(CostLayerConsumption.id.asc())
-            .all()
-        )
+        consumptions = db.query(CostLayerConsumption).order_by(CostLayerConsumption.id.asc()).all()
         assert len(consumptions) == 2
         assert consumptions[0].layer_id == layers[0].id
         assert consumptions[0].qty_consumed == Decimal("4")
@@ -394,9 +348,7 @@ class TestConsumeFifoMultiLayer:
         """A layer with qty_remaining=0 must not appear in the FIFO walk."""
         item = _item(db)
         # Layer A entirely consumed.
-        in_a = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("3")
-        )
+        in_a = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("3"))
         record_receipt(
             db,
             item=item,
@@ -406,16 +358,12 @@ class TestConsumeFifoMultiLayer:
             movement=in_a,
             received_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        out_drain = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("3")
-        )
+        out_drain = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("3"))
         consume_fifo(db, item=item, qty=Decimal("3"), movement=out_drain)
         db.commit()
 
         # New layer B at a different cost.
-        in_b = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("4")
-        )
+        in_b = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("4"))
         record_receipt(
             db,
             item=item,
@@ -428,9 +376,7 @@ class TestConsumeFifoMultiLayer:
         db.commit()
 
         # Consume 2: must come from B at 7, not A (which is exhausted).
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("2")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("2"))
         total = consume_fifo(db, item=item, qty=Decimal("2"), movement=out_mvt)
         db.commit()
         assert total == Decimal("14")
@@ -446,15 +392,11 @@ class TestConsumeFifoMultiLayer:
         assert consumptions[0].qty_consumed == Decimal("2")
         assert consumptions[0].unit_cost_at_consumption == Decimal("7")
 
-    def test_ties_broken_by_id_when_received_at_identical(
-        self, db: Session
-    ) -> None:
+    def test_ties_broken_by_id_when_received_at_identical(self, db: Session) -> None:
         """Two layers at the exact same instant — older id is consumed first."""
         item = _item(db)
         with freeze_time("2026-05-06T12:00:00Z"):
-            in_a = _make_movement(
-                db, item=item, type_=MovementType.IN, qty=Decimal("2")
-            )
+            in_a = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("2"))
             layer_a = record_receipt(
                 db,
                 item=item,
@@ -463,9 +405,7 @@ class TestConsumeFifoMultiLayer:
                 source=CostLayerSource.MANUAL_IN,
                 movement=in_a,
             )
-            in_b = _make_movement(
-                db, item=item, type_=MovementType.IN, qty=Decimal("2")
-            )
+            in_b = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("2"))
             layer_b = record_receipt(
                 db,
                 item=item,
@@ -478,9 +418,7 @@ class TestConsumeFifoMultiLayer:
             assert layer_a.received_at == layer_b.received_at
             assert layer_a.id < layer_b.id
 
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("2")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("2"))
         total = consume_fifo(db, item=item, qty=Decimal("2"), movement=out_mvt)
         db.commit()
         # If id-tiebreak works, we drain layer_a (@ 1) entirely → cost 2.
@@ -496,9 +434,7 @@ class TestConsumeFifoMultiLayer:
 class TestConsumeFifoErrors:
     def test_over_consumption_raises(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("5")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("5"))
         record_receipt(
             db,
             item=item,
@@ -509,9 +445,7 @@ class TestConsumeFifoErrors:
         )
         db.commit()
 
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("10")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("10"))
         with pytest.raises(InsufficientStockError) as exc:
             consume_fifo(db, item=item, qty=Decimal("10"), movement=out_mvt)
         assert exc.value.requested == Decimal("10")
@@ -521,9 +455,7 @@ class TestConsumeFifoErrors:
     def test_over_consumption_is_atomic(self, db: Session) -> None:
         """No layers / qtys / consumptions touched after the raise."""
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("5")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("5"))
         record_receipt(
             db,
             item=item,
@@ -538,9 +470,7 @@ class TestConsumeFifoErrors:
         layer = db.query(CostLayer).one()
         original_remaining = layer.qty_remaining
 
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("99")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("99"))
         with pytest.raises(InsufficientStockError):
             consume_fifo(db, item=item, qty=Decimal("99"), movement=out_mvt)
 
@@ -558,34 +488,26 @@ class TestConsumeFifoErrors:
 
     def test_no_layers_at_all_raises(self, db: Session) -> None:
         item = _item(db)
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("1")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("1"))
         with pytest.raises(InsufficientStockError) as exc:
             consume_fifo(db, item=item, qty=Decimal("1"), movement=out_mvt)
         assert exc.value.available == Decimal("0")
 
     def test_zero_qty_raises(self, db: Session) -> None:
         item = _item(db)
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("0")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("0"))
         with pytest.raises(ValueError, match="qty must be positive"):
             consume_fifo(db, item=item, qty=Decimal("0"), movement=out_mvt)
 
     def test_negative_qty_raises(self, db: Session) -> None:
         item = _item(db)
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("-1")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("-1"))
         with pytest.raises(ValueError, match="qty must be positive"):
             consume_fifo(db, item=item, qty=Decimal("-1"), movement=out_mvt)
 
     def test_requires_flushed_movement(self, db: Session) -> None:
         item = _item(db)
-        movement = StockMovement(
-            item_id=item.id, type=MovementType.OUT, qty=Decimal("1")
-        )
+        movement = StockMovement(item_id=item.id, type=MovementType.OUT, qty=Decimal("1"))
         with pytest.raises(ValueError, match="movement must be flushed"):
             consume_fifo(db, item=item, qty=Decimal("1"), movement=movement)
 
@@ -595,9 +517,7 @@ class TestConsumeFifoIsolation:
         item_a = _item(db, sku="A")
         item_b = _item(db, sku="B")
 
-        in_a = _make_movement(
-            db, item=item_a, type_=MovementType.IN, qty=Decimal("10")
-        )
+        in_a = _make_movement(db, item=item_a, type_=MovementType.IN, qty=Decimal("10"))
         record_receipt(
             db,
             item=item_a,
@@ -609,9 +529,7 @@ class TestConsumeFifoIsolation:
         db.commit()
 
         # Item B has no stock — consume should fail without touching A's.
-        out_b = _make_movement(
-            db, item=item_b, type_=MovementType.OUT, qty=Decimal("1")
-        )
+        out_b = _make_movement(db, item=item_b, type_=MovementType.OUT, qty=Decimal("1"))
         with pytest.raises(InsufficientStockError):
             consume_fifo(db, item=item_b, qty=Decimal("1"), movement=out_b)
 
@@ -633,9 +551,7 @@ class TestOpenValue:
 
     def test_single_layer(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("4")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("4"))
         record_receipt(
             db,
             item=item,
@@ -649,9 +565,7 @@ class TestOpenValue:
 
     def test_multi_layer_sums(self, db: Session) -> None:
         item = _item(db)
-        in_a = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("3")
-        )
+        in_a = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("3"))
         record_receipt(
             db,
             item=item,
@@ -661,9 +575,7 @@ class TestOpenValue:
             movement=in_a,
             received_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
-        in_b = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("5")
-        )
+        in_b = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("5"))
         record_receipt(
             db,
             item=item,
@@ -679,9 +591,7 @@ class TestOpenValue:
 
     def test_exhausted_layer_excluded(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("3")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("3"))
         record_receipt(
             db,
             item=item,
@@ -690,9 +600,7 @@ class TestOpenValue:
             source=CostLayerSource.MANUAL_IN,
             movement=in_mvt,
         )
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("3")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("3"))
         consume_fifo(db, item=item, qty=Decimal("3"), movement=out_mvt)
         db.commit()
         # Layer is exhausted (qty_remaining=0) → excluded from open_value.
@@ -700,9 +608,7 @@ class TestOpenValue:
 
     def test_partial_layer_included(self, db: Session) -> None:
         item = _item(db)
-        in_mvt = _make_movement(
-            db, item=item, type_=MovementType.IN, qty=Decimal("10")
-        )
+        in_mvt = _make_movement(db, item=item, type_=MovementType.IN, qty=Decimal("10"))
         record_receipt(
             db,
             item=item,
@@ -711,9 +617,7 @@ class TestOpenValue:
             source=CostLayerSource.MANUAL_IN,
             movement=in_mvt,
         )
-        out_mvt = _make_movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("4")
-        )
+        out_mvt = _make_movement(db, item=item, type_=MovementType.OUT, qty=Decimal("4"))
         consume_fifo(db, item=item, qty=Decimal("4"), movement=out_mvt)
         db.commit()
         # 6 remaining at 3 each = 18.
@@ -722,9 +626,7 @@ class TestOpenValue:
     def test_isolation_between_items(self, db: Session) -> None:
         item_a = _item(db, sku="A")
         item_b = _item(db, sku="B")
-        in_a = _make_movement(
-            db, item=item_a, type_=MovementType.IN, qty=Decimal("2")
-        )
+        in_a = _make_movement(db, item=item_a, type_=MovementType.IN, qty=Decimal("2"))
         record_receipt(
             db,
             item=item_a,
@@ -733,9 +635,7 @@ class TestOpenValue:
             source=CostLayerSource.MANUAL_IN,
             movement=in_a,
         )
-        in_b = _make_movement(
-            db, item=item_b, type_=MovementType.IN, qty=Decimal("3")
-        )
+        in_b = _make_movement(db, item=item_b, type_=MovementType.IN, qty=Decimal("3"))
         record_receipt(
             db,
             item=item_b,
@@ -815,9 +715,7 @@ class TestCombinedScenarios:
         item = _item(db)
 
         # Positive adjustment: 7 @ 4 → layer of source positive_adjustment.
-        m_pos = _make_movement(
-            db, item=item, type_=MovementType.ADJUSTMENT, qty=Decimal("7")
-        )
+        m_pos = _make_movement(db, item=item, type_=MovementType.ADJUSTMENT, qty=Decimal("7"))
         layer = record_receipt(
             db,
             item=item,
@@ -832,9 +730,7 @@ class TestCombinedScenarios:
         assert item.current_qty == Decimal("7")
 
         # Negative adjustment: 2 → consume FIFO.
-        m_neg = _make_movement(
-            db, item=item, type_=MovementType.ADJUSTMENT, qty=Decimal("-2")
-        )
+        m_neg = _make_movement(db, item=item, type_=MovementType.ADJUSTMENT, qty=Decimal("-2"))
         cost = consume_fifo(db, item=item, qty=Decimal("2"), movement=m_neg)
         db.commit()
         assert cost == Decimal("8")

@@ -100,9 +100,7 @@ def health() -> dict[str, str]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(
-    request: Request, current_user: User | None = Depends(get_current_user)
-) -> HTMLResponse:
+def index(request: Request, current_user: User | None = Depends(get_current_user)) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -173,9 +171,7 @@ def admin_list_users(
     db: Session = Depends(get_session),
 ) -> Response:
     rows = list(
-        db.execute(select(User).order_by(_USER_LIST_ORDER, User.created_at.desc()))
-        .scalars()
-        .all()
+        db.execute(select(User).order_by(_USER_LIST_ORDER, User.created_at.desc())).scalars().all()
     )
 
     if (

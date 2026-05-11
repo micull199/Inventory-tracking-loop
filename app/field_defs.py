@@ -63,9 +63,7 @@ _SORT_ORDER_STEP = 10
 
 # All eight values are "select" + "multiselect" only; everything else is
 # treated as a non-options type.
-_OPTIONS_TYPES: frozenset[FieldType] = frozenset(
-    {FieldType.SELECT, FieldType.MULTISELECT}
-)
+_OPTIONS_TYPES: frozenset[FieldType] = frozenset({FieldType.SELECT, FieldType.MULTISELECT})
 
 
 def _derive_key(name: str) -> str:
@@ -140,9 +138,7 @@ def _normalise(
         if parsed_options:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "options are only valid for select / multiselect fields"
-                ),
+                detail=("options are only valid for select / multiselect fields"),
             )
         options_value = None
 
@@ -170,9 +166,7 @@ def _normalise(
 
 def _validate_name(name: str) -> str:
     if not name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     return name
 
 
@@ -206,16 +200,12 @@ def _check_key_unique(
     if db.execute(stmt).first() is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "a field whose key collides with this name already exists on this node"
-            ),
+            detail=("a field whose key collides with this name already exists on this node"),
         )
 
 
 def _next_sort_order(db: Session, node_id: int) -> int:
-    stmt = select(func.max(TaxonomyFieldDef.sort_order)).where(
-        TaxonomyFieldDef.node_id == node_id
-    )
+    stmt = select(func.max(TaxonomyFieldDef.sort_order)).where(TaxonomyFieldDef.node_id == node_id)
     current_max = db.execute(stmt).scalar()
     if current_max is None:
         return 0
@@ -261,9 +251,7 @@ def _get_node(db: Session, node_id: int) -> TaxonomyNode:
 def _get_field_def(db: Session, field_id: int) -> TaxonomyFieldDef:
     field = db.get(TaxonomyFieldDef, field_id)
     if field is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="field not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="field not found")
     return field
 
 
@@ -325,9 +313,7 @@ def list_field_defs(
         stmt = stmt.where(TaxonomyFieldDef.archived_at.is_(None))
     else:
         stmt = stmt.where(TaxonomyFieldDef.archived_at.is_not(None))
-    stmt = stmt.order_by(
-        _LIST_ORDER, TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name
-    )
+    stmt = stmt.order_by(_LIST_ORDER, TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
 
     rows = list(db.execute(stmt).scalars().all())
 
@@ -426,10 +412,7 @@ def create_field_def(
     if not _is_leaf(db, node):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "fields can only be added to a leaf node — this node has "
-                "sub-categories"
-            ),
+            detail=("fields can only be added to a leaf node — this node has sub-categories"),
         )
 
     fields = _normalise(name, type, options_text, required, sort_order)
@@ -534,9 +517,7 @@ def edit_field_def_form(
     if node.parent_id is not None:
         parent = db.get(TaxonomyNode, node.parent_id)
 
-    options_text = (
-        "\n".join(field.options_json) if field.options_json is not None else ""
-    )
+    options_text = "\n".join(field.options_json) if field.options_json is not None else ""
 
     return templates.TemplateResponse(
         request,
@@ -583,12 +564,8 @@ def update_field_def(
     # new name has no alphanumeric content.
     new_key = _derive_key(fields["name"])
 
-    _check_name_unique(
-        db, node_id=field.node_id, name=fields["name"], exclude_id=field.id
-    )
-    _check_key_unique(
-        db, node_id=field.node_id, key=new_key, exclude_id=field.id
-    )
+    _check_name_unique(db, node_id=field.node_id, name=fields["name"], exclude_id=field.id)
+    _check_key_unique(db, node_id=field.node_id, key=new_key, exclude_id=field.id)
     if fields["sort_order"] is None:
         fields["sort_order"] = field.sort_order
 
@@ -684,9 +661,7 @@ def unarchive_field_def(
         if not _is_leaf(db, node):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "cannot unarchive a field on a node that has sub-categories"
-                ),
+                detail=("cannot unarchive a field on a node that has sub-categories"),
             )
 
         previous = field.archived_at

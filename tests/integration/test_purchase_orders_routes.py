@@ -183,14 +183,8 @@ def _seed_layer(
     db.commit()
 
 
-def _po_audit_rows(
-    db: Session, *, action: str | None = None
-) -> list[AuditLog]:
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "purchase_order")
-        .order_by(AuditLog.id)
-    )
+def _po_audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
+    stmt = select(AuditLog).where(AuditLog.entity_type == "purchase_order").order_by(AuditLog.id)
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
     return list(db.execute(stmt).scalars().all())
@@ -218,9 +212,7 @@ class TestPORoleEnforcement:
         resp = client.get("/admin/purchase-orders/1")
         assert resp.status_code == 401
 
-    def test_pending_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -235,9 +227,7 @@ class TestPORoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -247,41 +237,31 @@ class TestPORoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/purchase-orders")
         assert resp.status_code == 403
 
-    def test_workshop_get_detail_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_detail_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/purchase-orders/1")
         assert resp.status_code == 403
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders")
         assert resp.status_code == 200
 
-    def test_office_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders")
@@ -299,9 +279,7 @@ class TestDraftPOValidation:
         _login_as(client, u)
         return _make_supplier(db, name="ACME")
 
-    def test_blank_supplier_id_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_supplier_id_400(self, client: TestClient, db_session: Session) -> None:
         self._setup(db_session, client)
         resp = client.post(
             "/admin/reorder/draft-po",
@@ -311,9 +289,7 @@ class TestDraftPOValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(PurchaseOrder)).first() is None
 
-    def test_non_int_supplier_id_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_int_supplier_id_400(self, client: TestClient, db_session: Session) -> None:
         self._setup(db_session, client)
         resp = client.post(
             "/admin/reorder/draft-po",
@@ -322,9 +298,7 @@ class TestDraftPOValidation:
         )
         assert resp.status_code == 400
 
-    def test_unknown_supplier_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_supplier_400(self, client: TestClient, db_session: Session) -> None:
         self._setup(db_session, client)
         resp = client.post(
             "/admin/reorder/draft-po",
@@ -333,9 +307,7 @@ class TestDraftPOValidation:
         )
         assert resp.status_code == 400
 
-    def test_archived_supplier_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_supplier_400(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         sup = _make_supplier(db_session, name="ACME", archived=True)
@@ -388,9 +360,7 @@ class TestDraftPOValidation:
             follow_redirects=False,
         )
         assert _po_audit_rows(db_session) == []
-        assert (
-            db_session.execute(select(PurchaseOrderLine)).first() is None
-        )
+        assert db_session.execute(select(PurchaseOrderLine)).first() is None
 
 
 # ---------------------------------------------------------------------------
@@ -426,9 +396,7 @@ class TestDraftPOHappyPath:
         assert po.supplier_id == sup.id
         assert po.status == POStatus.DRAFT
         assert po.created_by == u.id
-        lines = list(
-            db_session.execute(select(PurchaseOrderLine)).scalars().all()
-        )
+        lines = list(db_session.execute(select(PurchaseOrderLine)).scalars().all())
         assert len(lines) == 1
         assert lines[0].po_id == po.id
         assert lines[0].qty_ordered == Decimal("100")
@@ -436,9 +404,7 @@ class TestDraftPOHappyPath:
         assert lines[0].expected_unit_cost is None
         assert resp.headers["location"] == f"/admin/purchase-orders/{po.id}"
 
-    def test_multi_line_po_ordered_by_sku(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_line_po_ordered_by_sku(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
@@ -493,9 +459,7 @@ class TestDraftPOHappyPath:
             Decimal("10"),
         ]
 
-    def test_above_threshold_items_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_above_threshold_items_excluded(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
@@ -526,16 +490,12 @@ class TestDraftPOHappyPath:
         assert resp.status_code == 303
         lines = list(
             db_session.execute(
-                select(PurchaseOrderLine, Item).join(
-                    Item, PurchaseOrderLine.item_id == Item.id
-                )
+                select(PurchaseOrderLine, Item).join(Item, PurchaseOrderLine.item_id == Item.id)
             ).all()
         )
         assert [item.sku for _line, item in lines] == ["LOW"]
 
-    def test_archived_items_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_items_excluded(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
@@ -565,16 +525,12 @@ class TestDraftPOHappyPath:
         assert resp.status_code == 303
         lines = list(
             db_session.execute(
-                select(PurchaseOrderLine, Item).join(
-                    Item, PurchaseOrderLine.item_id == Item.id
-                )
+                select(PurchaseOrderLine, Item).join(Item, PurchaseOrderLine.item_id == Item.id)
             ).all()
         )
         assert [item.sku for _line, item in lines] == ["LIVE"]
 
-    def test_other_suppliers_items_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_other_suppliers_items_excluded(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup_a = _make_supplier(db_session, name="ACME")
         sup_b = _make_supplier(db_session, name="OtherCo")
@@ -604,9 +560,7 @@ class TestDraftPOHappyPath:
         assert resp.status_code == 303
         lines = list(
             db_session.execute(
-                select(PurchaseOrderLine, Item).join(
-                    Item, PurchaseOrderLine.item_id == Item.id
-                )
+                select(PurchaseOrderLine, Item).join(Item, PurchaseOrderLine.item_id == Item.id)
             ).all()
         )
         assert [item.sku for _line, item in lines] == ["A-MINE"]
@@ -712,9 +666,7 @@ class TestDefaultQtyOrdered:
         _login_as(client, u)
         return sup, leaf
 
-    def test_uses_reorder_qty_when_positive(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_uses_reorder_qty_when_positive(self, client: TestClient, db_session: Session) -> None:
         sup, leaf = self._setup(db_session, client)
         _make_item(
             db_session,
@@ -786,18 +738,14 @@ class TestDefaultQtyOrdered:
 
 
 class TestDefaultExpectedUnitCost:
-    def _setup(
-        self, db: Session, client: TestClient
-    ) -> tuple[User, Supplier, TaxonomyNode]:
+    def _setup(self, db: Session, client: TestClient) -> tuple[User, Supplier, TaxonomyNode]:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME")
         leaf = _make_leaf(db)
         _login_as(client, u)
         return u, sup, leaf
 
-    def test_no_layers_yields_null(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_layers_yields_null(self, client: TestClient, db_session: Session) -> None:
         _, sup, leaf = self._setup(db_session, client)
         _make_item(
             db_session,
@@ -816,9 +764,7 @@ class TestDefaultExpectedUnitCost:
         line = db_session.execute(select(PurchaseOrderLine)).scalar_one()
         assert line.expected_unit_cost is None
 
-    def test_single_layer_used(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_single_layer_used(self, client: TestClient, db_session: Session) -> None:
         u, sup, leaf = self._setup(db_session, client)
         item = _make_item(
             db_session,
@@ -828,9 +774,7 @@ class TestDefaultExpectedUnitCost:
             threshold=Decimal("5"),
             supplier=sup,
         )
-        _seed_layer(
-            db_session, item=item, actor=u, qty=Decimal("10"), unit_cost=Decimal("4.25")
-        )
+        _seed_layer(db_session, item=item, actor=u, qty=Decimal("10"), unit_cost=Decimal("4.25"))
         item.current_qty = Decimal("0")
         db_session.commit()
 
@@ -893,9 +837,7 @@ class TestDefaultExpectedUnitCost:
 
 
 class TestPOListView:
-    def test_empty_state_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_state_renders(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders")
@@ -903,20 +845,14 @@ class TestPOListView:
         assert 'data-testid="po-list-empty"' in resp.text
         assert 'data-testid="po-row"' not in resp.text
 
-    def test_populated_list_newest_first(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_populated_list_newest_first(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         # Two POs; newer one second insertion → should appear first.
-        po1 = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po1 = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po1)
         db_session.commit()
-        po2 = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        po2 = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add(po2)
         db_session.commit()
 
@@ -933,12 +869,8 @@ class TestPOListView:
     ) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        draft = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
-        sent = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        draft = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
+        sent = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add_all([draft, sent])
         db_session.commit()
         db_session.refresh(draft)
@@ -955,12 +887,8 @@ class TestPOListView:
     ) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        draft = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
-        sent = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        draft = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
+        sent = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add_all([draft, sent])
         db_session.commit()
         db_session.refresh(draft)
@@ -979,22 +907,16 @@ class TestPOListView:
 
 
 class TestPODetailView:
-    def test_unknown_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders/9999")
         assert resp.status_code == 404
 
-    def test_renders_heading_supplier_status(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_heading_supplier_status(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="Bullion Co")
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po)
         db_session.commit()
         db_session.refresh(po)
@@ -1015,15 +937,9 @@ class TestPODetailView:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
-        item_b = _make_item(
-            db_session, leaf=leaf, sku="B-2", supplier=sup, name="B item"
-        )
-        item_a = _make_item(
-            db_session, leaf=leaf, sku="A-1", supplier=sup, name="A item"
-        )
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        item_b = _make_item(db_session, leaf=leaf, sku="B-2", supplier=sup, name="B item")
+        item_a = _make_item(db_session, leaf=leaf, sku="A-1", supplier=sup, name="A item")
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add(po)
         db_session.flush()
         line_b = PurchaseOrderLine(
@@ -1073,9 +989,7 @@ class TestPODetailView:
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="N-1", supplier=sup)
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add(po)
         db_session.flush()
         db_session.add(
@@ -1114,9 +1028,7 @@ def _make_draft_po(
 ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
     """Create a PO + one line per SKU directly (skipping the create route)."""
     skus = skus or ["EDIT-1"]
-    po = PurchaseOrder(
-        supplier_id=supplier.id, status=po_status, created_by=actor.id
-    )
+    po = PurchaseOrder(supplier_id=supplier.id, status=po_status, created_by=actor.id)
     db.add(po)
     db.flush()
     lines: list[PurchaseOrderLine] = []
@@ -1166,26 +1078,18 @@ def _form_data_for_po(
         qty_key = f"qty_ordered_{line.id}"
         cost_key = f"expected_unit_cost_{line.id}"
         data[qty_key] = (
-            qty_overrides[line.id]
-            if line.id in qty_overrides
-            else str(line.qty_ordered)
+            qty_overrides[line.id] if line.id in qty_overrides else str(line.qty_ordered)
         )
         data[cost_key] = (
             cost_overrides[line.id]
             if line.id in cost_overrides
-            else (
-                str(line.expected_unit_cost)
-                if line.expected_unit_cost is not None
-                else ""
-            )
+            else (str(line.expected_unit_cost) if line.expected_unit_cost is not None else "")
         )
     return data
 
 
 class TestPOEditRoleEnforcement:
-    def test_anonymous_post_update_is_401(
-        self, client: TestClient
-    ) -> None:
+    def test_anonymous_post_update_is_401(self, client: TestClient) -> None:
         resp = client.post(
             "/admin/purchase-orders/1",
             data={"csrf_token": _csrf(client)},
@@ -1193,9 +1097,7 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_anonymous_post_cancel_is_401(
-        self, client: TestClient
-    ) -> None:
+    def test_anonymous_post_cancel_is_401(self, client: TestClient) -> None:
         resp = client.post(
             "/admin/purchase-orders/1/cancel",
             data={"csrf_token": _csrf(client)},
@@ -1203,9 +1105,7 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_post_update_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_update_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -1220,9 +1120,7 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_pending_post_cancel_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_cancel_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -1237,9 +1135,7 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_post_update_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_update_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -1249,9 +1145,7 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_post_cancel_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_cancel_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -1261,54 +1155,38 @@ class TestPOEditRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_manager_post_update_succeeds(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_update_succeeds(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
-        po, lines = _make_draft_po(
-            db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-1"]
-        )
+        po, lines = _make_draft_po(db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-1"])
         _login_as(client, u)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
-            data=_form_data_for_po(
-                po=po, lines=lines, csrf=_csrf(client)
-            ),
+            data=_form_data_for_po(po=po, lines=lines, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_office_post_update_succeeds(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_update_succeeds(self, client: TestClient, db_session: Session) -> None:
         creator = _make_user(db_session, email="c@x.test", role=Role.MANAGER)
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
-        po, lines = _make_draft_po(
-            db_session, supplier=sup, leaf=leaf, actor=creator, skus=["E-2"]
-        )
+        po, lines = _make_draft_po(db_session, supplier=sup, leaf=leaf, actor=creator, skus=["E-2"])
         _login_as(client, u)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
-            data=_form_data_for_po(
-                po=po, lines=lines, csrf=_csrf(client)
-            ),
+            data=_form_data_for_po(po=po, lines=lines, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_manager_post_cancel_succeeds(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_cancel_succeeds(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
         leaf = _make_leaf(db_session)
-        po, _lines = _make_draft_po(
-            db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-3"]
-        )
+        po, _lines = _make_draft_po(db_session, supplier=sup, leaf=leaf, actor=u, skus=["E-3"])
         _login_as(client, u)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
@@ -1340,42 +1218,26 @@ class TestPOEditStatusGuard:
         _login_as(client, u)
         return po, lines
 
-    def test_edit_sent_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        po, lines = self._setup_po(
-            db_session, client, po_status=POStatus.SENT
-        )
+    def test_edit_sent_po_is_400(self, client: TestClient, db_session: Session) -> None:
+        po, lines = self._setup_po(db_session, client, po_status=POStatus.SENT)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
-            data=_form_data_for_po(
-                po=po, lines=lines, csrf=_csrf(client)
-            ),
+            data=_form_data_for_po(po=po, lines=lines, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_edit_received_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        po, lines = self._setup_po(
-            db_session, client, po_status=POStatus.RECEIVED
-        )
+    def test_edit_received_po_is_400(self, client: TestClient, db_session: Session) -> None:
+        po, lines = self._setup_po(db_session, client, po_status=POStatus.RECEIVED)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
-            data=_form_data_for_po(
-                po=po, lines=lines, csrf=_csrf(client)
-            ),
+            data=_form_data_for_po(po=po, lines=lines, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_cancel_sent_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        po, _lines = self._setup_po(
-            db_session, client, po_status=POStatus.SENT
-        )
+    def test_cancel_sent_po_is_400(self, client: TestClient, db_session: Session) -> None:
+        po, _lines = self._setup_po(db_session, client, po_status=POStatus.SENT)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
             data={"csrf_token": _csrf(client)},
@@ -1386,9 +1248,7 @@ class TestPOEditStatusGuard:
     def test_cancel_already_cancelled_po_is_400(
         self, client: TestClient, db_session: Session
     ) -> None:
-        po, _lines = self._setup_po(
-            db_session, client, po_status=POStatus.CANCELLED
-        )
+        po, _lines = self._setup_po(db_session, client, po_status=POStatus.CANCELLED)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
             data={"csrf_token": _csrf(client)},
@@ -1396,9 +1256,7 @@ class TestPOEditStatusGuard:
         )
         assert resp.status_code == 400
 
-    def test_edit_unknown_po_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_unknown_po_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.post(
@@ -1408,9 +1266,7 @@ class TestPOEditStatusGuard:
         )
         assert resp.status_code == 404
 
-    def test_cancel_unknown_po_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancel_unknown_po_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.post(
@@ -1430,15 +1286,11 @@ class TestPOEditValidation:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME")
         leaf = _make_leaf(db)
-        po, lines = _make_draft_po(
-            db, supplier=sup, leaf=leaf, actor=u, skus=["V-1"]
-        )
+        po, lines = _make_draft_po(db, supplier=sup, leaf=leaf, actor=u, skus=["V-1"])
         _login_as(client, u)
         return u, po, lines
 
-    def test_bad_expected_date_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_expected_date_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1453,13 +1305,9 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_notes_over_limit_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_notes_over_limit_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
-        data = _form_data_for_po(
-            po=po, lines=lines, csrf=_csrf(client), notes="x" * 2001
-        )
+        data = _form_data_for_po(po=po, lines=lines, csrf=_csrf(client), notes="x" * 2001)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
             data=data,
@@ -1467,9 +1315,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_qty_blank_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_qty_blank_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1484,9 +1330,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_qty_zero_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_qty_zero_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1501,9 +1345,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_qty_negative_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_qty_negative_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1518,9 +1360,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_qty_non_numeric_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_qty_non_numeric_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1535,9 +1375,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_cost_negative_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cost_negative_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1552,9 +1390,7 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_cost_non_numeric_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cost_non_numeric_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
         data = _form_data_for_po(
             po=po,
@@ -1569,13 +1405,9 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_missing_line_qty_field_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_missing_line_qty_field_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
-        data = _form_data_for_po(
-            po=po, lines=lines, csrf=_csrf(client)
-        )
+        data = _form_data_for_po(po=po, lines=lines, csrf=_csrf(client))
         del data[f"qty_ordered_{lines[0].id}"]
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1584,13 +1416,9 @@ class TestPOEditValidation:
         )
         assert resp.status_code == 400
 
-    def test_missing_line_cost_field_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_missing_line_cost_field_is_400(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client)
-        data = _form_data_for_po(
-            po=po, lines=lines, csrf=_csrf(client)
-        )
+        data = _form_data_for_po(po=po, lines=lines, csrf=_csrf(client))
         del data[f"expected_unit_cost_{lines[0].id}"]
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1675,19 +1503,13 @@ class TestPOEditHappyPath:
         after = rows[0].after_json
         assert before is not None
         assert after is not None
-        assert before["lines"] == [
-            {"line_id": line_id, "qty_ordered": "10.0000"}
-        ]
-        assert after["lines"] == [
-            {"line_id": line_id, "qty_ordered": "42"}
-        ]
+        assert before["lines"] == [{"line_id": line_id, "qty_ordered": "10.0000"}]
+        assert after["lines"] == [{"line_id": line_id, "qty_ordered": "42"}]
         # No top-level keys when only line changed.
         assert "expected_date" not in before
         assert "notes" not in before
 
-    def test_change_cost_from_null_to_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_change_cost_from_null_to_value(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client, skus=["H-2"])
         line_id = lines[0].id
         resp = client.post(
@@ -1709,17 +1531,11 @@ class TestPOEditHappyPath:
         rows = _po_audit_rows(db_session, action="purchase_order.updated")
         assert len(rows) == 1
         assert rows[0].before_json is not None
-        assert rows[0].before_json["lines"] == [
-            {"line_id": line_id, "expected_unit_cost": None}
-        ]
+        assert rows[0].before_json["lines"] == [{"line_id": line_id, "expected_unit_cost": None}]
         assert rows[0].after_json is not None
-        assert rows[0].after_json["lines"] == [
-            {"line_id": line_id, "expected_unit_cost": "1.50"}
-        ]
+        assert rows[0].after_json["lines"] == [{"line_id": line_id, "expected_unit_cost": "1.50"}]
 
-    def test_clear_cost_to_null(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_clear_cost_to_null(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(
             db_session,
             client,
@@ -1743,9 +1559,7 @@ class TestPOEditHappyPath:
         assert line is not None
         assert line.expected_unit_cost is None
 
-    def test_change_top_level_notes(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_change_top_level_notes(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client, skus=["H-4"])
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1770,9 +1584,7 @@ class TestPOEditHappyPath:
         assert rows[0].after_json is not None
         assert rows[0].after_json.get("notes") == "please rush"
 
-    def test_change_top_level_expected_date(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_change_top_level_expected_date(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client, skus=["H-5"])
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1798,9 +1610,7 @@ class TestPOEditHappyPath:
     def test_multi_line_only_changed_lines_in_audit(
         self, client: TestClient, db_session: Session
     ) -> None:
-        _u, po, lines = self._setup(
-            db_session, client, skus=["M-A", "M-B", "M-C"]
-        )
+        _u, po, lines = self._setup(db_session, client, skus=["M-A", "M-B", "M-C"])
         # Change only line[1].
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1819,25 +1629,19 @@ class TestPOEditHappyPath:
         assert len(before_lines) == 1
         assert before_lines[0]["line_id"] == lines[1].id
 
-    def test_no_op_submit_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_op_submit_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client, skus=["N-1"])
         existing = len(_po_audit_rows(db_session))
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
-            data=_form_data_for_po(
-                po=po, lines=lines, csrf=_csrf(client)
-            ),
+            data=_form_data_for_po(po=po, lines=lines, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         # No new audit row.
         assert len(_po_audit_rows(db_session)) == existing
 
-    def test_flash_includes_saved(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_includes_saved(self, client: TestClient, db_session: Session) -> None:
         _u, po, lines = self._setup(db_session, client, skus=["F-1"])
         resp = client.post(
             f"/admin/purchase-orders/{po.id}",
@@ -1854,21 +1658,15 @@ class TestPOEditHappyPath:
 
 
 class TestPOCancelHappyPath:
-    def _setup(
-        self, db: Session, client: TestClient
-    ) -> tuple[User, PurchaseOrder]:
+    def _setup(self, db: Session, client: TestClient) -> tuple[User, PurchaseOrder]:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME")
         leaf = _make_leaf(db)
-        po, _lines = _make_draft_po(
-            db, supplier=sup, leaf=leaf, actor=u, skus=["C-1"]
-        )
+        po, _lines = _make_draft_po(db, supplier=sup, leaf=leaf, actor=u, skus=["C-1"])
         _login_as(client, u)
         return u, po
 
-    def test_cancel_flips_status(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancel_flips_status(self, client: TestClient, db_session: Session) -> None:
         _u, po = self._setup(db_session, client)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
@@ -1881,26 +1679,20 @@ class TestPOCancelHappyPath:
         assert po_reloaded is not None
         assert po_reloaded.status == POStatus.CANCELLED
 
-    def test_cancel_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancel_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         _u, po = self._setup(db_session, client)
         client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
             data={"csrf_token": _csrf(client)},
             follow_redirects=False,
         )
-        rows = _po_audit_rows(
-            db_session, action="purchase_order.cancelled"
-        )
+        rows = _po_audit_rows(db_session, action="purchase_order.cancelled")
         assert len(rows) == 1
         assert rows[0].before_json == {"status": "draft"}
         assert rows[0].after_json == {"status": "cancelled"}
         assert rows[0].entity_id == po.id
 
-    def test_cancel_redirects_to_detail(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancel_redirects_to_detail(self, client: TestClient, db_session: Session) -> None:
         _u, po = self._setup(db_session, client)
         resp = client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
@@ -1908,10 +1700,7 @@ class TestPOCancelHappyPath:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert (
-            resp.headers["location"]
-            == f"/admin/purchase-orders/{po.id}"
-        )
+        assert resp.headers["location"] == f"/admin/purchase-orders/{po.id}"
 
     def test_cancel_preserves_lines_and_supplier(
         self, client: TestClient, db_session: Session
@@ -1919,9 +1708,7 @@ class TestPOCancelHappyPath:
         _u, po = self._setup(db_session, client)
         original_supplier_id = po.supplier_id
         original_line_count = db_session.scalar(
-            select(func.count(PurchaseOrderLine.id)).where(
-                PurchaseOrderLine.po_id == po.id
-            )
+            select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.po_id == po.id)
         )
         client.post(
             f"/admin/purchase-orders/{po.id}/cancel",
@@ -1933,9 +1720,7 @@ class TestPOCancelHappyPath:
         assert po_reloaded is not None
         assert po_reloaded.supplier_id == original_supplier_id
         new_line_count = db_session.scalar(
-            select(func.count(PurchaseOrderLine.id)).where(
-                PurchaseOrderLine.po_id == po.id
-            )
+            select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.po_id == po.id)
         )
         assert new_line_count == original_line_count
 
@@ -1961,9 +1746,7 @@ class TestPODetailRenderDelta:
         _login_as(client, u)
         return po
 
-    def test_draft_renders_edit_form(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_renders_edit_form(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.DRAFT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
@@ -1977,9 +1760,7 @@ class TestPODetailRenderDelta:
         assert 'data-testid="po-edit-notes-input"' in resp.text
         assert 'data-testid="po-readonly-banner"' not in resp.text
 
-    def test_sent_renders_readonly(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_renders_readonly(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.SENT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
@@ -1988,27 +1769,21 @@ class TestPODetailRenderDelta:
         assert 'data-testid="po-edit-submit"' not in resp.text
         assert 'data-testid="po-cancel-form"' not in resp.text
 
-    def test_received_renders_readonly(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_received_renders_readonly(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
         assert 'data-testid="po-readonly-banner"' in resp.text
         assert 'data-testid="po-edit-submit"' not in resp.text
 
-    def test_cancelled_renders_readonly(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancelled_renders_readonly(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.CANCELLED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
         assert 'data-testid="po-readonly-banner"' in resp.text
         assert 'data-testid="po-edit-submit"' not in resp.text
 
-    def test_draft_input_values_pre_filled(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_input_values_pre_filled(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.DRAFT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
@@ -2028,9 +1803,7 @@ def _assert_is_pdf(resp: Any) -> None:
 
 
 class TestPOPdfRoleEnforcement:
-    def _make_po(
-        self, db: Session, *, po_status: POStatus = POStatus.DRAFT
-    ) -> PurchaseOrder:
+    def _make_po(self, db: Session, *, po_status: POStatus = POStatus.DRAFT) -> PurchaseOrder:
         actor = _make_user(db, email="creator@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME")
         leaf = _make_leaf(db)
@@ -2044,16 +1817,12 @@ class TestPOPdfRoleEnforcement:
         )
         return po
 
-    def test_anonymous_get_pdf_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_pdf_is_401(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 401
 
-    def test_pending_get_pdf_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_get_pdf_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(
             db_session,
@@ -2065,18 +1834,14 @@ class TestPOPdfRoleEnforcement:
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 403
 
-    def test_workshop_get_pdf_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_pdf_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 403
 
-    def test_manager_get_pdf_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_pdf_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
@@ -2084,9 +1849,7 @@ class TestPOPdfRoleEnforcement:
         assert resp.status_code == 200
         _assert_is_pdf(resp)
 
-    def test_office_get_pdf_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_pdf_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
@@ -2094,9 +1857,7 @@ class TestPOPdfRoleEnforcement:
         assert resp.status_code == 200
         _assert_is_pdf(resp)
 
-    def test_admin_get_pdf_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_pdf_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
@@ -2106,9 +1867,7 @@ class TestPOPdfRoleEnforcement:
 
 
 class TestPOPdfStatusGuard:
-    def _make(
-        self, db: Session, client: TestClient, *, po_status: POStatus
-    ) -> PurchaseOrder:
+    def _make(self, db: Session, client: TestClient, *, po_status: POStatus) -> PurchaseOrder:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME")
         leaf = _make_leaf(db)
@@ -2123,40 +1882,30 @@ class TestPOPdfStatusGuard:
         _login_as(client, u)
         return po
 
-    def test_unknown_po_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_po_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders/9999/pdf")
         assert resp.status_code == 404
 
-    def test_cancelled_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancelled_po_is_400(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.CANCELLED)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 400
 
-    def test_draft_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_renders(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.DRAFT)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 200
         _assert_is_pdf(resp)
 
-    def test_sent_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_renders(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.SENT)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 200
         _assert_is_pdf(resp)
 
-    def test_received_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_received_renders(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.status_code == 200
@@ -2192,9 +1941,7 @@ class TestPOPdfContent:
         _login_as(client, u)
         return po
 
-    def test_content_type_is_pdf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_content_type_is_pdf(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.headers["content-type"].startswith("application/pdf")
@@ -2208,24 +1955,18 @@ class TestPOPdfContent:
         assert cd.startswith("inline")
         assert f'filename="po-{po.id}.pdf"' in cd
 
-    def test_bytes_start_with_pdf_magic(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bytes_start_with_pdf_magic(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert resp.content[:4] == b"%PDF"
 
-    def test_po_id_appears_in_pdf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_po_id_appears_in_pdf(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         # PDF compression is disabled in the renderer for byte-search.
         assert f"#{po.id}".encode() in resp.content
 
-    def test_supplier_name_appears_in_pdf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_supplier_name_appears_in_pdf(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert b"Pdf Bullion Co" in resp.content
@@ -2238,9 +1979,7 @@ class TestPOPdfContent:
         # Parens are PDF-string delimiters; reportlab escapes them as \( \).
         assert rb"\(archived\)" in resp.content
 
-    def test_line_sku_and_qty_in_pdf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_line_sku_and_qty_in_pdf(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = client.get(f"/admin/purchase-orders/{po.id}/pdf")
         assert b"PDF-CONTENT-1" in resp.content
@@ -2289,25 +2028,19 @@ class TestPOPdfLink:
         _login_as(client, u)
         return po
 
-    def test_draft_renders_pdf_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_renders_pdf_link(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.DRAFT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
         assert 'data-testid="po-pdf-link"' in resp.text
         assert f"/admin/purchase-orders/{po.id}/pdf" in resp.text
 
-    def test_sent_renders_pdf_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_renders_pdf_link(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.SENT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert 'data-testid="po-pdf-link"' in resp.text
 
-    def test_received_renders_pdf_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_received_renders_pdf_link(self, client: TestClient, db_session: Session) -> None:
         po = self._setup_po(db_session, client, POStatus.RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert 'data-testid="po-pdf-link"' in resp.text
@@ -2331,9 +2064,7 @@ def _reset_email_outbox() -> None:
     clear_console_outbox()
 
 
-def _send_po(
-    client: TestClient, po_id: int
-) -> Any:
+def _send_po(client: TestClient, po_id: int) -> Any:
     return client.post(
         f"/admin/purchase-orders/{po_id}/send",
         data={"csrf_token": _csrf(client)},
@@ -2356,17 +2087,13 @@ class TestPOSendRoleEnforcement:
         )
         return po
 
-    def test_anonymous_post_send_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_send_is_401(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         resp = _send_po(client, po.id)
         assert resp.status_code == 401
         assert console_outbox() == []
 
-    def test_pending_post_send_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_send_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(
             db_session,
@@ -2379,9 +2106,7 @@ class TestPOSendRoleEnforcement:
         assert resp.status_code == 403
         assert console_outbox() == []
 
-    def test_workshop_post_send_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_send_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
@@ -2389,27 +2114,21 @@ class TestPOSendRoleEnforcement:
         assert resp.status_code == 403
         assert console_outbox() == []
 
-    def test_manager_post_send_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_send_is_303(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = _send_po(client, po.id)
         assert resp.status_code == 303
 
-    def test_office_post_send_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_send_is_303(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = _send_po(client, po.id)
         assert resp.status_code == 303
 
-    def test_admin_post_send_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_send_is_303(self, client: TestClient, db_session: Session) -> None:
         po = self._make_po(db_session)
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
@@ -2418,9 +2137,7 @@ class TestPOSendRoleEnforcement:
 
 
 class TestPOSendStatusGuard:
-    def _make(
-        self, db: Session, client: TestClient, *, po_status: POStatus
-    ) -> PurchaseOrder:
+    def _make(self, db: Session, client: TestClient, *, po_status: POStatus) -> PurchaseOrder:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db, name="ACME", email="acme@example.test")
         leaf = _make_leaf(db)
@@ -2435,44 +2152,32 @@ class TestPOSendStatusGuard:
         _login_as(client, u)
         return po
 
-    def test_unknown_po_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_po_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = _send_po(client, 9999)
         assert resp.status_code == 404
         assert console_outbox() == []
 
-    def test_sent_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_po_is_400(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.SENT)
         resp = _send_po(client, po.id)
         assert resp.status_code == 400
         assert console_outbox() == []
 
-    def test_partially_received_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        po = self._make(
-            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
-        )
+    def test_partially_received_po_is_400(self, client: TestClient, db_session: Session) -> None:
+        po = self._make(db_session, client, po_status=POStatus.PARTIALLY_RECEIVED)
         resp = _send_po(client, po.id)
         assert resp.status_code == 400
         assert console_outbox() == []
 
-    def test_received_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_received_po_is_400(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.RECEIVED)
         resp = _send_po(client, po.id)
         assert resp.status_code == 400
         assert console_outbox() == []
 
-    def test_cancelled_po_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancelled_po_is_400(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session, client, po_status=POStatus.CANCELLED)
         resp = _send_po(client, po.id)
         assert resp.status_code == 400
@@ -2480,9 +2185,7 @@ class TestPOSendStatusGuard:
 
 
 class TestPOSendValidation:
-    def test_supplier_with_no_email_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_supplier_with_no_email_is_400(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="No Email Co", email=None)
         leaf = _make_leaf(db_session)
@@ -2523,15 +2226,11 @@ class TestPOSendValidation:
         assert resp.status_code == 400
         assert console_outbox() == []
 
-    def test_archived_supplier_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_supplier_is_400(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         # Supplier starts active so the draft can be created; we archive it
         # *after*, simulating a stale POST.
-        sup = _make_supplier(
-            db_session, name="Will Archive", email="archive@example.test"
-        )
+        sup = _make_supplier(db_session, name="Will Archive", email="archive@example.test")
         leaf = _make_leaf(db_session)
         po, _lines = _make_draft_po(
             db_session,
@@ -2560,9 +2259,7 @@ class TestPOSendHappyPath:
         expected_date: date | None = None,
     ) -> PurchaseOrder:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        sup = _make_supplier(
-            db, name=supplier_name, email=supplier_email
-        )
+        sup = _make_supplier(db, name=supplier_name, email=supplier_email)
         leaf = _make_leaf(db)
         po, _lines = _make_draft_po(
             db,
@@ -2581,9 +2278,7 @@ class TestPOSendHappyPath:
         _login_as(client, u)
         return po
 
-    def test_status_flips_to_sent(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_status_flips_to_sent(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = _send_po(client, po.id)
         assert resp.status_code == 303
@@ -2592,9 +2287,7 @@ class TestPOSendHappyPath:
         assert reloaded is not None
         assert reloaded.status == POStatus.SENT
 
-    def test_sent_at_is_set_to_now(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_at_is_set_to_now(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         before = datetime.now(UTC)
         resp = _send_po(client, po.id)
@@ -2609,15 +2302,9 @@ class TestPOSendHappyPath:
         sent_at = reloaded.sent_at
         if sent_at.tzinfo is None:
             sent_at = sent_at.replace(tzinfo=UTC)
-        assert (
-            before - timedelta(seconds=2)
-            <= sent_at
-            <= after + timedelta(seconds=2)
-        )
+        assert before - timedelta(seconds=2) <= sent_at <= after + timedelta(seconds=2)
 
-    def test_audit_row_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_shape(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         _send_po(client, po.id)
         rows = _po_audit_rows(db_session, action="purchase_order.sent")
@@ -2635,20 +2322,13 @@ class TestPOSendHappyPath:
         parsed = datetime.fromisoformat(after["sent_at"])
         assert parsed.tzinfo is not None
 
-    def test_redirect_target_is_detail_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_redirect_target_is_detail_page(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         resp = _send_po(client, po.id)
         assert resp.status_code == 303
-        assert (
-            resp.headers["location"]
-            == f"/admin/purchase-orders/{po.id}"
-        )
+        assert resp.headers["location"] == f"/admin/purchase-orders/{po.id}"
 
-    def test_flash_includes_supplier_email(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_includes_supplier_email(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client)
         _send_po(client, po.id)
         # Follow the redirect to see the flashed message rendered.
@@ -2675,9 +2355,7 @@ class TestPOSendHappyPath:
         assert att.content_type == "application/pdf"
         assert att.content[:4] == b"%PDF"
 
-    def test_double_send_second_call_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_double_send_second_call_is_400(self, client: TestClient, db_session: Session) -> None:
         """The second call rejects via the status guard (PO is now sent)."""
         po = self._setup(db_session, client)
         resp1 = _send_po(client, po.id)
@@ -2688,10 +2366,7 @@ class TestPOSendHappyPath:
         # Outbox still only carries the first delivery.
         assert len(console_outbox()) == 1
         # Audit log still only carries one sent row.
-        assert (
-            len(_po_audit_rows(db_session, action="purchase_order.sent"))
-            == 1
-        )
+        assert len(_po_audit_rows(db_session, action="purchase_order.sent")) == 1
 
     def test_failed_validation_writes_no_audit_or_outbox(
         self, client: TestClient, db_session: Session
@@ -2755,9 +2430,7 @@ class TestPOSendDetailRender:
         assert 'data-testid="po-send-submit"' not in resp.text
         assert 'data-testid="po-send-blocked-no-email"' in resp.text
 
-    def test_sent_does_not_show_send_form(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_does_not_show_send_form(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client, po_status=POStatus.SENT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
@@ -2815,9 +2488,7 @@ def _make_po_for_receive(
     po_status: POStatus = POStatus.SENT,
 ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
     """Build a receivable PO (default status=sent) for the test cases."""
-    sup = supplier or _make_supplier(
-        db, name="ACME", email="acme@example.test"
-    )
+    sup = supplier or _make_supplier(db, name="ACME", email="acme@example.test")
     lf = leaf or _make_leaf(db)
     po, lines = _make_draft_po(
         db,
@@ -2838,23 +2509,17 @@ class TestPOReceiveRoleEnforcement:
         po, _lines = _make_po_for_receive(db, actor=u)
         return po
 
-    def test_anon_get_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anon_get_is_401(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 401
 
-    def test_anon_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anon_post_is_401(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         resp = _receive_po(client, po.id)
         assert resp.status_code == 401
 
-    def test_pending_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_get_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         u = _make_user(
             db_session,
@@ -2866,9 +2531,7 @@ class TestPOReceiveRoleEnforcement:
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 403
 
-    def test_pending_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_post_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         u = _make_user(
             db_session,
@@ -2880,45 +2543,35 @@ class TestPOReceiveRoleEnforcement:
         resp = _receive_po(client, po.id)
         assert resp.status_code == 403
 
-    def test_workshop_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 403
 
-    def test_workshop_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_403(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = _receive_po(client, po.id)
         assert resp.status_code == 403
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 200
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         po = self._make(db_session)
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
@@ -2935,38 +2588,28 @@ class TestPOReceiveStatusGuard:
         po_status: POStatus,
     ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        po, lines = _make_po_for_receive(
-            db, actor=u, po_status=po_status, skus=["GS-1"]
-        )
+        po, lines = _make_po_for_receive(db, actor=u, po_status=po_status, skus=["GS-1"])
         _login_as(client, u)
         return po, lines
 
-    def test_unknown_po_get_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_po_get_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders/9999/receive")
         assert resp.status_code == 404
 
-    def test_unknown_po_post_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_po_post_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = _receive_po(client, 9999)
         assert resp.status_code == 404
 
-    def test_draft_get_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_get_is_400(self, client: TestClient, db_session: Session) -> None:
         po, _ = self._make(db_session, client, po_status=POStatus.DRAFT)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 400
 
-    def test_draft_post_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_draft_post_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._make(db_session, client, po_status=POStatus.DRAFT)
         resp = _receive_po(
             client,
@@ -2976,26 +2619,18 @@ class TestPOReceiveStatusGuard:
         )
         assert resp.status_code == 400
 
-    def test_received_get_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_received_get_is_400(self, client: TestClient, db_session: Session) -> None:
         po, _ = self._make(db_session, client, po_status=POStatus.RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 400
 
-    def test_cancelled_get_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_cancelled_get_is_400(self, client: TestClient, db_session: Session) -> None:
         po, _ = self._make(db_session, client, po_status=POStatus.CANCELLED)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 400
 
-    def test_partially_received_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        po, _ = self._make(
-            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
-        )
+    def test_partially_received_get_is_200(self, client: TestClient, db_session: Session) -> None:
+        po, _ = self._make(db_session, client, po_status=POStatus.PARTIALLY_RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}/receive")
         assert resp.status_code == 200
 
@@ -3009,15 +2644,11 @@ class TestPOReceiveValidation:
         qty_ordered: Decimal = Decimal("10"),
     ) -> tuple[PurchaseOrder, list[PurchaseOrderLine]]:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        po, lines = _make_po_for_receive(
-            db, actor=u, skus=["VAL-1"], qty_ordered=qty_ordered
-        )
+        po, lines = _make_po_for_receive(db, actor=u, skus=["VAL-1"], qty_ordered=qty_ordered)
         _login_as(client, u)
         return po, lines
 
-    def test_negative_received_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_received_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3027,9 +2658,7 @@ class TestPOReceiveValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_received_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_received_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3039,9 +2668,7 @@ class TestPOReceiveValidation:
         )
         assert resp.status_code == 400
 
-    def test_negative_cost_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_cost_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3051,9 +2678,7 @@ class TestPOReceiveValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_cost_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_cost_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3063,9 +2688,7 @@ class TestPOReceiveValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_cost_with_qty_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_cost_with_qty_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3075,9 +2698,7 @@ class TestPOReceiveValidation:
         )
         assert resp.status_code == 400
 
-    def test_over_receipt_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_over_receipt_is_400(self, client: TestClient, db_session: Session) -> None:
         po, lines = self._setup(db_session, client)
         # qty_ordered=10, qty_received=0 → receiving 11 should reject.
         resp = _receive_po(
@@ -3136,15 +2757,11 @@ class TestPOReceiveValidation:
         line_reloaded = db_session.get(PurchaseOrderLine, lines[0].id)
         assert line_reloaded is not None
         assert line_reloaded.qty_received == Decimal("0")
-        assert (
-            db_session.execute(select(StockMovement)).first() is None
-        )
+        assert db_session.execute(select(StockMovement)).first() is None
         from app.models import CostLayer
 
         assert db_session.execute(select(CostLayer)).first() is None
-        assert (
-            _po_audit_rows(db_session, action="purchase_order.received") == []
-        )
+        assert _po_audit_rows(db_session, action="purchase_order.received") == []
 
 
 class TestPOReceiveHappyPathSingleFull:
@@ -3154,17 +2771,13 @@ class TestPOReceiveHappyPathSingleFull:
         client: TestClient,
     ) -> tuple[PurchaseOrder, PurchaseOrderLine, Item, User]:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        po, lines = _make_po_for_receive(
-            db, actor=u, skus=["FULL-1"], qty_ordered=Decimal("10")
-        )
+        po, lines = _make_po_for_receive(db, actor=u, skus=["FULL-1"], qty_ordered=Decimal("10"))
         item = db.get(Item, lines[0].item_id)
         assert item is not None
         _login_as(client, u)
         return po, lines[0], item, u
 
-    def test_status_flips_to_received(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_status_flips_to_received(self, client: TestClient, db_session: Session) -> None:
         po, line, _item, _u = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3189,11 +2802,7 @@ class TestPOReceiveHappyPathSingleFull:
             cost={line.id: "2.50"},
         )
         movements = list(
-            db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.item_id == item.id
-                )
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item.id))
             .scalars()
             .all()
         )
@@ -3208,6 +2817,7 @@ class TestPOReceiveHappyPathSingleFull:
         self, client: TestClient, db_session: Session
     ) -> None:
         from app.models import CostLayer as _CostLayer
+
         po, line, item, _u = self._setup(db_session, client)
         _receive_po(
             client,
@@ -3216,9 +2826,7 @@ class TestPOReceiveHappyPathSingleFull:
             cost={line.id: "2.50"},
         )
         layers = list(
-            db_session.execute(
-                select(_CostLayer).where(_CostLayer.item_id == item.id)
-            )
+            db_session.execute(select(_CostLayer).where(_CostLayer.item_id == item.id))
             .scalars()
             .all()
         )
@@ -3229,9 +2837,7 @@ class TestPOReceiveHappyPathSingleFull:
         assert layer.qty_remaining == Decimal("10")
         assert layer.unit_cost == Decimal("2.5000")
 
-    def test_line_qty_received_bumped(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_line_qty_received_bumped(self, client: TestClient, db_session: Session) -> None:
         po, line, _item, _u = self._setup(db_session, client)
         _receive_po(
             client,
@@ -3244,9 +2850,7 @@ class TestPOReceiveHappyPathSingleFull:
         assert line_reloaded is not None
         assert line_reloaded.qty_received == Decimal("10")
 
-    def test_item_current_qty_bumped(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_item_current_qty_bumped(self, client: TestClient, db_session: Session) -> None:
         po, line, item, _u = self._setup(db_session, client)
         _receive_po(
             client,
@@ -3259,9 +2863,7 @@ class TestPOReceiveHappyPathSingleFull:
         assert item_reloaded is not None
         assert item_reloaded.current_qty == Decimal("10.0000")
 
-    def test_audit_row_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_shape(self, client: TestClient, db_session: Session) -> None:
         po, line, _item, _u = self._setup(db_session, client)
         _receive_po(
             client,
@@ -3286,9 +2888,7 @@ class TestPOReceiveHappyPathSingleFull:
         assert line_after["actual_unit_cost"] == "2.50"
         assert isinstance(line_after["movement_id"], int)
 
-    def test_redirect_target_is_detail(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_redirect_target_is_detail(self, client: TestClient, db_session: Session) -> None:
         po, line, _item, _u = self._setup(db_session, client)
         resp = _receive_po(
             client,
@@ -3298,9 +2898,7 @@ class TestPOReceiveHappyPathSingleFull:
         )
         assert resp.headers["location"] == f"/admin/purchase-orders/{po.id}"
 
-    def test_flash_says_fully_received(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_says_fully_received(self, client: TestClient, db_session: Session) -> None:
         po, line, _item, _u = self._setup(db_session, client)
         _receive_po(
             client,
@@ -3406,9 +3004,7 @@ class TestPOReceiveHappyPathPartial:
         )
         layers = list(
             db_session.execute(
-                select(_CostLayer)
-                .where(_CostLayer.item_id == item.id)
-                .order_by(_CostLayer.id)
+                select(_CostLayer).where(_CostLayer.item_id == item.id).order_by(_CostLayer.id)
             )
             .scalars()
             .all()
@@ -3471,11 +3067,7 @@ class TestPOReceiveHappyPathMultiLine:
         db_session.expire_all()
         # No movement on item B.
         movements_b = list(
-            db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.item_id == item_b.id
-                )
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item_b.id))
             .scalars()
             .all()
         )
@@ -3488,9 +3080,7 @@ class TestPOReceiveHappyPathMultiLine:
         assert len(after["lines"]) == 1
         assert after["lines"][0]["line_id"] == line_a.id
 
-    def test_all_movements_carry_po_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_all_movements_carry_po_id(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         po, lines = _make_po_for_receive(
             db_session,
@@ -3506,9 +3096,7 @@ class TestPOReceiveHappyPathMultiLine:
             received={line_a.id: "10", line_b.id: "5"},
             cost={line_a.id: "2.00", line_b.id: "3.00"},
         )
-        movements = list(
-            db_session.execute(select(StockMovement)).scalars().all()
-        )
+        movements = list(db_session.execute(select(StockMovement)).scalars().all())
         assert len(movements) == 2
         for m in movements:
             assert m.po_id == po.id
@@ -3516,13 +3104,9 @@ class TestPOReceiveHappyPathMultiLine:
 
 
 class TestPOReceiveNoOpSubmit:
-    def test_all_zero_submit_writes_no_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_all_zero_submit_writes_no_state(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        po, lines = _make_po_for_receive(
-            db_session, actor=u, skus=["NOOP-1"]
-        )
+        po, lines = _make_po_for_receive(db_session, actor=u, skus=["NOOP-1"])
         _login_as(client, u)
         # Send all-blanks (no received_<id> keys at all).
         resp = client.post(
@@ -3541,22 +3125,15 @@ class TestPOReceiveNoOpSubmit:
         # No movement, no cost layer, no audit row.
         from app.models import CostLayer as _CostLayer
 
-        assert (
-            db_session.execute(select(StockMovement)).first() is None
-        )
+        assert db_session.execute(select(StockMovement)).first() is None
         assert db_session.execute(select(_CostLayer)).first() is None
-        assert (
-            _po_audit_rows(db_session, action="purchase_order.received")
-            == []
-        )
+        assert _po_audit_rows(db_session, action="purchase_order.received") == []
 
     def test_explicit_zero_submit_writes_no_state(
         self, client: TestClient, db_session: Session
     ) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        po, lines = _make_po_for_receive(
-            db_session, actor=u, skus=["NOOP-2"]
-        )
+        po, lines = _make_po_for_receive(db_session, actor=u, skus=["NOOP-2"])
         line = lines[0]
         _login_as(client, u)
         resp = _receive_po(
@@ -3581,9 +3158,7 @@ class TestPOReceiveDetailRender:
         po_status: POStatus,
     ) -> PurchaseOrder:
         u = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        po, _lines = _make_po_for_receive(
-            db, actor=u, skus=["DR-1"], po_status=po_status
-        )
+        po, _lines = _make_po_for_receive(db, actor=u, skus=["DR-1"], po_status=po_status)
         _login_as(client, u)
         return po
 
@@ -3594,9 +3169,7 @@ class TestPOReceiveDetailRender:
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert 'data-testid="po-receive-link"' not in resp.text
 
-    def test_sent_shows_receive_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sent_shows_receive_link(self, client: TestClient, db_session: Session) -> None:
         po = self._setup(db_session, client, po_status=POStatus.SENT)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
@@ -3606,9 +3179,7 @@ class TestPOReceiveDetailRender:
     def test_partially_received_shows_receive_link(
         self, client: TestClient, db_session: Session
     ) -> None:
-        po = self._setup(
-            db_session, client, po_status=POStatus.PARTIALLY_RECEIVED
-        )
+        po = self._setup(db_session, client, po_status=POStatus.PARTIALLY_RECEIVED)
         resp = client.get(f"/admin/purchase-orders/{po.id}")
         assert resp.status_code == 200
         assert 'data-testid="po-receive-link"' in resp.text
@@ -3686,9 +3257,7 @@ class TestPOListCsvRoleEnforcement:
         resp = client.get("/admin/purchase-orders?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -3699,25 +3268,19 @@ class TestPOListCsvRoleEnforcement:
         resp = client.get("/admin/purchase-orders?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/purchase-orders?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders?format=csv")
         assert resp.status_code == 200
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders?format=csv")
@@ -3749,34 +3312,24 @@ class TestPOListCsvHeaders:
     ) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/purchase-orders?format=csv&status_filter=draft"
-        )
+        resp = client.get("/admin/purchase-orders?format=csv&status_filter=draft")
         cd = resp.headers["content-disposition"]
         assert 'filename="purchase_orders_draft.csv"' in cd
 
 
 class TestPOListCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders?format=csv")
         assert resp.status_code == 200
         body = resp.text
-        assert body == (
-            "po_id,supplier,supplier_archived,status,line_count,created_at\r\n"
-        )
+        assert body == ("po_id,supplier,supplier_archived,status,line_count,created_at\r\n")
 
-    def test_one_po_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_po_one_data_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po)
         db_session.commit()
         db_session.refresh(po)
@@ -3794,14 +3347,10 @@ class TestPOListCsvBody:
         assert cells[4] == "0"
         # cells[5] is the created_at ISO timestamp.
 
-    def test_archived_supplier_renders_yes(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_supplier_renders_yes(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME", archived=True)
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po)
         db_session.commit()
 
@@ -3812,26 +3361,18 @@ class TestPOListCsvBody:
         # Two-cell match avoids accidental hit on a substring "yes" elsewhere.
         assert ",ACME,yes,draft," in resp.text
 
-    def test_status_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_status_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        draft = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
-        sent = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        draft = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
+        sent = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add_all([draft, sent])
         db_session.commit()
         db_session.refresh(draft)
         db_session.refresh(sent)
 
         _login_as(client, u)
-        resp = client.get(
-            "/admin/purchase-orders?format=csv&status_filter=draft"
-        )
+        resp = client.get("/admin/purchase-orders?format=csv&status_filter=draft")
         assert resp.status_code == 200
         # The draft PO appears; the sent PO does not.
         body = resp.text
@@ -3839,19 +3380,13 @@ class TestPOListCsvBody:
         assert f"\r\n{draft.id}," in body
         assert f"\r\n{sent.id}," not in body
 
-    def test_newest_first_ordering_in_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_newest_first_ordering_in_csv(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        po1 = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po1 = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po1)
         db_session.commit()
-        po2 = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.SENT, created_by=u.id
-        )
+        po2 = PurchaseOrder(supplier_id=sup.id, status=POStatus.SENT, created_by=u.id)
         db_session.add(po2)
         db_session.commit()
 
@@ -3865,9 +3400,7 @@ class TestPOListCsvBody:
 
 
 class TestPOListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders")
@@ -3875,9 +3408,7 @@ class TestPOListCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="po-list-heading"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/purchase-orders?format=garbage")
@@ -3886,14 +3417,10 @@ class TestPOListCsvHtmlBranch:
 
 
 class TestPOListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         sup = _make_supplier(db_session, name="ACME")
-        po = PurchaseOrder(
-            supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id
-        )
+        po = PurchaseOrder(supplier_id=sup.id, status=POStatus.DRAFT, created_by=u.id)
         db_session.add(po)
         db_session.commit()
         before = _audit_count(db_session)

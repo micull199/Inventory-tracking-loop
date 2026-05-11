@@ -58,9 +58,7 @@ def test_admin_promotes_pending_user_who_then_signs_in(
     admin_page.goto(f"{app_server}/admin/users")
     expect(admin_page.get_by_test_id("admin-users-table")).to_be_visible()
 
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="incoming@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="incoming@uc.test")
     expect(pending_row).to_have_attribute("data-user-status", "pending")
 
     # Step 4: Admin assigns the workshop role.
@@ -69,17 +67,13 @@ def test_admin_promotes_pending_user_who_then_signs_in(
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
     # Step 5: Admin activates the now-roled user.
-    refreshed_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="incoming@uc.test"
-    )
+    refreshed_row = admin_page.locator('[data-testid="user-row"]', has_text="incoming@uc.test")
     refreshed_row.locator('[data-testid="status-select"]').select_option("active")
     refreshed_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
     # The row now shows status=active.
-    final_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="incoming@uc.test"
-    )
+    final_row = admin_page.locator('[data-testid="user-row"]', has_text="incoming@uc.test")
     expect(final_row).to_have_attribute("data-user-status", "active")
     admin_page.close()
     if admin_context is not context:

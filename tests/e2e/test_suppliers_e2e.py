@@ -53,16 +53,12 @@ def test_manager_creates_views_archives_and_unarchives_a_supplier(
 
     # Step 3: Admin promotes the pending user → manager + active.
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="manager@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="manager@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("manager")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="manager@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="manager@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -102,9 +98,7 @@ def test_manager_creates_views_archives_and_unarchives_a_supplier(
 
     # Flash and row both visible.
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Acme Wax Co")
-    acme_row = mgr_page.locator(
-        '[data-testid="supplier-row"]', has_text="Acme Wax Co"
-    )
+    acme_row = mgr_page.locator('[data-testid="supplier-row"]', has_text="Acme Wax Co")
     expect(acme_row).to_be_visible()
 
     # Step 8: Archive the supplier.
@@ -112,24 +106,20 @@ def test_manager_creates_views_archives_and_unarchives_a_supplier(
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers")
 
     # Active tab should now be empty for Acme.
-    expect(mgr_page.locator(
-        '[data-testid="supplier-row"]', has_text="Acme Wax Co"
-    )).to_have_count(0)
+    expect(mgr_page.locator('[data-testid="supplier-row"]', has_text="Acme Wax Co")).to_have_count(
+        0
+    )
 
     # Step 9: Switch to archived tab — Acme is there.
     mgr_page.get_by_test_id("tab-archived").click()
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers?show=archived")
-    archived_row = mgr_page.locator(
-        '[data-testid="supplier-row"]', has_text="Acme Wax Co"
-    )
+    archived_row = mgr_page.locator('[data-testid="supplier-row"]', has_text="Acme Wax Co")
     expect(archived_row).to_be_visible()
 
     # Step 10: Unarchive — moves back to active.
     archived_row.get_by_test_id("unarchive-supplier").click()
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers")
-    restored_row = mgr_page.locator(
-        '[data-testid="supplier-row"]', has_text="Acme Wax Co"
-    )
+    restored_row = mgr_page.locator('[data-testid="supplier-row"]', has_text="Acme Wax Co")
     expect(restored_row).to_be_visible()
 
     mgr_page.close()

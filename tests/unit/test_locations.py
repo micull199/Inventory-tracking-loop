@@ -68,13 +68,9 @@ class TestLocationConstraints:
             db.commit()
         db.rollback()
 
-    def test_unique_constraint_applies_even_when_other_is_archived(
-        self, db: Session
-    ) -> None:
+    def test_unique_constraint_applies_even_when_other_is_archived(self, db: Session) -> None:
         """Archiving doesn't free the name. Operator must rename or unarchive."""
-        archived = Location(
-            name="Workshop Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        archived = Location(name="Workshop Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db.add(archived)
         db.commit()
 

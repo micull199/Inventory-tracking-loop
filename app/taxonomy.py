@@ -1,35 +1,35 @@
 """Manager-owned taxonomy CRUD routes.
 
-The taxonomy is a two-level hierarchy (Category → Sub-category) used to classify
-items. This module covers both levels:
+The taxonomy is a one-to-three-level hierarchy used to classify items. Each
+top-level node carries an ``archetype`` (``bulk`` / ``unique`` /
+``unique_variant``) that governs item behaviour throughout the tree; the
+archetype is inherited at read time by walking ``parent_id`` up to depth 0
+(see ``app/sku.py``). Every node also carries an ``sku_prefix`` (1-8 alnum,
+uppercased) that is composed with ancestor prefixes to form item SKUs.
 
-- **Top-level categories** (S3): rows with ``parent_id IS NULL``, surfaced under
-  ``/admin/taxonomy`` (list / new / edit / archive / unarchive).
-- **Sub-categories** (S4): rows with ``parent_id`` pointing at a top-level node.
-  Surfaced under two URL shapes:
+URL shapes (all under ``/admin/taxonomy``):
 
-  - ``/admin/taxonomy/{parent_id}/children``       (list + new form scoped by parent)
-  - ``/admin/taxonomy/{parent_id}/children``  POST (create under a parent)
-  - ``/admin/taxonomy/sub/{node_id}/edit``         (edit a sub-cat)
-  - ``/admin/taxonomy/sub/{node_id}``         POST (update name + sort_order)
-  - ``/admin/taxonomy/sub/{node_id}/archive``      (archive)
-  - ``/admin/taxonomy/sub/{node_id}/unarchive``    (unarchive)
+- Top-level (depth 0): ``/`` (list + new), ``/{id}/edit``, ``/{id}``,
+  ``/{id}/archive``, ``/{id}/unarchive``.
+- Sub-category (depth 1): ``/{parent_id}/children`` (list + new), and the flat
+  ``/sub/{id}/edit``, ``/sub/{id}``, ``/sub/{id}/archive``,
+  ``/sub/{id}/unarchive`` for edit / archive / unarchive.
+- Sub-sub-category (depth 2): ``/{parent_id}/sub/{sub_id}/grandchildren`` (list
+  + new). Edit/archive of a depth-2 node reuses the flat ``/sub/{id}/...``
+  shape, which already handles any non-top-level node — the only difference
+  between depth 1 and depth 2 is whether ``parent.parent_id`` is null.
 
-  Edit/archive/unarchive use a flat ``/sub/{id}`` URL rather than nesting under
-  ``{parent_id}``. Reason: nesting would invite a "URL parent" / "DB parent"
-  mismatch (someone hand-edits the URL, or a refactor moves the sub-cat to a
-  different parent and the URL goes stale). The handler verifies
-  ``node.parent_id is not None`` and 404s otherwise; that's the only invariant
-  worth checking here.
+Depth limit (max three levels, depth 0..2) is enforced by ``_get_parent_node``:
+a candidate parent at depth 2 is rejected with a 400. Container-or-leaf
+invariant: a node cannot host children if it already has active items
+attached, and the items form rejects a destination node that has active
+children (see ``app/items.py``).
 
-Depth limit (max two levels) is enforced in the application layer when creating
-a sub-cat: the parent must itself be top-level (``parent.parent_id is None``).
-The DB schema doesn't enforce this — only the route does.
-
-Shape mirrors ``app/suppliers.py`` and ``app/locations.py`` for the top-level
-routes; sub-cat routes add the depth-limit guard and a "no new sub-cats under an
-archived parent" rule. The settings-CRUD helper-extraction question gets
-re-evaluated after S4 (per the S3 self-critique).
+Archetype constraints (unique-variant only):
+- Depth-2 nodes under a ``unique_variant`` top-level are system-managed.
+  The taxonomy admin never lets a manager create depth-2 nodes under that
+  archetype; ``app/items.py`` mints them automatically (one per item) via
+  ``app.sku.create_unique_variant_leaf``.
 
 Access: ``Manager`` and ``Admin``. Workshop and Office both 403 — Office is a
 sibling role, not a subset, per MISSION §3 ("Office cannot manage the taxonomy").
@@ -51,7 +51,17 @@ from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.field_defs import has_active_field_defs
-from app.models import Location, Role, Supplier, TaxonomyNode, TrackingMode, User
+from app.models import (
+    Archetype,
+    Item,
+    Location,
+    Role,
+    Supplier,
+    TaxonomyNode,
+    TrackingMode,
+    User,
+)
+from app.sku import effective_archetype, node_depth
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
@@ -61,13 +71,19 @@ router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Fields tracked in audit diffs. ``parent_id`` is intentionally omitted in S3
-# because the routes never let the user change it — every node here is
-# top-level. When S4 lands, parent_id becomes part of the diff vocabulary.
-# ``defaults_json`` is a dict whose change is captured atomically — the
-# audit row carries the whole before/after blob, which is the right grain
-# for "Manager set per-category defaults" given the dict is small.
-_FIELDS: tuple[str, ...] = ("name", "sort_order", "defaults_json")
+# Fields tracked in audit diffs. ``parent_id`` is intentionally omitted —
+# the routes never let the user change it after create. ``defaults_json`` is
+# a dict whose change is captured atomically (the audit row carries the
+# whole before/after blob; the dict is small). ``archetype`` and
+# ``sku_prefix`` join the vocabulary so the taxonomy-refinement edits show
+# up in the audit log.
+_FIELDS: tuple[str, ...] = (
+    "name",
+    "sort_order",
+    "defaults_json",
+    "archetype",
+    "sku_prefix",
+)
 
 # Keys recognised inside ``defaults_json``. Matches the items create form's
 # field names so the values can be substituted verbatim into the form
@@ -235,35 +251,31 @@ def _defaults_form_view(
 
 def _supplier_options(db: Session) -> list[dict[str, Any]]:
     """Active suppliers sorted by name, for the defaults `<select>`."""
-    rows = db.execute(
-        select(Supplier)
-        .where(Supplier.archived_at.is_(None))
-        .order_by(Supplier.name)
-    ).scalars().all()
+    rows = (
+        db.execute(select(Supplier).where(Supplier.archived_at.is_(None)).order_by(Supplier.name))
+        .scalars()
+        .all()
+    )
     return [{"id": s.id, "label": s.name} for s in rows]
 
 
 def _location_options(db: Session) -> list[dict[str, Any]]:
     """Active locations sorted by name, for the defaults `<select>`."""
-    rows = db.execute(
-        select(Location)
-        .where(Location.archived_at.is_(None))
-        .order_by(Location.name)
-    ).scalars().all()
+    rows = (
+        db.execute(select(Location).where(Location.archived_at.is_(None)).order_by(Location.name))
+        .scalars()
+        .all()
+    )
     return [{"id": loc.id, "label": loc.name} for loc in rows]
 
 
 def _validate_name(name: str) -> str:
     if not name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     return name
 
 
-def _check_top_name_unique(
-    db: Session, name: str, *, exclude_id: int | None = None
-) -> None:
+def _check_top_name_unique(db: Session, name: str, *, exclude_id: int | None = None) -> None:
     """Reject a name already used by another top-level node (active or archived)."""
     stmt = (
         select(TaxonomyNode.id)
@@ -307,9 +319,7 @@ def _check_child_name_unique(
 
 def _next_top_sort_order(db: Session) -> int:
     """Default sort_order for a new top-level node: max(existing) + step."""
-    stmt = select(func.max(TaxonomyNode.sort_order)).where(
-        TaxonomyNode.parent_id.is_(None)
-    )
+    stmt = select(func.max(TaxonomyNode.sort_order)).where(TaxonomyNode.parent_id.is_(None))
     current_max = db.execute(stmt).scalar()
     if current_max is None:
         return 0
@@ -318,9 +328,7 @@ def _next_top_sort_order(db: Session) -> int:
 
 def _next_child_sort_order(db: Session, parent_id: int) -> int:
     """Default sort_order for a new sub-cat under ``parent_id``."""
-    stmt = select(func.max(TaxonomyNode.sort_order)).where(
-        TaxonomyNode.parent_id == parent_id
-    )
+    stmt = select(func.max(TaxonomyNode.sort_order)).where(TaxonomyNode.parent_id == parent_id)
     current_max = db.execute(stmt).scalar()
     if current_max is None:
         return 0
@@ -328,24 +336,238 @@ def _next_child_sort_order(db: Session, parent_id: int) -> int:
 
 
 def _get_top_level_parent(db: Session, parent_id: int) -> TaxonomyNode:
-    """Load a parent node, requiring it to be top-level (depth-limit guard).
+    """Load a parent node, requiring it to be top-level (depth-0 only).
 
-    Returns the row; 404s if the id doesn't exist or 400s if the candidate
-    parent is itself a sub-category. The depth limit is enforced here rather
-    than at the DB layer because it's a per-application invariant (a future
-    deeper hierarchy would just relax this check).
+    Retained for the depth-1 create route which still wants the parent to be
+    a depth-0 node. Returns the row; 404s if the id doesn't exist or 400s if
+    the candidate parent is itself a sub-category. The depth-2 create route
+    uses ``_get_parent_node`` (which accepts depth 0 or 1).
     """
     parent = db.get(TaxonomyNode, parent_id)
     if parent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="category not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
     if parent.parent_id is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="taxonomy is two levels deep — sub-categories cannot have children",
+            detail="parent must be a top-level category",
         )
     return parent
+
+
+def _get_parent_node(db: Session, parent_id: int) -> TaxonomyNode:
+    """Load a candidate parent for a new child node.
+
+    Accepts depth 0 or 1; rejects depth 2 (the depth limit) with a 400.
+    Also rejects a parent that already has active items attached — an
+    "un-leafing" would orphan those items' SKU paths. Mirrors the existing
+    field-defs gate: if the parent has any active field def, the sub-cat
+    create form already 400s in the legacy code path.
+    """
+    parent = db.get(TaxonomyNode, parent_id)
+    if parent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+    if node_depth(db, parent) >= 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="depth limit reached — categories can be at most 3 levels deep",
+        )
+    if _has_active_items(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add a sub-category here: this category has items "
+                "attached. Move or archive them first."
+            ),
+        )
+    return parent
+
+
+def _has_active_items(db: Session, node_id: int) -> bool:
+    """True if any non-archived item references this node id directly."""
+    stmt = select(Item.id).where(Item.taxonomy_node_id == node_id).where(Item.archived_at.is_(None))
+    return db.execute(stmt).first() is not None
+
+
+def _has_descendant_items(db: Session, node_id: int) -> bool:
+    """True if any active item lives on this node or any descendant.
+
+    Walks down children + grandchildren (max two levels under the given
+    node). Used to "lock" archetype + sku_prefix on edit after items exist
+    anywhere under the tree.
+    """
+    if _has_active_items(db, node_id):
+        return True
+    # Collect descendants up to two levels (depth-2 is the floor). Active
+    # only — an archived child is structurally inert. We still check
+    # archived items underneath each descendant because the lock guards
+    # against silent SKU drift, which an archived item still embodies.
+    child_ids = list(
+        db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id == node_id)).scalars().all()
+    )
+    if not child_ids:
+        return False
+    grandchild_ids = list(
+        db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id.in_(child_ids)))
+        .scalars()
+        .all()
+    )
+    all_descendant_ids = child_ids + grandchild_ids
+    if not all_descendant_ids:
+        return False
+    stmt = select(Item.id).where(Item.taxonomy_node_id.in_(all_descendant_ids))
+    return db.execute(stmt).first() is not None
+
+
+def _disambiguate_top_prefix(db: Session, base: str) -> str:
+    """If ``base`` collides with an existing top-level prefix, append 2, 3, ...
+
+    Mirrors the migration's sibling disambiguation. Capped at the column
+    width (8 chars). Used only when a route auto-derives the prefix from the
+    node name; callers that explicitly pass a prefix bypass this and 400 on
+    a sibling collision instead.
+    """
+    taken = set(
+        db.execute(select(TaxonomyNode.sku_prefix).where(TaxonomyNode.parent_id.is_(None)))
+        .scalars()
+        .all()
+    )
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = str(n)
+        allowed = 8 - len(suffix)
+        candidate = ((base[:allowed] if allowed > 0 else "") + suffix)[:8]
+        if candidate not in taken:
+            return candidate
+        n += 1
+
+
+def _disambiguate_child_prefix(db: Session, *, parent_id: int, base: str) -> str:
+    """Sibling-scoped equivalent of ``_disambiguate_top_prefix``."""
+    taken = set(
+        db.execute(select(TaxonomyNode.sku_prefix).where(TaxonomyNode.parent_id == parent_id))
+        .scalars()
+        .all()
+    )
+    if base not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = str(n)
+        allowed = 8 - len(suffix)
+        candidate = ((base[:allowed] if allowed > 0 else "") + suffix)[:8]
+        if candidate not in taken:
+            return candidate
+        n += 1
+
+
+def _check_sku_prefix_unique_top(
+    db: Session, prefix: str, *, exclude_id: int | None = None
+) -> None:
+    """Reject a top-level ``sku_prefix`` already used by another depth-0 node.
+
+    Scoped across active + archived rows so an archived sibling's prefix is
+    not silently reusable (its items still carry it). Belt-and-braces over
+    the partial unique index ``uq_taxonomy_sku_prefix_top``.
+    """
+    stmt = (
+        select(TaxonomyNode.id)
+        .where(TaxonomyNode.parent_id.is_(None))
+        .where(TaxonomyNode.sku_prefix == prefix)
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TaxonomyNode.id != exclude_id)
+    if db.execute(stmt).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"another top-level category already uses SKU prefix {prefix!r}"),
+        )
+
+
+def _check_sku_prefix_unique_child(
+    db: Session,
+    *,
+    parent_id: int,
+    prefix: str,
+    exclude_id: int | None = None,
+) -> None:
+    """Reject a child ``sku_prefix`` already used by a sibling under ``parent_id``."""
+    stmt = (
+        select(TaxonomyNode.id)
+        .where(TaxonomyNode.parent_id == parent_id)
+        .where(TaxonomyNode.sku_prefix == prefix)
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TaxonomyNode.id != exclude_id)
+    if db.execute(stmt).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"another sub-category under this parent already uses SKU prefix {prefix!r}"),
+        )
+
+
+def _validate_archetype(raw: str, *, default: Archetype | None = None) -> Archetype:
+    """Coerce an incoming form value to an ``Archetype``.
+
+    Blank input falls back to ``default`` when supplied (the create-top-level
+    route uses ``Archetype.BULK`` so legacy clients that don't know about
+    archetypes silently land on the conservative quantity-tracked default).
+    Otherwise a blank input 400s.
+    """
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        if default is not None:
+            return default
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="archetype is required",
+        )
+    try:
+        return Archetype(cleaned)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=("archetype must be one of: unique, bulk, unique_variant"),
+        ) from exc
+
+
+def _normalise_sku_prefix(raw: str, *, default_from_name: str | None = None) -> str:
+    """Strip + uppercase + validate a submitted ``sku_prefix``.
+
+    Returns the cleaned value (1-8 uppercase alphanumerics).
+
+    Blank-input handling:
+    - If ``default_from_name`` is supplied, derive a default via the same
+      rule the model + migration use (first three alpha chars uppercased,
+      falling back to alnum, then ``"CAT"``). This keeps the create routes
+      forgiving when the legacy form omits the prefix.
+    - Otherwise 400.
+
+    Explicit invalid input (non-alnum, too long) always 400s — those error
+    paths are what the integration tests in section 6 of the plan exercise.
+    """
+    cleaned = (raw or "").strip().upper()
+    if not cleaned:
+        if default_from_name is not None:
+            from app.models import _derive_sku_prefix as _derive
+
+            return _derive(default_from_name)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SKU prefix is required",
+        )
+    if not cleaned.isalnum():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SKU prefix must contain only alphanumeric characters",
+        )
+    if len(cleaned) > 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SKU prefix must be 8 characters or fewer",
+        )
+    return cleaned
 
 
 def _get_sub_category(db: Session, node_id: int) -> TaxonomyNode:
@@ -359,9 +581,7 @@ def _get_sub_category(db: Session, node_id: int) -> TaxonomyNode:
     return node
 
 
-def _diff(
-    node: TaxonomyNode, new: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def _diff(node: TaxonomyNode, new: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Return ``(before, after)`` of *changed* fields only, or None if no-op."""
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
@@ -488,10 +708,16 @@ def new_taxonomy_form(
             "form": {
                 "name": "",
                 "sort_order": "",
+                "archetype": "",
+                "sku_prefix": "",
                 "defaults": _defaults_form_view(None),
             },
             "title": "New category",
             "action": "/admin/taxonomy",
+            "depth": 0,
+            "archetype_options": [a.value for a in Archetype],
+            "archetype_locked": False,
+            "sku_prefix_locked": False,
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -504,6 +730,8 @@ def create_taxonomy(
     request: Request,
     name: str = Form(""),
     sort_order: str = Form(""),
+    archetype: str = Form(""),
+    sku_prefix: str = Form(""),
     default_unit: str = Form(""),
     default_tracking_mode: str = Form(""),
     default_requires_checkout: bool = Form(False),
@@ -517,6 +745,23 @@ def create_taxonomy(
     fields = _normalise(name, sort_order)
     _validate_name(fields["name"])
     _check_top_name_unique(db, fields["name"])
+    # Lenient defaults so callers that don't yet know about archetypes / SKU
+    # prefixes (legacy POSTs from the pre-refinement form) keep working. The
+    # taxonomy-refinement template prompts for both explicitly; missing here
+    # only happens for hand-rolled POSTs and ad-hoc seed scripts.
+    archetype_value = _validate_archetype(archetype, default=Archetype.BULK)
+    raw_prefix = (sku_prefix or "").strip()
+    if raw_prefix == "":
+        # Auto-derive from name + disambiguate against active+archived
+        # siblings. Mirrors the migration's backfill so the runtime path
+        # matches the bootstrap path. Explicit user-supplied prefixes do
+        # NOT disambiguate — a sibling collision is a user error and
+        # should surface as a 400.
+        prefix_value = _normalise_sku_prefix("", default_from_name=fields["name"])
+        prefix_value = _disambiguate_top_prefix(db, prefix_value)
+    else:
+        prefix_value = _normalise_sku_prefix(raw_prefix)
+    _check_sku_prefix_unique_top(db, prefix_value)
     if fields["sort_order"] is None:
         fields["sort_order"] = _next_top_sort_order(db)
     fields["defaults_json"] = _coerce_defaults(
@@ -535,6 +780,8 @@ def create_taxonomy(
         name=fields["name"],
         sort_order=fields["sort_order"],
         defaults_json=fields["defaults_json"],
+        archetype=archetype_value,
+        sku_prefix=prefix_value,
     )
     db.add(node)
     db.flush()
@@ -551,13 +798,13 @@ def create_taxonomy(
             "sort_order": node.sort_order,
             "parent_id": None,
             "defaults_json": node.defaults_json,
+            "archetype": node.archetype.value if node.archetype else None,
+            "sku_prefix": node.sku_prefix,
         },
     )
     db.commit()
     _flash(request, f"Category “{node.name}” created.")
-    return RedirectResponse(
-        url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -574,11 +821,8 @@ def edit_taxonomy_form(
 ) -> HTMLResponse:
     node = db.get(TaxonomyNode, node_id)
     if node is None or node.parent_id is not None:
-        # In S3 the route only ever surfaces top-level nodes. A request for a
-        # sub-category id is a 404 here — S4 will introduce its own edit route.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="category not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+    locked = _has_descendant_items(db, node.id)
     return templates.TemplateResponse(
         request,
         "taxonomy_form.html",
@@ -588,10 +832,16 @@ def edit_taxonomy_form(
             "form": {
                 "name": node.name,
                 "sort_order": str(node.sort_order),
+                "archetype": node.archetype.value if node.archetype else "",
+                "sku_prefix": node.sku_prefix,
                 "defaults": _defaults_form_view(node.defaults_json),
             },
             "title": f"Edit {node.name}",
             "action": f"/admin/taxonomy/{node.id}",
+            "depth": 0,
+            "archetype_options": [a.value for a in Archetype],
+            "archetype_locked": locked,
+            "sku_prefix_locked": locked,
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -605,6 +855,8 @@ def update_taxonomy(
     node_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    archetype: str = Form(""),
+    sku_prefix: str = Form(""),
     default_unit: str = Form(""),
     default_tracking_mode: str = Form(""),
     default_requires_checkout: bool = Form(False),
@@ -617,13 +869,44 @@ def update_taxonomy(
 ) -> Response:
     node = db.get(TaxonomyNode, node_id)
     if node is None or node.parent_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="category not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
 
     fields = _normalise(name, sort_order)
     _validate_name(fields["name"])
     _check_top_name_unique(db, fields["name"], exclude_id=node.id)
+
+    locked = _has_descendant_items(db, node.id)
+
+    # Archetype handling: blank input means "leave unchanged". Once any
+    # descendant item exists, the archetype is locked — silently swallow any
+    # submitted change to the same current value, otherwise 400.
+    raw_archetype = (archetype or "").strip()
+    if raw_archetype == "":
+        archetype_value = node.archetype
+    else:
+        archetype_value = _validate_archetype(raw_archetype)
+        if locked and archetype_value != node.archetype:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=("cannot change archetype: items exist under this category"),
+            )
+    fields["archetype"] = archetype_value
+
+    raw_prefix = (sku_prefix or "").strip()
+    if raw_prefix == "":
+        # Blank means "leave alone" — same posture as ``sort_order``.
+        prefix_value = node.sku_prefix
+    else:
+        prefix_value = _normalise_sku_prefix(raw_prefix)
+        if locked and prefix_value != node.sku_prefix:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=("cannot change SKU prefix: items exist under this category"),
+            )
+        if prefix_value != node.sku_prefix:
+            _check_sku_prefix_unique_top(db, prefix_value, exclude_id=node.id)
+    fields["sku_prefix"] = prefix_value
+
     if fields["sort_order"] is None:
         # A blank sort_order on edit means "leave alone", not "reset". Without
         # this the field would silently snap back to whatever default the form
@@ -661,9 +944,7 @@ def update_taxonomy(
         # completes cleanly. Matches suppliers/locations behaviour.
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -680,9 +961,7 @@ def archive_taxonomy(
 ) -> Response:
     node = db.get(TaxonomyNode, node_id)
     if node is None or node.parent_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="category not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
 
     if node.archived_at is None:
         node.archived_at = datetime.now(UTC)
@@ -700,9 +979,7 @@ def archive_taxonomy(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{node_id}/unarchive")
@@ -714,9 +991,7 @@ def unarchive_taxonomy(
 ) -> Response:
     node = db.get(TaxonomyNode, node_id)
     if node is None or node.parent_id is not None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="category not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
 
     if node.archived_at is not None:
         previous = node.archived_at
@@ -735,9 +1010,7 @@ def unarchive_taxonomy(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ===========================================================================
@@ -849,6 +1122,15 @@ def new_sub_category_form(
                 "Archive the fields first, then add sub-categories."
             ),
         )
+    if _has_active_items(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add a sub-category here: this category has items "
+                "attached. Move or archive them first."
+            ),
+        )
+    inherited = effective_archetype(db, parent)
     return templates.TemplateResponse(
         request,
         "taxonomy_form.html",
@@ -859,11 +1141,16 @@ def new_sub_category_form(
             "form": {
                 "name": "",
                 "sort_order": "",
+                "sku_prefix": "",
                 "defaults": _defaults_form_view(None),
             },
             "title": f"New sub-category under {parent.name}",
             "action": f"/admin/taxonomy/{parent.id}/children",
             "back_url": f"/admin/taxonomy/{parent.id}/children",
+            "depth": 1,
+            "inherited_archetype": inherited.value if inherited else None,
+            "archetype_locked": True,
+            "sku_prefix_locked": False,
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -877,6 +1164,7 @@ def create_sub_category(
     parent_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    sku_prefix: str = Form(""),
     default_unit: str = Form(""),
     default_tracking_mode: str = Form(""),
     default_requires_checkout: bool = Form(False),
@@ -902,10 +1190,27 @@ def create_sub_category(
                 "Archive the fields first, then add sub-categories."
             ),
         )
+    if _has_active_items(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add a sub-category here: this category has items "
+                "attached. Move or archive them first."
+            ),
+        )
 
     fields = _normalise(name, sort_order)
     _validate_name(fields["name"])
     _check_child_name_unique(db, parent_id=parent.id, name=fields["name"])
+    # Same lenient default as the top-level route — see comment there for
+    # the rationale.
+    raw_prefix = (sku_prefix or "").strip()
+    if raw_prefix == "":
+        prefix_value = _normalise_sku_prefix("", default_from_name=fields["name"])
+        prefix_value = _disambiguate_child_prefix(db, parent_id=parent.id, base=prefix_value)
+    else:
+        prefix_value = _normalise_sku_prefix(raw_prefix)
+    _check_sku_prefix_unique_child(db, parent_id=parent.id, prefix=prefix_value)
     if fields["sort_order"] is None:
         fields["sort_order"] = _next_child_sort_order(db, parent.id)
     fields["defaults_json"] = _coerce_defaults(
@@ -924,6 +1229,7 @@ def create_sub_category(
         name=fields["name"],
         sort_order=fields["sort_order"],
         defaults_json=fields["defaults_json"],
+        sku_prefix=prefix_value,
     )
     db.add(node)
     db.flush()
@@ -940,6 +1246,7 @@ def create_sub_category(
             "sort_order": node.sort_order,
             "parent_id": parent.id,
             "defaults_json": node.defaults_json,
+            "sku_prefix": node.sku_prefix,
         },
     )
     db.commit()
@@ -967,6 +1274,8 @@ def edit_sub_category_form(
     # ``parent`` cannot be None given the FK + the sub-cat existence guarantees
     # — assert for the type checker rather than dressing it as runtime noise.
     assert parent is not None
+    locked = _has_descendant_items(db, node.id)
+    inherited = effective_archetype(db, node)
     return templates.TemplateResponse(
         request,
         "taxonomy_form.html",
@@ -977,11 +1286,16 @@ def edit_sub_category_form(
             "form": {
                 "name": node.name,
                 "sort_order": str(node.sort_order),
+                "sku_prefix": node.sku_prefix,
                 "defaults": _defaults_form_view(node.defaults_json),
             },
             "title": f"Edit {node.name}",
             "action": f"/admin/taxonomy/sub/{node.id}",
             "back_url": f"/admin/taxonomy/{parent.id}/children",
+            "depth": node_depth(db, node),
+            "inherited_archetype": inherited.value if inherited else None,
+            "archetype_locked": True,
+            "sku_prefix_locked": locked,
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -995,6 +1309,7 @@ def update_sub_category(
     node_id: int,
     name: str = Form(""),
     sort_order: str = Form(""),
+    sku_prefix: str = Form(""),
     default_unit: str = Form(""),
     default_tracking_mode: str = Form(""),
     default_requires_checkout: bool = Form(False),
@@ -1010,9 +1325,32 @@ def update_sub_category(
 
     fields = _normalise(name, sort_order)
     _validate_name(fields["name"])
-    _check_child_name_unique(
-        db, parent_id=node.parent_id, name=fields["name"], exclude_id=node.id
-    )
+    _check_child_name_unique(db, parent_id=node.parent_id, name=fields["name"], exclude_id=node.id)
+
+    locked = _has_descendant_items(db, node.id)
+
+    raw_prefix = (sku_prefix or "").strip()
+    if raw_prefix == "":
+        prefix_value = node.sku_prefix
+    else:
+        prefix_value = _normalise_sku_prefix(raw_prefix)
+        if locked and prefix_value != node.sku_prefix:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=("cannot change SKU prefix: items exist under this sub-category"),
+            )
+        if prefix_value != node.sku_prefix:
+            _check_sku_prefix_unique_child(
+                db,
+                parent_id=node.parent_id,
+                prefix=prefix_value,
+                exclude_id=node.id,
+            )
+    fields["sku_prefix"] = prefix_value
+    # Sub-cats never own ``archetype`` — keep the existing NULL/value as-is
+    # so the audit diff doesn't pretend it changed.
+    fields["archetype"] = node.archetype
+
     if fields["sort_order"] is None:
         fields["sort_order"] = node.sort_order
     fields["defaults_json"] = _coerce_defaults(
@@ -1113,5 +1451,278 @@ def unarchive_sub_category(
 
     return RedirectResponse(
         url=f"/admin/taxonomy/{node.parent_id}/children",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ===========================================================================
+# Sub-sub-category routes (depth 2)
+# ===========================================================================
+#
+# Depth-2 nodes are only manually creatable under a ``bulk`` or ``unique``
+# top-level tree. Under a ``unique_variant`` tree the depth-2 leaves are
+# system-managed: one auto-leaf per item, minted by ``app.items.create_item``
+# via ``app.sku.create_unique_variant_leaf``. Manual depth-2 creates under a
+# ``unique_variant`` parent are rejected with a clear 400.
+#
+# Edit / archive / unarchive of a depth-2 node reuse the existing
+# ``/sub/{node_id}/...`` shape — ``_get_sub_category`` already accepts any
+# node with a non-null ``parent_id``.
+
+
+def _get_depth1_subcat_under(
+    db: Session, parent_id: int, sub_id: int
+) -> tuple[TaxonomyNode, TaxonomyNode]:
+    """Resolve the (depth-0 parent, depth-1 sub-cat) pair from the URL.
+
+    Returns ``(parent, sub)`` on success. 404 if either id is missing or if
+    ``sub.parent_id != parent.id`` (URL-vs-DB mismatch). Used by every
+    grandchildren route so the breadcrumb in the URL stays honest.
+    """
+    parent = db.get(TaxonomyNode, parent_id)
+    if parent is None or parent.parent_id is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+    sub = db.get(TaxonomyNode, sub_id)
+    if sub is None or sub.parent_id != parent.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="sub-category not found",
+        )
+    return parent, sub
+
+
+_GRAND_CSV_HEADERS: list[str] = [
+    "id",
+    "sort_order",
+    "name",
+    "sku_prefix",
+]
+
+
+def _csv_rows_for_grandchildren(rows: list[TaxonomyNode]) -> list[list[Any]]:
+    """Map depth-2 ``TaxonomyNode`` rows to CSV cell values."""
+    return [[n.id, n.sort_order, n.name, n.sku_prefix] for n in rows]
+
+
+@router.get("/{parent_id}/sub/{sub_id}/grandchildren")
+def list_grandchildren(
+    request: Request,
+    parent_id: int,
+    sub_id: int,
+    show: str = "active",
+    format: str = "",
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    parent, sub = _get_depth1_subcat_under(db, parent_id, sub_id)
+
+    if show not in {"active", "archived"}:
+        show = "active"
+
+    stmt = select(TaxonomyNode).where(TaxonomyNode.parent_id == sub.id)
+    if show == "active":
+        stmt = stmt.where(TaxonomyNode.archived_at.is_(None))
+    else:
+        stmt = stmt.where(TaxonomyNode.archived_at.is_not(None))
+    stmt = stmt.order_by(_LIST_ORDER, TaxonomyNode.sort_order, TaxonomyNode.name)
+
+    rows = list(db.execute(stmt).scalars().all())
+
+    if (
+        resp := csv_branch(
+            format,
+            filename=(f"sub_sub_categories_parent_{parent.id}_sub_{sub.id}_{show}.csv"),
+            headers=_GRAND_CSV_HEADERS,
+            rows=_csv_rows_for_grandchildren(rows),
+        )
+    ) is not None:
+        return resp
+
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_grandchildren_list.html",
+        {
+            "current_user": _user,
+            "grandparent": parent,
+            "parent": sub,
+            "nodes": rows,
+            "show": show,
+            "inherited_archetype": (ea.value if (ea := effective_archetype(db, sub)) else None),
+        },
+    )
+
+
+@router.get(
+    "/{parent_id}/sub/{sub_id}/grandchildren/new",
+    response_class=HTMLResponse,
+)
+def new_grandchild_form(
+    request: Request,
+    parent_id: int,
+    sub_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    parent, sub = _get_depth1_subcat_under(db, parent_id, sub_id)
+    if sub.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot add a sub-sub-category under an archived parent",
+        )
+    inherited = effective_archetype(db, sub)
+    if inherited == Archetype.UNIQUE_VARIANT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "depth-2 categories under unique-variant trees are created "
+                "automatically when items are added"
+            ),
+        )
+    if has_active_field_defs(db, sub.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-sub-categories: this sub-category has "
+                "custom fields. Archive the fields first."
+            ),
+        )
+    if _has_active_items(db, sub.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add a sub-sub-category here: this sub-category has "
+                "items attached. Move or archive them first."
+            ),
+        )
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_form.html",
+        {
+            "current_user": _user,
+            "node": None,
+            "parent": sub,
+            "grandparent": parent,
+            "form": {
+                "name": "",
+                "sort_order": "",
+                "sku_prefix": "",
+                "defaults": _defaults_form_view(None),
+            },
+            "title": f"New sub-sub-category under {sub.name}",
+            "action": (f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren"),
+            "back_url": (f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren"),
+            "depth": 2,
+            "inherited_archetype": inherited.value if inherited else None,
+            "archetype_locked": True,
+            "sku_prefix_locked": False,
+            "supplier_options": _supplier_options(db),
+            "location_options": _location_options(db),
+            "tracking_modes": [m.value for m in TrackingMode],
+        },
+    )
+
+
+@router.post("/{parent_id}/sub/{sub_id}/grandchildren")
+def create_grandchild(
+    request: Request,
+    parent_id: int,
+    sub_id: int,
+    name: str = Form(""),
+    sort_order: str = Form(""),
+    sku_prefix: str = Form(""),
+    default_unit: str = Form(""),
+    default_tracking_mode: str = Form(""),
+    default_requires_checkout: bool = Form(False),
+    default_reorder_threshold: str = Form(""),
+    default_reorder_qty: str = Form(""),
+    default_supplier_id: str = Form(""),
+    default_location_id: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    parent, sub = _get_depth1_subcat_under(db, parent_id, sub_id)
+    if sub.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot add a sub-sub-category under an archived parent",
+        )
+    inherited = effective_archetype(db, sub)
+    if inherited == Archetype.UNIQUE_VARIANT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "depth-2 categories under unique-variant trees are created "
+                "automatically when items are added"
+            ),
+        )
+    if has_active_field_defs(db, sub.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-sub-categories: this sub-category has "
+                "custom fields. Archive the fields first."
+            ),
+        )
+    if _has_active_items(db, sub.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add a sub-sub-category here: this sub-category has "
+                "items attached. Move or archive them first."
+            ),
+        )
+
+    fields = _normalise(name, sort_order)
+    _validate_name(fields["name"])
+    _check_child_name_unique(db, parent_id=sub.id, name=fields["name"])
+    raw_prefix = (sku_prefix or "").strip()
+    if raw_prefix == "":
+        prefix_value = _normalise_sku_prefix("", default_from_name=fields["name"])
+        prefix_value = _disambiguate_child_prefix(db, parent_id=sub.id, base=prefix_value)
+    else:
+        prefix_value = _normalise_sku_prefix(raw_prefix)
+    _check_sku_prefix_unique_child(db, parent_id=sub.id, prefix=prefix_value)
+    if fields["sort_order"] is None:
+        fields["sort_order"] = _next_child_sort_order(db, sub.id)
+    fields["defaults_json"] = _coerce_defaults(
+        db,
+        default_unit=default_unit,
+        default_tracking_mode=default_tracking_mode,
+        default_requires_checkout=default_requires_checkout,
+        default_reorder_threshold=default_reorder_threshold,
+        default_reorder_qty=default_reorder_qty,
+        default_supplier_id=default_supplier_id,
+        default_location_id=default_location_id,
+    )
+
+    node = TaxonomyNode(
+        parent_id=sub.id,
+        name=fields["name"],
+        sort_order=fields["sort_order"],
+        defaults_json=fields["defaults_json"],
+        sku_prefix=prefix_value,
+    )
+    db.add(node)
+    db.flush()
+
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_node.created",
+        entity_type="taxonomy_node",
+        entity_id=node.id,
+        before=None,
+        after={
+            "name": node.name,
+            "sort_order": node.sort_order,
+            "parent_id": sub.id,
+            "defaults_json": node.defaults_json,
+            "sku_prefix": node.sku_prefix,
+        },
+    )
+    db.commit()
+    _flash(request, f"Sub-sub-category “{node.name}” created.")
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren",
         status_code=status.HTTP_303_SEE_OTHER,
     )

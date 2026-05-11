@@ -28,9 +28,7 @@ from app.models import FieldType, TaxonomyFieldDef, TaxonomyNode
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
@@ -46,9 +44,7 @@ def _make_node(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
 class TestFieldDefDefaults:
     def test_minimal_field_def(self, db: Session) -> None:
         node = _make_node(db)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db.add(f)
         db.commit()
         db.refresh(f)
@@ -111,18 +107,10 @@ class TestFieldDefDefaults:
 class TestFieldDefConstraints:
     def test_name_unique_per_node(self, db: Session) -> None:
         node = _make_node(db)
-        db.add(
-            TaxonomyFieldDef(
-                node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-            )
-        )
+        db.add(TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT))
         db.commit()
 
-        db.add(
-            TaxonomyFieldDef(
-                node_id=node.id, name="Karat", key="karat_2", type=FieldType.TEXT
-            )
-        )
+        db.add(TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat_2", type=FieldType.TEXT))
         with pytest.raises(IntegrityError):
             db.commit()
         db.rollback()
@@ -155,11 +143,7 @@ class TestFieldDefConstraints:
 
     def test_key_unique_per_node(self, db: Session) -> None:
         node = _make_node(db)
-        db.add(
-            TaxonomyFieldDef(
-                node_id=node.id, name="Karat 18", key="karat", type=FieldType.TEXT
-            )
-        )
+        db.add(TaxonomyFieldDef(node_id=node.id, name="Karat 18", key="karat", type=FieldType.TEXT))
         db.commit()
 
         db.add(
@@ -199,9 +183,7 @@ class TestFieldDefConstraints:
             db.commit()
         db.rollback()
 
-    def test_same_name_under_different_nodes_is_allowed(
-        self, db: Session
-    ) -> None:
+    def test_same_name_under_different_nodes_is_allowed(self, db: Session) -> None:
         a = _make_node(db, "Raw Materials")
         b = _make_node(db, "Tools")
         db.add_all(
@@ -223,9 +205,7 @@ class TestFieldDefConstraints:
         db.commit()  # must not raise
 
     def test_node_id_required(self, db: Session) -> None:
-        f = TaxonomyFieldDef(
-            name="Karat", key="karat", type=FieldType.TEXT
-        )  # type: ignore[call-arg]
+        f = TaxonomyFieldDef(name="Karat", key="karat", type=FieldType.TEXT)  # type: ignore[call-arg]
         db.add(f)
         with pytest.raises(IntegrityError):
             db.commit()

@@ -82,9 +82,7 @@ class TestAuditViewRoleEnforcement:
         resp = client.get("/admin/audit", follow_redirects=False)
         assert resp.status_code == 401
 
-    def test_pending_returns_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_returns_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(
             db_session,
             email="pending@x.test",
@@ -95,33 +93,25 @@ class TestAuditViewRoleEnforcement:
         resp = client.get("/admin/audit", follow_redirects=False)
         assert resp.status_code == 403
 
-    def test_workshop_returns_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_returns_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, user)
         resp = client.get("/admin/audit", follow_redirects=False)
         assert resp.status_code == 403
 
-    def test_office_returns_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_returns_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, user)
         resp = client.get("/admin/audit", follow_redirects=False)
         assert resp.status_code == 403
 
-    def test_manager_returns_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_returns_200(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, user)
         resp = client.get("/admin/audit", follow_redirects=False)
         assert resp.status_code == 200
 
-    def test_admin_returns_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_returns_200(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, user)
         resp = client.get("/admin/audit", follow_redirects=False)
@@ -129,9 +119,7 @@ class TestAuditViewRoleEnforcement:
 
 
 class TestAuditViewRender:
-    def test_renders_audit_table(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_audit_table(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/audit")
@@ -204,9 +192,7 @@ class TestAuditViewRender:
         assert '{"role": "office"}' in resp.text or '{"role":"office"}' in resp.text
         assert '{"role": "manager"}' in resp.text or '{"role":"manager"}' in resp.text
 
-    def test_null_before_renders_dash(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_null_before_renders_dash(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         # Override _seed_row to omit before_json entirely.
         record_audit(
@@ -235,9 +221,7 @@ class TestAuditViewRender:
         before_cell = row_html[before_cell_idx:before_cell_close]
         assert "—" in before_cell
 
-    def test_empty_summary_when_no_rows(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_summary_when_no_rows(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/audit")
@@ -246,9 +230,7 @@ class TestAuditViewRender:
 
 
 class TestAuditViewSort:
-    def test_newest_row_appears_first(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_newest_row_appears_first(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         # Seed two rows with explicit created_at timestamps.
         older = AuditLog(
@@ -284,9 +266,7 @@ class TestAuditViewSort:
 
 class TestAuditViewPagination:
     @pytest.fixture
-    def admin_with_many_rows(
-        self, client: TestClient, db_session: Session
-    ) -> User:
+    def admin_with_many_rows(self, client: TestClient, db_session: Session) -> User:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         # Seed 60 rows so we have one full page + 10 spillover. Stagger
         # created_at so the order is deterministic.
@@ -395,9 +375,7 @@ class TestAuditCsvRoleEnforcement:
         resp = client.get("/admin/audit?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(
             db_session,
             email="p@x.test",
@@ -408,33 +386,25 @@ class TestAuditCsvRoleEnforcement:
         resp = client.get("/admin/audit?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, user)
         resp = client.get("/admin/audit?format=csv")
         assert resp.status_code == 403
 
-    def test_office_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, user)
         resp = client.get("/admin/audit?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, user)
         resp = client.get("/admin/audit?format=csv")
         assert resp.status_code == 200
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, user)
         resp = client.get("/admin/audit?format=csv")
@@ -463,9 +433,7 @@ class TestAuditCsvHeaders:
 
 
 class TestAuditCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, user)
         resp = client.get("/admin/audit?format=csv")
@@ -510,9 +478,7 @@ class TestAuditCsvBody:
         resp = client.get("/admin/audit?format=csv")
         # Find the data row matching our action.
         body = resp.text
-        line = next(
-            line for line in body.split("\r\n") if "user.bootstrap_admin_granted" in line
-        )
+        line = next(line for line in body.split("\r\n") if "user.bootstrap_admin_granted" in line)
         # actor_email is the third comma-separated field; it must be empty.
         # Use a minimal split so embedded commas in JSON cells don't trip us.
         # Format: id,iso_timestamp,actor_email,action,...
@@ -544,9 +510,7 @@ class TestAuditCsvBody:
         assert json.loads(before_str) == {"role": "office"}
         assert json.loads(after_str) == {"role": "manager"}
 
-    def test_null_before_renders_empty_cell(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_null_before_renders_empty_cell(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         record_audit(
             db_session,
@@ -573,9 +537,7 @@ class TestAuditCsvBody:
 
 
 class TestAuditCsvSnapshot:
-    def test_csv_export_ignores_pagination(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_export_ignores_pagination(self, client: TestClient, db_session: Session) -> None:
         """The HTML branch paginates at 50; the CSV exports every row."""
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         base = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
@@ -611,9 +573,7 @@ class TestAuditCsvSnapshot:
 
 
 class TestAuditCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/audit")
@@ -621,9 +581,7 @@ class TestAuditCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="admin-audit-table"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/audit?format=garbage")
@@ -633,9 +591,7 @@ class TestAuditCsvHtmlBranch:
 
 
 class TestAuditCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _seed_row(db_session, actor=admin, action="thing.seed")
         before = len(_audit_rows(db_session))
@@ -647,9 +603,7 @@ class TestAuditCsvReadOnly:
 
 
 class TestAuditCsvLink:
-    def test_html_renders_csv_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_html_renders_csv_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/audit")

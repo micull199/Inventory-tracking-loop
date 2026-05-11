@@ -40,9 +40,7 @@ from datetime import UTC, datetime, timedelta
 from playwright.sync_api import BrowserContext, Page, expect
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -62,9 +60,7 @@ def _admin_promote(
     role: str,
 ) -> None:
     """Sign in as the bootstrap admin and promote ``email`` → ``role`` + active."""
-    admin_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    admin_context = context.browser.new_context() if context.browser else context
     admin_page = admin_context.new_page()
     _dev_login(
         admin_page,
@@ -74,15 +70,11 @@ def _admin_promote(
         name="Seed Admin",
     )
     admin_page.goto(f"{base_url}/admin/users")
-    row = admin_page.locator(
-        '[data-testid="user-row"]', has_text=email
-    )
+    row = admin_page.locator('[data-testid="user-row"]', has_text=email)
     row.locator('[data-testid="role-select"]').select_option(role)
     row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{base_url}/admin/users")
-    promoted = admin_page.locator(
-        '[data-testid="user-row"]', has_text=email
-    )
+    promoted = admin_page.locator('[data-testid="user-row"]', has_text=email)
     promoted.locator('[data-testid="status-select"]').select_option("active")
     promoted.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{base_url}/admin/users")
@@ -105,12 +97,8 @@ def test_workshop_checks_out_a_unique_tracked_unit(
         page.close()
 
     # Step 2: admin promotes both users.
-    _admin_promote(
-        app_server, context, email="checkouts-ws@uc.test", role="workshop"
-    )
-    _admin_promote(
-        app_server, context, email="checkouts-mgr@uc.test", role="manager"
-    )
+    _admin_promote(app_server, context, email="checkouts-ws@uc.test", role="workshop")
+    _admin_promote(app_server, context, email="checkouts-mgr@uc.test", role="manager")
 
     # Step 3: manager signs in, creates a category + a flagged unique-tracked
     # item, and adds two units.
@@ -136,31 +124,24 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("CHK-MOULD-1")
     mgr_page.get_by_test_id("item-name-input").fill("Wax mould A")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Checkouts E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Checkouts E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("ea")
     mgr_page.get_by_test_id("item-tracking-mode-input").select_option("unique")
     mgr_page.get_by_test_id("item-requires-checkout-input").check()
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
-    item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="CHK-MOULD-1"
-    )
+    item_row = mgr_page.locator('[data-testid="item-row"]', has_text="CHK-MOULD-1")
     item_id = item_row.get_attribute("data-item-id")
     assert item_id is not None
 
     # Add two units.
     item_row.get_by_test_id("edit-item").click()
     mgr_page.wait_for_url(
-        lambda u: u.startswith(f"{app_server}/admin/items/")
-        and u.endswith("/edit")
+        lambda u: u.startswith(f"{app_server}/admin/items/") and u.endswith("/edit")
     )
     mgr_page.get_by_test_id("manage-units").click()
-    mgr_page.wait_for_url(
-        lambda u: u.endswith("/units")
-    )
+    mgr_page.wait_for_url(lambda u: u.endswith("/units"))
     for serial in ("CHK-A", "CHK-B"):
         mgr_page.get_by_test_id("new-item-unit").click()
         mgr_page.wait_for_url(lambda u: "/units/new" in u)
@@ -185,14 +166,11 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     # opens the read-only view, follows the new "Check out →" link.
     ws_page.get_by_test_id("nav-items").click()
     ws_page.wait_for_url(f"{app_server}/admin/items")
-    item_row_ws = ws_page.locator(
-        '[data-testid="item-row"]', has_text="CHK-MOULD-1"
-    )
+    item_row_ws = ws_page.locator('[data-testid="item-row"]', has_text="CHK-MOULD-1")
     expect(item_row_ws).to_be_visible()
     item_row_ws.get_by_test_id("view-item").click()
     ws_page.wait_for_url(
-        lambda u: u.startswith(f"{app_server}/admin/items/")
-        and u.endswith("/edit")
+        lambda u: u.startswith(f"{app_server}/admin/items/") and u.endswith("/edit")
     )
     expect(ws_page.get_by_test_id("checkout-link")).to_be_visible()
     ws_page.get_by_test_id("checkout-link").click()
@@ -229,9 +207,7 @@ def test_workshop_checks_out_a_unique_tracked_unit(
 
     # Step 6a (C4): manager signs in, visits the cross-item checkouts view +
     # the dashboard widget. CHK-A should appear as overdue.
-    c4_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    c4_context = context.browser.new_context() if context.browser else context
     c4_page = c4_context.new_page()
     _dev_login(
         c4_page,
@@ -263,9 +239,7 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     # Dashboard widget now reads 1.
     c4_page.get_by_test_id("nav-dashboard").click()
     c4_page.wait_for_url(f"{app_server}/admin/dashboard")
-    expect(c4_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text(
-        "1"
-    )
+    expect(c4_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text("1")
     c4_page.close()
     if c4_context is not context:
         c4_context.close()
@@ -306,9 +280,7 @@ def test_workshop_checks_out_a_unique_tracked_unit(
 
     # Step 6c (C4 follow-up): re-visit the cross-item view + the dashboard
     # widget — both should now be empty / zero.
-    c4_after_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    c4_after_context = context.browser.new_context() if context.browser else context
     c4_after_page = c4_after_context.new_page()
     _dev_login(
         c4_after_page,
@@ -322,17 +294,13 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     expect(c4_after_page.get_by_test_id("checkouts-overdue-count")).to_have_text("0")
     expect(c4_after_page.get_by_test_id("checkouts-admin-empty")).to_be_visible()
     c4_after_page.goto(f"{app_server}/admin/dashboard")
-    expect(
-        c4_after_page.get_by_test_id("dashboard-overdue-checkouts")
-    ).to_have_text("0")
+    expect(c4_after_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text("0")
     c4_after_page.close()
     if c4_after_context is not context:
         c4_after_context.close()
 
     # Step 7: cleanup. Manager signs back in and archives the units, item, cat.
-    cleanup_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    cleanup_context = context.browser.new_context() if context.browser else context
     cleanup_page = cleanup_context.new_page()
     _dev_login(
         cleanup_page,
@@ -344,17 +312,13 @@ def test_workshop_checks_out_a_unique_tracked_unit(
 
     # Archive the item directly — units stay on the archived item.
     cleanup_page.goto(f"{app_server}/admin/items")
-    cleanup_row = cleanup_page.locator(
-        '[data-testid="item-row"]', has_text="CHK-MOULD-1"
-    )
+    cleanup_row = cleanup_page.locator('[data-testid="item-row"]', has_text="CHK-MOULD-1")
     cleanup_row.get_by_test_id("archive-item").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/items")
 
     # Archive the taxonomy.
     cleanup_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = cleanup_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Checkouts E2E Cat"
-    )
+    cat_row = cleanup_page.locator('[data-testid="taxonomy-row"]', has_text="Checkouts E2E Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/taxonomy")
     cleanup_page.close()

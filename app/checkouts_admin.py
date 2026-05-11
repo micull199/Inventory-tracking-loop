@@ -139,9 +139,7 @@ def _coerce_show(raw: str | None) -> str:
 
 def _open_count(db: Session) -> int:
     """Count of currently-open checkouts (``returned_at IS NULL``)."""
-    stmt = select(func.count(Checkout.id)).where(
-        Checkout.returned_at.is_(None)
-    )
+    stmt = select(func.count(Checkout.id)).where(Checkout.returned_at.is_(None))
     return int(db.execute(stmt).scalar_one())
 
 
@@ -161,9 +159,7 @@ def overdue_count(db: Session, *, now: datetime | None = None) -> int:
     return int(db.execute(stmt).scalar_one())
 
 
-def _list_open_checkouts(
-    db: Session, *, show: str, now: datetime
-) -> list[dict[str, Any]]:
+def _list_open_checkouts(db: Session, *, show: str, now: datetime) -> list[dict[str, Any]]:
     """Return view-shaped rows for the open checkouts table.
 
     ``show="overdue"`` narrows to rows with a past ``expected_return``;

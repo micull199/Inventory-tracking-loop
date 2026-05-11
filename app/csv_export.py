@@ -41,9 +41,7 @@ from typing import Any
 from fastapi import Response
 
 _FILENAME_SAFE_CHARS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789_-."
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-."
 )
 
 

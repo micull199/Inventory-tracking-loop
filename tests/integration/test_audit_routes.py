@@ -214,9 +214,7 @@ class TestRoleChangeAudit:
 
 
 class TestStatusChangeAudit:
-    def test_status_change_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_status_change_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(
             db_session, email="admin@x.test", role=Role.ADMIN, status=UserStatus.ACTIVE
         )

@@ -47,22 +47,16 @@ def _resolve_code(db: Session, code: str) -> Item | None:
     item B has ``qr_code="X"``), the QR-coded item wins — that's what the
     scanner physically points at.
     """
-    by_qr = db.execute(
-        select(Item).where(Item.qr_code == code)
-    ).scalar_one_or_none()
+    by_qr = db.execute(select(Item).where(Item.qr_code == code)).scalar_one_or_none()
     if by_qr is not None:
         return by_qr
-    return db.execute(
-        select(Item).where(Item.sku == code)
-    ).scalar_one_or_none()
+    return db.execute(select(Item).where(Item.sku == code)).scalar_one_or_none()
 
 
 @router.get("", response_class=HTMLResponse)
 def scan_page(
     request: Request,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
@@ -75,24 +69,18 @@ def scan_page(
 def resolve_scan(
     request: Request,
     code: str = Form(""),
-    _user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    _user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     trimmed = code.strip()
     if not trimmed:
         _flash(request, "Please scan or type a code.")
-        return RedirectResponse(
-            url="/scan", status_code=status.HTTP_303_SEE_OTHER
-        )
+        return RedirectResponse(url="/scan", status_code=status.HTTP_303_SEE_OTHER)
 
     item = _resolve_code(db, trimmed)
     if item is None:
         _flash(request, f"No item found for code: {trimmed}.")
-        return RedirectResponse(
-            url="/scan", status_code=status.HTTP_303_SEE_OTHER
-        )
+        return RedirectResponse(url="/scan", status_code=status.HTTP_303_SEE_OTHER)
 
     return RedirectResponse(
         url=f"/scan/item/{item.id}",
@@ -104,9 +92,7 @@ def resolve_scan(
 def scan_item_page(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     """Action picker for a resolved item.

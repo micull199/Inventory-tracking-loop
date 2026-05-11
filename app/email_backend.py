@@ -161,6 +161,4 @@ def get_email_backend(settings: Settings) -> EmailBackend:
         return ConsoleEmailBackend()
     if name == "smtp":
         return SmtpEmailBackend(settings)
-    raise RuntimeError(
-        f"unknown email backend {name!r}; expected 'console' or 'smtp'"
-    )
+    raise RuntimeError(f"unknown email backend {name!r}; expected 'console' or 'smtp'")

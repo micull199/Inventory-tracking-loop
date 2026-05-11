@@ -21,9 +21,7 @@ from __future__ import annotations
 from playwright.sync_api import BrowserContext, Page, expect
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -35,9 +33,7 @@ def _dev_login(
     page.wait_for_url(f"{base_url}/")
 
 
-def test_manager_reorder_dashboard_walk(
-    context: BrowserContext, app_server: str
-) -> None:
+def test_manager_reorder_dashboard_walk(context: BrowserContext, app_server: str) -> None:
     # Step 1: Future manager signs in (lands pending).
     pending_page = context.new_page()
     _dev_login(
@@ -63,15 +59,11 @@ def test_manager_reorder_dashboard_walk(
     expect(admin_page.get_by_test_id("welcome")).to_be_visible()
 
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="reorder-mgr@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="reorder-mgr@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("manager")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="reorder-mgr@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="reorder-mgr@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -95,9 +87,7 @@ def test_manager_reorder_dashboard_walk(
     # Supplier — set an email so PO4's send route accepts the draft.
     mgr_page.goto(f"{app_server}/admin/suppliers/new")
     mgr_page.get_by_test_id("supplier-name-input").fill("Reorder Bullion Co")
-    mgr_page.get_by_test_id("supplier-email-input").fill(
-        "reorder-supplier@uc.test"
-    )
+    mgr_page.get_by_test_id("supplier-email-input").fill("reorder-supplier@uc.test")
     mgr_page.get_by_test_id("supplier-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers")
 
@@ -111,13 +101,9 @@ def test_manager_reorder_dashboard_walk(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("RD-LOW")
     mgr_page.get_by_test_id("item-name-input").fill("Low stock alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Reorder E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Reorder E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
-    mgr_page.get_by_test_id("item-supplier-input").select_option(
-        label="Reorder Bullion Co"
-    )
+    mgr_page.get_by_test_id("item-supplier-input").select_option(label="Reorder Bullion Co")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("10")
     mgr_page.get_by_test_id("item-reorder-qty-input").fill("100")
     mgr_page.get_by_test_id("item-submit").click()
@@ -132,13 +118,9 @@ def test_manager_reorder_dashboard_walk(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("RD-OK")
     mgr_page.get_by_test_id("item-name-input").fill("OK alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Reorder E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Reorder E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
-    mgr_page.get_by_test_id("item-supplier-input").select_option(
-        label="Reorder Bullion Co"
-    )
+    mgr_page.get_by_test_id("item-supplier-input").select_option(label="Reorder Bullion Co")
     mgr_page.get_by_test_id("item-reorder-threshold-input").fill("10")
     mgr_page.get_by_test_id("item-reorder-qty-input").fill("100")
     mgr_page.get_by_test_id("item-submit").click()
@@ -163,12 +145,8 @@ def test_manager_reorder_dashboard_walk(
     # Only the below-threshold item should be listed; the above-threshold
     # item should not.
     expect(mgr_page.get_by_test_id("reorder-empty")).not_to_be_visible()
-    expect(
-        mgr_page.locator('[data-testid="reorder-row"]', has_text="RD-LOW")
-    ).to_be_visible()
-    expect(
-        mgr_page.locator('[data-testid="reorder-row"]', has_text="RD-OK")
-    ).to_have_count(0)
+    expect(mgr_page.locator('[data-testid="reorder-row"]', has_text="RD-LOW")).to_be_visible()
+    expect(mgr_page.locator('[data-testid="reorder-row"]', has_text="RD-OK")).to_have_count(0)
 
     # The supplier group label is the supplier name (active, no suffix).
     expect(
@@ -177,18 +155,10 @@ def test_manager_reorder_dashboard_walk(
             has_text="Reorder Bullion Co",
         )
     ).to_be_visible()
-    low_reorder_row = mgr_page.locator(
-        '[data-testid="reorder-row"]', has_text="RD-LOW"
-    )
-    expect(low_reorder_row.get_by_test_id("reorder-current-qty")).to_have_text(
-        "0.0000"
-    )
-    expect(low_reorder_row.get_by_test_id("reorder-threshold")).to_have_text(
-        "10.0000"
-    )
-    expect(low_reorder_row.get_by_test_id("reorder-deficit")).to_have_text(
-        "10.0000"
-    )
+    low_reorder_row = mgr_page.locator('[data-testid="reorder-row"]', has_text="RD-LOW")
+    expect(low_reorder_row.get_by_test_id("reorder-current-qty")).to_have_text("0.0000")
+    expect(low_reorder_row.get_by_test_id("reorder-threshold")).to_have_text("10.0000")
+    expect(low_reorder_row.get_by_test_id("reorder-deficit")).to_have_text("10.0000")
 
     # Step 6 (PO2): The supplier group renders a Draft PO button. Click it →
     # creates a draft PO with one line for RD-LOW + redirects to the detail page.
@@ -202,16 +172,12 @@ def test_manager_reorder_dashboard_walk(
     po_id = po_url.rsplit("/", 1)[-1]
     # One line — the RD-LOW item.
     expect(mgr_page.locator('[data-testid="po-line-row"]')).to_have_count(1)
-    expect(mgr_page.get_by_test_id("po-supplier-name")).to_have_text(
-        "Reorder Bullion Co"
-    )
+    expect(mgr_page.get_by_test_id("po-supplier-name")).to_have_text("Reorder Bullion Co")
     expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("draft")
     expect(mgr_page.get_by_test_id("po-line-sku")).to_have_text("RD-LOW")
     # PO2b: drafts render the edit form. Inputs replace the text cells.
     expect(mgr_page.get_by_test_id("po-edit-form")).to_be_visible()
-    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value(
-        "100.0000"
-    )
+    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value("100.0000")
     # RD-LOW had no prior cost layer when the PO was drafted → empty input.
     expect(mgr_page.get_by_test_id("po-edit-cost-input")).to_have_value("")
 
@@ -223,15 +189,9 @@ def test_manager_reorder_dashboard_walk(
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
     # The redirect lands back on the same detail page (still draft) with the
     # new values pre-filled.
-    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value(
-        "120.0000"
-    )
-    expect(mgr_page.get_by_test_id("po-edit-cost-input")).to_have_value(
-        "1.5000"
-    )
-    expect(mgr_page.get_by_test_id("po-edit-notes-input")).to_have_value(
-        "rush order"
-    )
+    expect(mgr_page.get_by_test_id("po-edit-qty-input")).to_have_value("120.0000")
+    expect(mgr_page.get_by_test_id("po-edit-cost-input")).to_have_value("1.5000")
+    expect(mgr_page.get_by_test_id("po-edit-notes-input")).to_have_value("rush order")
 
     # Step 6b-pdf (PO3): Download the PDF for the draft PO via the link on
     # the detail page. Use the page's request context so we ride the same
@@ -254,9 +214,7 @@ def test_manager_reorder_dashboard_walk(
     mgr_page.get_by_test_id("nav-pos").click()
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders")
     expect(mgr_page.locator('[data-testid="po-row"]')).to_have_count(1)
-    expect(mgr_page.get_by_test_id("po-row-supplier")).to_have_text(
-        "Reorder Bullion Co"
-    )
+    expect(mgr_page.get_by_test_id("po-row-supplier")).to_have_text("Reorder Bullion Co")
     expect(mgr_page.get_by_test_id("po-row-line-count")).to_have_text("1")
 
     # Step 6c (PO4): Click into the PO and send it to the supplier.
@@ -279,37 +237,25 @@ def test_manager_reorder_dashboard_walk(
     # detail page → fill the form → submit → status flips to "received".
     expect(mgr_page.get_by_test_id("po-receive-link")).to_be_visible()
     mgr_page.get_by_test_id("po-receive-link").click()
-    mgr_page.wait_for_url(
-        f"{app_server}/admin/purchase-orders/{po_id}/receive"
-    )
+    mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}/receive")
     # The form has one line (RD-LOW); outstanding equals qty_ordered (120).
     expect(mgr_page.get_by_test_id("po-receive-form")).to_be_visible()
-    expect(
-        mgr_page.locator('[data-testid="po-receive-line-row"]')
-    ).to_have_count(1)
-    expect(mgr_page.get_by_test_id("po-receive-outstanding")).to_have_text(
-        "120.0000"
-    )
+    expect(mgr_page.locator('[data-testid="po-receive-line-row"]')).to_have_count(1)
+    expect(mgr_page.get_by_test_id("po-receive-outstanding")).to_have_text("120.0000")
     mgr_page.get_by_test_id("po-receive-received-input").fill("120")
     mgr_page.get_by_test_id("po-receive-cost-input").fill("2.00")
     mgr_page.get_by_test_id("po-receive-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/purchase-orders/{po_id}")
     # Status reads "received"; receive link is gone (received POs can't
     # receive against themselves again).
-    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text(
-        "received"
-    )
+    expect(mgr_page.get_by_test_id("po-status-badge")).to_have_text("received")
     expect(mgr_page.get_by_test_id("po-receive-link")).to_have_count(0)
     # The line cell now shows qty_received=120.
-    expect(mgr_page.get_by_test_id("po-line-qty-received")).to_have_text(
-        "120.0000"
-    )
+    expect(mgr_page.get_by_test_id("po-line-qty-received")).to_have_text("120.0000")
 
     # Verify the linked item's current_qty was bumped via the cost engine.
     mgr_page.goto(f"{app_server}/admin/items/{low_id}/in")
-    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text(
-        "120.0000"
-    )
+    expect(mgr_page.get_by_test_id("item-current-qty")).to_have_text("120.0000")
 
     # Back to reorder dashboard via nav. RD-LOW now has qty=120 (well above
     # threshold=10) so the dashboard should be empty — verifies that the PO
@@ -329,16 +275,12 @@ def test_manager_reorder_dashboard_walk(
         mgr_page.wait_for_url(f"{app_server}/admin/items")
 
     mgr_page.goto(f"{app_server}/admin/suppliers")
-    sup_row = mgr_page.locator(
-        '[data-testid="supplier-row"]', has_text="Reorder Bullion Co"
-    )
+    sup_row = mgr_page.locator('[data-testid="supplier-row"]', has_text="Reorder Bullion Co")
     sup_row.get_by_test_id("archive-supplier").click()
     mgr_page.wait_for_url(f"{app_server}/admin/suppliers")
 
     mgr_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = mgr_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Reorder E2E Cat"
-    )
+    cat_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Reorder E2E Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 

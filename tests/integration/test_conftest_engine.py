@@ -34,15 +34,11 @@ class TestResolveTestDatabaseUrl:
         # future PR that drifts one without the other fails the suite.
         assert _DEFAULT_TEST_DATABASE_URL == "sqlite:///:memory:"
 
-    def test_respects_test_database_url_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_respects_test_database_url_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+psycopg:///test_uc")
         assert _resolve_test_database_url() == "postgresql+psycopg:///test_uc"
 
-    def test_passes_arbitrary_url_through_verbatim(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_passes_arbitrary_url_through_verbatim(self, monkeypatch: pytest.MonkeyPatch) -> None:
         weird = "sqlite:///./tmp_some_file.db?cache=shared"
         monkeypatch.setenv("TEST_DATABASE_URL", weird)
         assert _resolve_test_database_url() == weird
@@ -73,17 +69,13 @@ class TestMakeTestEngine:
         # require a running Postgres server. The dialect is set from the URL.
         # Uses the psycopg v3 driver scheme (``postgresql+psycopg://``) since
         # that is the project's installed Postgres driver per pyproject.toml.
-        engine = _make_test_engine(
-            "postgresql+psycopg://user:pw@localhost:5432/test_uc"
-        )
+        engine = _make_test_engine("postgresql+psycopg://user:pw@localhost:5432/test_uc")
         assert engine.dialect.name == "postgresql"
 
     def test_postgres_url_does_not_use_static_pool(self) -> None:
         # Non-SQLite URLs use SQLAlchemy's default pool, which is QueuePool for
         # Postgres. StaticPool would defeat connection sharing across requests.
-        engine = _make_test_engine(
-            "postgresql+psycopg://user:pw@localhost:5432/test_uc"
-        )
+        engine = _make_test_engine("postgresql+psycopg://user:pw@localhost:5432/test_uc")
         assert not isinstance(engine.pool, StaticPool)
         assert isinstance(engine.pool, QueuePool)
 
@@ -94,9 +86,7 @@ class TestDbSessionFixtureStillWorks:
     refactor regressed something every other test depends on.
     """
 
-    def test_db_session_yields_writable_sqlite_session(
-        self, db_session: Session
-    ) -> None:
+    def test_db_session_yields_writable_sqlite_session(self, db_session: Session) -> None:
         # Engine the fixture handed us is a SQLite engine (default env config).
         bind = db_session.get_bind()
         assert isinstance(bind, Engine)
@@ -112,9 +102,7 @@ class TestDbSessionFixtureStillWorks:
         db_session.add(u)
         db_session.commit()
 
-        round_tripped = (
-            db_session.query(User).filter_by(email="conftest-engine@example.com").one()
-        )
+        round_tripped = db_session.query(User).filter_by(email="conftest-engine@example.com").one()
         assert round_tripped.id == u.id
         assert round_tripped.status is UserStatus.PENDING
 

@@ -174,9 +174,7 @@ class TestVarianceTrendRoleEnforcement:
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 401
 
-    def test_pending_user_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -187,33 +185,25 @@ class TestVarianceTrendRoleEnforcement:
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 403
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/reports/variance-trend")
@@ -226,9 +216,7 @@ class TestVarianceTrendRoleEnforcement:
 
 
 class TestVarianceTrendEmptyState:
-    def test_no_stock_takes_renders_empty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_stock_takes_renders_empty(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
@@ -249,9 +237,7 @@ class TestVarianceTrendEmptyState:
         assert 'data-testid="variance-trend-empty"' in resp.text
         assert 'data-testid="variance-trend-stock-take-count">0' in resp.text
 
-    def test_in_progress_stock_take_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_progress_stock_take_excluded(self, client: TestClient, db_session: Session) -> None:
         """``started_at`` set without ``completed_at`` is in-progress, excluded."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = StockTake(
@@ -278,12 +264,8 @@ class TestVarianceTrendWindowFilter:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=1)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("2"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=1))
+        _make_line(db_session, st=st, item=item, variance=Decimal("2"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -297,12 +279,8 @@ class TestVarianceTrendWindowFilter:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=100)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("2"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=100))
+        _make_line(db_session, st=st, item=item, variance=Decimal("2"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -315,12 +293,8 @@ class TestVarianceTrendWindowFilter:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=100)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("2"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=100))
+        _make_line(db_session, st=st, item=item, variance=Decimal("2"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend?days=200")
         assert resp.status_code == 200
@@ -354,15 +328,9 @@ class TestVarianceTrendAggregation:
         leaf = _make_node(db_session)
         a = _make_item(db_session, leaf, sku="A-1")
         b = _make_item(db_session, leaf, sku="B-1")
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=st, item=a, variance=Decimal("3"), committed=True
-        )
-        _make_line(
-            db_session, st=st, item=b, variance=Decimal("-5"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=st, item=a, variance=Decimal("3"), committed=True)
+        _make_line(db_session, st=st, item=b, variance=Decimal("-5"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -372,19 +340,13 @@ class TestVarianceTrendAggregation:
         assert 'data-testid="variance-trend-row-net">-2' in resp.text
         assert 'data-testid="variance-trend-row-abs">8' in resp.text
 
-    def test_uncommitted_lines_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_uncommitted_lines_excluded(self, client: TestClient, db_session: Session) -> None:
         """A completed stock take whose lines weren't committed shows zeros."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("3"), committed=False
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=st, item=item, variance=Decimal("3"), committed=False)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -392,19 +354,13 @@ class TestVarianceTrendAggregation:
         assert 'data-testid="variance-trend-row-lines-with-variance">0' in resp.text
         assert 'data-testid="variance-trend-row-positive">0' in resp.text
 
-    def test_zero_variance_lines_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_variance_lines_excluded(self, client: TestClient, db_session: Session) -> None:
         """A committed line with zero variance contributes nothing."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("0"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=st, item=item, variance=Decimal("0"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -417,59 +373,37 @@ class TestVarianceTrendAggregation:
 
 
 class TestVarianceTrendTotals:
-    def test_totals_sum_two_stock_takes(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_totals_sum_two_stock_takes(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         a = _make_item(db_session, leaf, sku="A-1")
         b = _make_item(db_session, leaf, sku="B-1")
-        st1 = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=2)
-        )
-        st2 = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=st1, item=a, variance=Decimal("3"), committed=True
-        )
-        _make_line(
-            db_session, st=st2, item=b, variance=Decimal("-5"), committed=True
-        )
+        st1 = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=2))
+        st2 = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=st1, item=a, variance=Decimal("3"), committed=True)
+        _make_line(db_session, st=st2, item=b, variance=Decimal("-5"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
         assert 'data-testid="variance-trend-stock-take-count">2' in resp.text
-        assert (
-            'data-testid="variance-trend-total-lines-with-variance">2' in resp.text
-        )
+        assert 'data-testid="variance-trend-total-lines-with-variance">2' in resp.text
         assert 'data-testid="variance-trend-total-positive">3' in resp.text
         assert 'data-testid="variance-trend-total-negative-abs">5' in resp.text
         assert 'data-testid="variance-trend-total-net">-2' in resp.text
         assert 'data-testid="variance-trend-total-abs">8' in resp.text
 
-    def test_newest_first_ordering(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_newest_first_ordering(self, client: TestClient, db_session: Session) -> None:
         """Most-recently-completed stock take appears above older ones."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        old = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=10)
-        )
-        new = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=old, item=item, variance=Decimal("3"), committed=True
-        )
+        old = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=10))
+        new = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=old, item=item, variance=Decimal("3"), committed=True)
         # Make a new line on the new stock take with a different variance so we
         # can find its row distinctly; reuse the same item is fine for the
         # ordering check.
-        _make_line(
-            db_session, st=new, item=item, variance=Decimal("-5"), committed=True
-        )
+        _make_line(db_session, st=new, item=item, variance=Decimal("-5"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend")
         assert resp.status_code == 200
@@ -485,9 +419,7 @@ class TestVarianceTrendTotals:
 
 
 class TestVarianceTrendReadOnly:
-    def test_get_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         before = _audit_count(db_session)
         _login_as(client, mgr)
@@ -535,9 +467,7 @@ class TestVarianceTrendCsvRoleEnforcement:
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -548,25 +478,19 @@ class TestVarianceTrendCsvRoleEnforcement:
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 200
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/reports/variance-trend?format=csv")
@@ -604,9 +528,7 @@ class TestVarianceTrendCsvHeaders:
         cd = resp.headers["content-disposition"]
         assert 'filename="variance_trend_30d.csv"' in cd
 
-    def test_bad_days_filename_uses_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_days_filename_uses_default(self, client: TestClient, db_session: Session) -> None:
         """Non-int days silently coerces to default 90 (same as HTML)."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -617,9 +539,7 @@ class TestVarianceTrendCsvHeaders:
 
 
 class TestVarianceTrendCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend?format=csv")
@@ -632,9 +552,7 @@ class TestVarianceTrendCsvBody:
             "net_variance,abs_variance\r\n"
         )
 
-    def test_one_stock_take_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_stock_take_one_data_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session, name="Tools")
         item = _make_item(db_session, leaf)
@@ -643,9 +561,7 @@ class TestVarianceTrendCsvBody:
             completed_at=datetime.now(UTC) - timedelta(hours=1),
             scope_node=leaf,
         )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("3"), committed=True
-        )
+        _make_line(db_session, st=st, item=item, variance=Decimal("3"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 200
@@ -667,33 +583,25 @@ class TestVarianceTrendCsvBody:
         assert Decimal(cells[7]) == Decimal("3")  # net_variance
         assert Decimal(cells[8]) == Decimal("3")  # abs_variance
 
-    def test_days_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_days_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         """A 100-day-old completion is excluded by default 90, included at 200."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=100)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("2"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=100))
+        _make_line(db_session, st=st, item=item, variance=Decimal("2"), committed=True)
         _login_as(client, mgr)
         # Default window: only header row.
         resp_default = client.get("/admin/reports/variance-trend?format=csv")
         assert resp_default.status_code == 200
         assert resp_default.text.count("\r\n") == 1
         # Widened window: header + 1 row.
-        resp_wide = client.get(
-            "/admin/reports/variance-trend?format=csv&days=200"
-        )
+        resp_wide = client.get("/admin/reports/variance-trend?format=csv&days=200")
         assert resp_wide.status_code == 200
         assert resp_wide.text.count("\r\n") == 2
-        assert f",{st.id}," in resp_wide.text or resp_wide.text.split(
-            "\r\n"
-        )[1].startswith(f"{st.id},")
+        assert f",{st.id}," in resp_wide.text or resp_wide.text.split("\r\n")[1].startswith(
+            f"{st.id},"
+        )
 
     def test_multiple_stock_takes_newest_first(
         self, client: TestClient, db_session: Session
@@ -701,18 +609,10 @@ class TestVarianceTrendCsvBody:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        old = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(days=10)
-        )
-        new = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=old, item=item, variance=Decimal("3"), committed=True
-        )
-        _make_line(
-            db_session, st=new, item=item, variance=Decimal("-5"), committed=True
-        )
+        old = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(days=10))
+        new = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=old, item=item, variance=Decimal("3"), committed=True)
+        _make_line(db_session, st=new, item=item, variance=Decimal("-5"), committed=True)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend?format=csv")
         assert resp.status_code == 200
@@ -723,9 +623,7 @@ class TestVarianceTrendCsvBody:
 
 
 class TestVarianceTrendCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         """No format param → existing HTML response."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -734,9 +632,7 @@ class TestVarianceTrendCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="variance-trend-heading"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         """``?format=garbage`` falls back to HTML (silent coerce)."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -746,18 +642,12 @@ class TestVarianceTrendCsvHtmlBranch:
 
 
 class TestVarianceTrendCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf)
-        st = _make_completed_st(
-            db_session, completed_at=datetime.now(UTC) - timedelta(hours=1)
-        )
-        _make_line(
-            db_session, st=st, item=item, variance=Decimal("3"), committed=True
-        )
+        st = _make_completed_st(db_session, completed_at=datetime.now(UTC) - timedelta(hours=1))
+        _make_line(db_session, st=st, item=item, variance=Decimal("3"), committed=True)
         before = _audit_count(db_session)
         _login_as(client, mgr)
         resp = client.get("/admin/reports/variance-trend?format=csv")

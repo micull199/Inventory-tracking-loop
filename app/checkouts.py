@@ -85,9 +85,7 @@ _CONDITION_NOTE_MAX = 2000
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
     return item
 
 
@@ -128,21 +126,23 @@ def _parse_optional_note(raw: str) -> str | None:
     if len(text) > _CONDITION_NOTE_MAX:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"condition_note must be {_CONDITION_NOTE_MAX} characters or fewer"
-            ),
+            detail=(f"condition_note must be {_CONDITION_NOTE_MAX} characters or fewer"),
         )
     return text
 
 
 def _open_checkout_unit_ids(db: Session, item_id: int) -> set[int]:
     """Item-unit ids currently in an open checkout for ``item_id``."""
-    rows = db.execute(
-        select(Checkout.item_unit_id)
-        .where(Checkout.item_id == item_id)
-        .where(Checkout.returned_at.is_(None))
-        .where(Checkout.item_unit_id.is_not(None))
-    ).scalars().all()
+    rows = (
+        db.execute(
+            select(Checkout.item_unit_id)
+            .where(Checkout.item_id == item_id)
+            .where(Checkout.returned_at.is_(None))
+            .where(Checkout.item_unit_id.is_not(None))
+        )
+        .scalars()
+        .all()
+    )
     return {int(uid) for uid in rows if uid is not None}
 
 
@@ -210,9 +210,7 @@ def _flash(request: Request, message: str) -> None:
 def checkout_form(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = _get_item_or_404(db, item_id)
@@ -225,9 +223,7 @@ def checkout_form(
     # For qty-tracked items, the submit only makes sense when no open checkout
     # exists. For unique-tracked items, the form is still useful as long as at
     # least one unit is available.
-    can_submit = (
-        bool(units) if is_unique else not _has_open_qty_checkout(db, item.id)
-    )
+    can_submit = bool(units) if is_unique else not _has_open_qty_checkout(db, item.id)
 
     return templates.TemplateResponse(
         request,
@@ -260,18 +256,14 @@ def record_checkout(
     item_unit_id: str = Form(""),
     expected_return: str = Form(""),
     condition_note: str = Form(""),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
     _reject_archived(item)
     _reject_non_flagged(item)
 
-    expected_date = _parse_optional_date(
-        expected_return, field_name="expected_return"
-    )
+    expected_date = _parse_optional_date(expected_return, field_name="expected_return")
     clean_note = _parse_optional_note(condition_note)
 
     unit: ItemUnit | None = None
@@ -349,19 +341,13 @@ def record_checkout(
             "item_unit_id": unit.id if unit is not None else None,
             "user_id": user.id,
             "checked_out_at": now.isoformat(),
-            "expected_return": (
-                expected_dt.isoformat() if expected_dt is not None else None
-            ),
+            "expected_return": (expected_dt.isoformat() if expected_dt is not None else None),
             "condition_note": clean_note,
         },
     )
     db.commit()
 
-    label = (
-        f"{item.name} (unit {unit.serial_or_label})"
-        if unit is not None
-        else item.name
-    )
+    label = f"{item.name} (unit {unit.serial_or_label})" if unit is not None else item.name
     _flash(request, f"Checked out: {label}.")
     return RedirectResponse(
         url=f"/admin/items/{item.id}/checkout",
@@ -395,9 +381,7 @@ def return_checkout(
     request: Request,
     checkout_id: int,
     condition_note: str = Form(""),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     co = db.get(Checkout, checkout_id)
@@ -420,16 +404,12 @@ def return_checkout(
     if merged is not None and len(merged) > _CONDITION_NOTE_MAX:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"condition_note must be {_CONDITION_NOTE_MAX} characters or fewer"
-            ),
+            detail=(f"condition_note must be {_CONDITION_NOTE_MAX} characters or fewer"),
         )
 
     item = db.get(Item, co.item_id)
     if item is None:  # pragma: no cover — checkouts FK to items RESTRICT
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
 
     unit_label: str | None = None
     if co.item_unit_id is not None:
@@ -463,11 +443,7 @@ def return_checkout(
     )
     db.commit()
 
-    label = (
-        f"{item.name} (unit {unit_label})"
-        if unit_label is not None
-        else item.name
-    )
+    label = f"{item.name} (unit {unit_label})" if unit_label is not None else item.name
     _flash(request, f"Checked in: {label}.")
     return RedirectResponse(
         url=f"/admin/items/{item.id}/checkout",

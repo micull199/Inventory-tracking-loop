@@ -52,15 +52,11 @@ def _normalise(form: dict[str, str]) -> dict[str, str | None]:
 
 def _validate_name(name: str | None) -> str:
     if not name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     return name
 
 
-def _check_name_unique(
-    db: Session, name: str, *, exclude_id: int | None = None
-) -> None:
+def _check_name_unique(db: Session, name: str, *, exclude_id: int | None = None) -> None:
     stmt = select(Supplier.id).where(Supplier.name == name)
     if exclude_id is not None:
         stmt = stmt.where(Supplier.id != exclude_id)
@@ -71,9 +67,9 @@ def _check_name_unique(
         )
 
 
-def _diff(supplier: Supplier, new: dict[str, str | None]) -> tuple[
-    dict[str, Any], dict[str, Any]
-] | None:
+def _diff(
+    supplier: Supplier, new: dict[str, str | None]
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Return ``(before, after)`` of *changed* fields only, or None if no-op."""
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
@@ -121,10 +117,7 @@ def _csv_rows_for_suppliers(rows: list[Supplier]) -> list[list[Any]]:
     cells (``None`` → ``""`` via ``csv_response``'s coercion), matching the
     HTML's ``s.email or ""`` rendering.
     """
-    return [
-        [s.id, s.name, s.email, s.phone, s.notes]
-        for s in rows
-    ]
+    return [[s.id, s.name, s.email, s.phone, s.notes] for s in rows]
 
 
 @router.get("")
@@ -225,9 +218,7 @@ def create_supplier(
     )
     db.commit()
     _flash(request, f"Supplier “{supplier.name}” created.")
-    return RedirectResponse(
-        url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +235,7 @@ def edit_supplier_form(
 ) -> HTMLResponse:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found")
     return templates.TemplateResponse(
         request,
         "suppliers_form.html",
@@ -278,9 +267,7 @@ def update_supplier(
 ) -> Response:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found")
 
     fields = _normalise({"name": name, "email": email, "phone": phone, "notes": notes})
     _validate_name(fields["name"])
@@ -307,9 +294,7 @@ def update_supplier(
         # browser's POST-redirect-GET cycle completes cleanly.
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +311,7 @@ def archive_supplier(
 ) -> Response:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found")
 
     if supplier.archived_at is None:
         supplier.archived_at = datetime.now(UTC)
@@ -346,9 +329,7 @@ def archive_supplier(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{supplier_id}/unarchive")
@@ -360,9 +341,7 @@ def unarchive_supplier(
 ) -> Response:
     supplier = db.get(Supplier, supplier_id)
     if supplier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="supplier not found")
 
     if supplier.archived_at is not None:
         previous = supplier.archived_at
@@ -381,6 +360,4 @@ def unarchive_supplier(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/suppliers", status_code=status.HTTP_303_SEE_OTHER)

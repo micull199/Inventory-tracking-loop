@@ -110,9 +110,7 @@ from app.template_env import templates
 # lets the helper functions (default qty, last-cost lookup, audit shape) stay
 # next to their only callers.
 draft_router = APIRouter(prefix="/admin/reorder", tags=["purchase_orders"])
-list_router = APIRouter(
-    prefix="/admin/purchase-orders", tags=["purchase_orders"]
-)
+list_router = APIRouter(prefix="/admin/purchase-orders", tags=["purchase_orders"])
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +154,7 @@ def _resolve_active_supplier(db: Session, supplier_id: int) -> Supplier:
     return sup
 
 
-def _low_stock_items_for_supplier(
-    db: Session, supplier_id: int
-) -> list[Item]:
+def _low_stock_items_for_supplier(db: Session, supplier_id: int) -> list[Item]:
     """Active items for the supplier where ``current_qty <= reorder_threshold``.
 
     Same predicate as PO1's dashboard, narrowed to one supplier. Ordered by
@@ -255,9 +251,7 @@ def create_draft_po(
                 "item_id": item.id,
                 "qty_ordered": str(qty_ordered),
                 "expected_unit_cost": (
-                    str(expected_unit_cost)
-                    if expected_unit_cost is not None
-                    else None
+                    str(expected_unit_cost) if expected_unit_cost is not None else None
                 ),
             }
         )
@@ -282,8 +276,7 @@ def create_draft_po(
 
     _flash(
         request,
-        f"Draft PO #{po.id} created for {supplier.name} "
-        f"with {len(items)} line(s).",
+        f"Draft PO #{po.id} created for {supplier.name} with {len(items)} line(s).",
     )
     return RedirectResponse(
         url=f"/admin/purchase-orders/{po.id}",
@@ -349,14 +342,10 @@ def list_purchase_orders(
     if status_filter not in _STATUS_FILTER_VALUES:
         status_filter = "all"
 
-    stmt = select(PurchaseOrder, Supplier).join(
-        Supplier, PurchaseOrder.supplier_id == Supplier.id
-    )
+    stmt = select(PurchaseOrder, Supplier).join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
     if status_filter != "all":
         stmt = stmt.where(PurchaseOrder.status == POStatus(status_filter))
-    stmt = stmt.order_by(
-        PurchaseOrder.created_at.desc(), PurchaseOrder.id.desc()
-    )
+    stmt = stmt.order_by(PurchaseOrder.created_at.desc(), PurchaseOrder.id.desc())
 
     rows: list[dict[str, Any]] = []
     for po, supplier in db.execute(stmt).all():
@@ -394,11 +383,7 @@ def list_purchase_orders(
 
 
 def _count_lines(db: Session, po_id: int) -> int:
-    n = db.scalar(
-        select(func.count(PurchaseOrderLine.id)).where(
-            PurchaseOrderLine.po_id == po_id
-        )
-    )
+    n = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.po_id == po_id))
     return int(n or 0)
 
 
@@ -416,9 +401,7 @@ def purchase_order_detail(
 ) -> HTMLResponse:
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
 
     supplier = db.get(Supplier, po.supplier_id)
     created_by_email: str | None = None
@@ -527,9 +510,7 @@ def _parse_positive_decimal(raw: str, *, field_name: str) -> Decimal:
     return value
 
 
-def _parse_optional_non_negative_decimal(
-    raw: str, *, field_name: str
-) -> Decimal | None:
+def _parse_optional_non_negative_decimal(raw: str, *, field_name: str) -> Decimal | None:
     """Blank → None; non-blank parses as Decimal >= 0 or 400."""
     text = (raw or "").strip()
     if text == "":
@@ -554,9 +535,7 @@ def _require_draft(po: PurchaseOrder) -> None:
     if po.status != POStatus.DRAFT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"PO is {po.status.value}; only drafts can be edited"
-            ),
+            detail=(f"PO is {po.status.value}; only drafts can be edited"),
         )
 
 
@@ -588,9 +567,7 @@ async def update_purchase_order(
     """
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     _require_draft(po)
 
     # FastAPI's ``Form(...)`` extracts the static keys; the per-line dynamic
@@ -598,15 +575,11 @@ async def update_purchase_order(
     # Form() params parse, so this is free).
     form_data = await request.form()
 
-    new_expected_date = _parse_optional_date(
-        expected_date, field_name="expected_date"
-    )
+    new_expected_date = _parse_optional_date(expected_date, field_name="expected_date")
     new_notes = _parse_optional_notes(notes)
 
     lines = _po_lines(db, po.id)
-    parsed_line_changes: list[
-        tuple[PurchaseOrderLine, Decimal, Decimal | None]
-    ] = []
+    parsed_line_changes: list[tuple[PurchaseOrderLine, Decimal, Decimal | None]] = []
     for line in lines:
         qty_key = f"qty_ordered_{line.id}"
         cost_key = f"expected_unit_cost_{line.id}"
@@ -623,9 +596,7 @@ async def update_purchase_order(
         qty_raw = str(form_data[qty_key] or "")
         cost_raw = str(form_data[cost_key] or "")
         new_qty = _parse_positive_decimal(qty_raw, field_name="qty_ordered")
-        new_cost = _parse_optional_non_negative_decimal(
-            cost_raw, field_name="expected_unit_cost"
-        )
+        new_cost = _parse_optional_non_negative_decimal(cost_raw, field_name="expected_unit_cost")
         parsed_line_changes.append((line, new_qty, new_cost))
 
     # All inputs parsed. Now compute the sparse diff *before* any mutation
@@ -633,12 +604,8 @@ async def update_purchase_order(
     before_top: dict[str, Any] = {}
     after_top: dict[str, Any] = {}
     if po.expected_date != new_expected_date:
-        before_top["expected_date"] = (
-            po.expected_date.isoformat() if po.expected_date else None
-        )
-        after_top["expected_date"] = (
-            new_expected_date.isoformat() if new_expected_date else None
-        )
+        before_top["expected_date"] = po.expected_date.isoformat() if po.expected_date else None
+        after_top["expected_date"] = new_expected_date.isoformat() if new_expected_date else None
     if po.notes != new_notes:
         before_top["notes"] = po.notes
         after_top["notes"] = new_notes
@@ -653,13 +620,9 @@ async def update_purchase_order(
             line_after["qty_ordered"] = str(new_qty)
         if line.expected_unit_cost != new_cost:
             line_before["expected_unit_cost"] = (
-                str(line.expected_unit_cost)
-                if line.expected_unit_cost is not None
-                else None
+                str(line.expected_unit_cost) if line.expected_unit_cost is not None else None
             )
-            line_after["expected_unit_cost"] = (
-                str(new_cost) if new_cost is not None else None
-            )
+            line_after["expected_unit_cost"] = str(new_cost) if new_cost is not None else None
         # Only emit a line audit entry if at least one field changed
         # (line_id alone means "unchanged"; skip).
         if len(line_before) > 1:
@@ -717,9 +680,7 @@ def cancel_purchase_order(
 ) -> Response:
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     _require_draft(po)
 
     po.status = POStatus.CANCELLED
@@ -761,9 +722,7 @@ def purchase_order_pdf(
     """
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     if po.status == POStatus.CANCELLED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -773,9 +732,7 @@ def purchase_order_pdf(
     supplier = db.get(Supplier, po.supplier_id)
     supplier_view: dict[str, Any] = {
         "name": supplier.name if supplier is not None else "(unknown)",
-        "archived": (
-            supplier.archived_at is not None if supplier is not None else False
-        ),
+        "archived": (supplier.archived_at is not None if supplier is not None else False),
     }
 
     line_stmt = (
@@ -821,9 +778,7 @@ def purchase_order_pdf(
 # ---------------------------------------------------------------------------
 
 
-def _po_pdf_view(
-    db: Session, po: PurchaseOrder, supplier: Supplier
-) -> bytes:
+def _po_pdf_view(db: Session, po: PurchaseOrder, supplier: Supplier) -> bytes:
     """Build the PDF view + render bytes. Same shape as the PO3 GET handler."""
     line_stmt = (
         select(PurchaseOrderLine, Item)
@@ -873,14 +828,10 @@ def _build_send_message(
     """
     expected_line: str
     if po.expected_date is not None:
-        expected_line = (
-            f"<p>Expected delivery: {po.expected_date.isoformat()}.</p>"
-        )
+        expected_line = f"<p>Expected delivery: {po.expected_date.isoformat()}.</p>"
     else:
         expected_line = ""
-    notes_block = (
-        f"<p>Notes: {po.notes}</p>" if po.notes else ""
-    )
+    notes_block = f"<p>Notes: {po.notes}</p>" if po.notes else ""
     html = (
         "<html><body>"
         f"<p>Hi {supplier.name},</p>"
@@ -933,9 +884,7 @@ def send_purchase_order(
     """
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     _require_draft(po)
 
     supplier = db.get(Supplier, po.supplier_id)
@@ -948,9 +897,7 @@ def send_purchase_order(
     if supplier_email == "":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "supplier has no email address — add one before sending"
-            ),
+            detail=("supplier has no email address — add one before sending"),
         )
 
     pdf_bytes = _po_pdf_view(db, po, supplier)
@@ -1028,9 +975,7 @@ def send_purchase_order(
 # stock-in for the +10 and document via the audit log + reason.
 
 
-def _parse_optional_non_negative_decimal_or_zero(
-    raw: str, *, field_name: str
-) -> Decimal:
+def _parse_optional_non_negative_decimal_or_zero(raw: str, *, field_name: str) -> Decimal:
     """Parse ``raw`` as a non-negative Decimal; blank → ``Decimal("0")``.
 
     PO5 receive uses this for the per-line ``received_<id>`` field — a blank or
@@ -1074,9 +1019,7 @@ def _require_receivable(po: PurchaseOrder) -> None:
         )
 
 
-def _receive_lines_view(
-    db: Session, po_id: int
-) -> list[dict[str, Any]]:
+def _receive_lines_view(db: Session, po_id: int) -> list[dict[str, Any]]:
     """Per-line view dicts for the receive form.
 
     Same SKU-ordering as the read-only render. Adds ``outstanding`` =
@@ -1117,9 +1060,7 @@ def receive_purchase_order_form(
     """Render the receive form. Status guard: sent / partially_received only."""
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     _require_receivable(po)
     supplier = db.get(Supplier, po.supplier_id)
     return templates.TemplateResponse(
@@ -1161,9 +1102,7 @@ async def receive_purchase_order(
     """
     po = db.get(PurchaseOrder, po_id)
     if po is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="PO not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
     _require_receivable(po)
     prev_status = po.status
 
@@ -1175,12 +1114,8 @@ async def receive_purchase_order(
     submitted_received: dict[int, str] = {}
     submitted_cost: dict[int, str] = {}
     for line in lines:
-        submitted_received[line.id] = str(
-            form_data.get(f"received_{line.id}", "") or ""
-        ).strip()
-        submitted_cost[line.id] = str(
-            form_data.get(f"cost_{line.id}", "") or ""
-        ).strip()
+        submitted_received[line.id] = str(form_data.get(f"received_{line.id}", "") or "").strip()
+        submitted_cost[line.id] = str(form_data.get(f"cost_{line.id}", "") or "").strip()
 
     def _re_render(error: str) -> Response:
         # Re-render the receive form with the typed values + error message
@@ -1312,14 +1247,12 @@ async def receive_purchase_order(
     if new_status == POStatus.RECEIVED:
         _flash(
             request,
-            f"PO #{po.id} fully received "
-            f"({len(audit_lines)} line(s) updated).",
+            f"PO #{po.id} fully received ({len(audit_lines)} line(s) updated).",
         )
     else:
         _flash(
             request,
-            f"PO #{po.id} partial receipt recorded "
-            f"({len(audit_lines)} line(s) updated).",
+            f"PO #{po.id} partial receipt recorded ({len(audit_lines)} line(s) updated).",
         )
     return RedirectResponse(
         url=f"/admin/purchase-orders/{po.id}",
@@ -1327,9 +1260,7 @@ async def receive_purchase_order(
     )
 
 
-def _parse_non_negative_decimal_required(
-    raw: str, *, field_name: str
-) -> Decimal:
+def _parse_non_negative_decimal_required(raw: str, *, field_name: str) -> Decimal:
     """Parse a non-negative decimal; blank rejects.
 
     Distinct from ``_parse_optional_non_negative_decimal`` (which accepts

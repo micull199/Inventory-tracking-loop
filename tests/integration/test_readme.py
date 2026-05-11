@@ -352,12 +352,8 @@ class TestReceivingStockAgainstPOSection:
 
     def test_section_is_filled(self) -> None:
         body = _section("Receiving stock against a PO")
-        assert "_TODO_" not in body, (
-            "PO receive section still has _TODO placeholder"
-        )
-        assert len(body.strip()) > 400, (
-            "PO receive section looks unsubstantial"
-        )
+        assert "_TODO_" not in body, "PO receive section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "PO receive section looks unsubstantial"
 
     def test_section_references_admin_purchase_orders_route(self) -> None:
         body = _section("Receiving stock against a PO")
@@ -436,12 +432,8 @@ class TestReadingAuditTrailSection:
 
     def test_section_is_filled(self) -> None:
         body = _section("Reading the audit trail for an item")
-        assert "_TODO_" not in body, (
-            "audit-trail section still has _TODO placeholder"
-        )
-        assert len(body.strip()) > 400, (
-            "audit-trail section looks unsubstantial"
-        )
+        assert "_TODO_" not in body, "audit-trail section still has _TODO placeholder"
+        assert len(body.strip()) > 400, "audit-trail section looks unsubstantial"
 
     def test_section_references_admin_audit_route(self) -> None:
         body = _section("Reading the audit trail for an item")
@@ -532,9 +524,7 @@ class TestReadingAuditTrailSection:
         # At least one of the three keyboard-search tokens must
         # appear so the section directs users to a concrete
         # workaround rather than leaving them to discover it.
-        assert (
-            "cmd+f" in lower or "ctrl+f" in lower or "cmd-f" in lower
-        )
+        assert "cmd+f" in lower or "ctrl+f" in lower or "cmd-f" in lower
 
 
 class TestQuickLinksAndTechStackTodoResolution:
@@ -585,9 +575,7 @@ class TestQuickLinksAndTechStackTodoResolution:
         # ``reportlab``, the README would no longer match and this test
         # fires. Same docs ↔ source consistency-pinning posture as A2's
         # ``test_audit_coverage.py`` cross-cutting source-text sweep.
-        pyproject = (
-            Path(__file__).resolve().parents[2] / "pyproject.toml"
-        )
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8").lower()
         assert "reportlab" in text, (
             "reportlab missing from pyproject.toml — README claims it is "
@@ -605,9 +593,7 @@ class TestQuickLinksAndTechStackTodoResolution:
         # broken-link regression in user-facing docs). Pinned at the
         # exact path the README links to (``./CHANGELOG.md`` relative to
         # the README, which is repo root).
-        changelog = (
-            Path(__file__).resolve().parents[2] / "CHANGELOG.md"
-        )
+        changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
         assert changelog.exists(), (
             "CHANGELOG.md missing at repo root — README links to "
             "./CHANGELOG.md from Quick links but the file does not exist"
@@ -662,15 +648,11 @@ class TestContributingAndLicenseFooter:
 
     def test_contributing_section_is_filled(self) -> None:
         body = _h2_section("Contributing")
-        assert "_TODO_" not in body, (
-            "Contributing section still has _TODO placeholder"
-        )
+        assert "_TODO_" not in body, "Contributing section still has _TODO placeholder"
         # Substantial section: covers the loop posture, the canonical
         # source files, the no-external-PRs invariant, and where to
         # file feedback. ~150-200 words is comfortably above 200 chars.
-        assert len(body.strip()) > 200, (
-            "Contributing section looks unsubstantial"
-        )
+        assert len(body.strip()) > 200, "Contributing section looks unsubstantial"
 
     def test_contributing_section_references_mission_and_progress(self) -> None:
         # Section's whole purpose is to point a curious reader at the
@@ -699,13 +681,9 @@ class TestContributingAndLicenseFooter:
 
     def test_license_section_is_filled(self) -> None:
         body = _h2_section("License")
-        assert "_TODO_" not in body, (
-            "License section still has _TODO placeholder"
-        )
+        assert "_TODO_" not in body, "License section still has _TODO placeholder"
         # ~50-100 words is comfortably above 50 chars.
-        assert len(body.strip()) > 50, (
-            "License section looks unsubstantial"
-        )
+        assert len(body.strip()) > 50, "License section looks unsubstantial"
 
     def test_license_section_names_proprietary(self) -> None:
         # Case-sensitive on the canonical capitalisation that matches
@@ -798,9 +776,7 @@ class TestDeployInfrastructure:
 
     def test_dockerfile_exists_at_repo_root(self) -> None:
         dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
-        assert dockerfile.exists(), (
-            "Dockerfile missing at repo root — required for Fly.io deploy"
-        )
+        assert dockerfile.exists(), "Dockerfile missing at repo root — required for Fly.io deploy"
 
     def test_dockerfile_names_uvicorn(self) -> None:
         dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
@@ -811,9 +787,7 @@ class TestDeployInfrastructure:
 
     def test_fly_toml_exists_at_repo_root(self) -> None:
         fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"
-        assert fly_toml.exists(), (
-            "fly.toml missing at repo root — required for Fly.io deploy"
-        )
+        assert fly_toml.exists(), "fly.toml missing at repo root — required for Fly.io deploy"
 
     def test_fly_toml_names_release_command(self) -> None:
         fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"

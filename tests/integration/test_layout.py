@@ -88,9 +88,7 @@ class TestRoleAwareNav:
         # should NOT render for an anonymous visitor.
         assert 'data-testid="primary-nav"' not in resp.text
 
-    def test_pending_user_has_no_primary_nav(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_has_no_primary_nav(self, client: TestClient, db_session: Session) -> None:
         # Pending = signed in but not yet activated. They get the holding page,
         # not the workshop nav.
         _login_as(
@@ -116,9 +114,7 @@ class TestRoleAwareNav:
         assert 'data-testid="primary-nav"' in resp.text
         assert 'data-testid="nav-users"' not in resp.text
 
-    def test_admin_nav_includes_users_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_nav_includes_users_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
@@ -126,9 +122,7 @@ class TestRoleAwareNav:
         assert 'data-testid="nav-users"' in resp.text
         assert 'href="/admin/users"' in resp.text
 
-    def test_aria_current_set_on_active_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_set_on_active_page(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/users")
@@ -172,9 +166,7 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-suppliers"' not in resp.text
 
-    def test_aria_current_on_suppliers_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_suppliers_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/suppliers")
@@ -215,9 +207,7 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-locations"' not in resp.text
 
-    def test_aria_current_on_locations_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_locations_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/locations")
@@ -258,27 +248,21 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-taxonomy"' not in resp.text
 
-    def test_aria_current_on_taxonomy_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_taxonomy_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/taxonomy")
         snippet = resp.text[resp.text.find('data-testid="nav-taxonomy"') :]
         assert 'aria-current="page"' in snippet[:300]
 
-    def test_manager_nav_includes_items_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_nav_includes_items_link(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/")
         assert 'data-testid="nav-items"' in resp.text
         assert 'href="/admin/items"' in resp.text
 
-    def test_admin_nav_includes_items_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_nav_includes_items_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
@@ -294,9 +278,7 @@ class TestRoleAwareNav:
         assert 'data-testid="nav-items"' in resp.text
         assert 'href="/admin/items"' in resp.text
 
-    def test_office_nav_includes_items_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_nav_includes_items_link(self, client: TestClient, db_session: Session) -> None:
         """I1b: Office gets read+edit access to items (MISSION §3)."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
@@ -304,9 +286,7 @@ class TestRoleAwareNav:
         assert 'data-testid="nav-items"' in resp.text
         assert 'href="/admin/items"' in resp.text
 
-    def test_aria_current_on_items_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_items_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items")
@@ -332,9 +312,7 @@ class TestRoleAwareNav:
         assert 'data-testid="nav-reorder"' in resp.text
         assert 'href="/admin/reorder"' in resp.text
 
-    def test_admin_nav_includes_reorder_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_nav_includes_reorder_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
@@ -349,18 +327,14 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-reorder"' not in resp.text
 
-    def test_aria_current_on_reorder_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_reorder_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")
         snippet = resp.text[resp.text.find('data-testid="nav-reorder"') :]
         assert 'aria-current="page"' in snippet[:300]
 
-    def test_manager_nav_includes_pos_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_nav_includes_pos_link(self, client: TestClient, db_session: Session) -> None:
         """PO2: Manager + Office + Admin can reach the purchase orders list."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -368,34 +342,26 @@ class TestRoleAwareNav:
         assert 'data-testid="nav-pos"' in resp.text
         assert 'href="/admin/purchase-orders"' in resp.text
 
-    def test_office_nav_includes_pos_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_nav_includes_pos_link(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/")
         assert 'data-testid="nav-pos"' in resp.text
 
-    def test_admin_nav_includes_pos_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_nav_includes_pos_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
         assert 'data-testid="nav-pos"' in resp.text
 
-    def test_workshop_nav_excludes_pos_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_nav_excludes_pos_link(self, client: TestClient, db_session: Session) -> None:
         """Workshop cannot manage POs (MISSION §3)."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/")
         assert 'data-testid="nav-pos"' not in resp.text
 
-    def test_aria_current_on_pos_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_pos_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/purchase-orders")
@@ -437,9 +403,7 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-dashboard"' not in resp.text
 
-    def test_aria_current_on_dashboard_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_dashboard_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/dashboard")
@@ -481,35 +445,27 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-checkouts"' not in resp.text
 
-    def test_aria_current_on_checkouts_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_checkouts_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/checkouts")
         snippet = resp.text[resp.text.find('data-testid="nav-checkouts"') :]
         assert 'aria-current="page"' in snippet[:300]
 
-    def test_manager_nav_includes_audit_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_nav_includes_audit_link(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/")
         assert 'data-testid="nav-audit"' in resp.text
         assert 'href="/admin/audit"' in resp.text
 
-    def test_admin_nav_includes_audit_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_nav_includes_audit_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="admin@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
         assert 'data-testid="nav-audit"' in resp.text
 
-    def test_office_nav_excludes_audit_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_nav_excludes_audit_link(self, client: TestClient, db_session: Session) -> None:
         """Audit view is Manager+Admin only — Office is a sibling role."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
@@ -524,9 +480,7 @@ class TestRoleAwareNav:
         resp = client.get("/")
         assert 'data-testid="nav-audit"' not in resp.text
 
-    def test_aria_current_on_audit_page(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_aria_current_on_audit_page(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/audit")
@@ -561,9 +515,7 @@ class TestRoleAwareNav:
 
 
 class TestFlashRegion:
-    def test_no_flash_renders_nothing(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_flash_renders_nothing(self, client: TestClient, db_session: Session) -> None:
         _login_as(client, _make_user(db_session, email="m@x.test", role=Role.MANAGER))
         resp = client.get("/")
         assert 'data-testid="flash"' not in resp.text

@@ -178,9 +178,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_is_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(
             db_session,
             email="p@x.test",
@@ -190,16 +188,12 @@ class TestRoleEnforcement:
         _login_as(client, user)
         assert client.get("/admin/stock-takes").status_code == 403
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         assert client.get("/admin/stock-takes").status_code == 403
 
-    def test_workshop_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         token = _csrf(client)
@@ -213,30 +207,22 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_office_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         assert client.get("/admin/stock-takes").status_code == 200
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         assert client.get("/admin/stock-takes").status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         assert client.get("/admin/stock-takes").status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         token = _csrf(client)
@@ -266,9 +252,7 @@ class TestListRendering:
         assert 'data-testid="stock-takes-empty"' in body
         assert 'data-testid="stock-takes-row"' not in body
 
-    def test_show_open_lists_scheduled_rows(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_show_open_lists_scheduled_rows(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
@@ -307,9 +291,7 @@ class TestListRendering:
         # The scheduled row is visible (open path).
         assert 'data-testid="stock-takes-row"' in resp.text
 
-    def test_in_progress_renders_in_open_tab(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_progress_renders_in_open_tab(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_stock_take(
             db_session,
@@ -322,9 +304,7 @@ class TestListRendering:
         assert 'data-testid="stock-takes-row"' in resp.text
         assert "in_progress" in resp.text
 
-    def test_scope_label_for_node(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_scope_label_for_node(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         node = _make_node(db_session, name="Raw Materials")
         _make_stock_take(db_session, scope_node=node, created_by=mgr)
@@ -332,9 +312,7 @@ class TestListRendering:
         resp = client.get("/admin/stock-takes")
         assert "Category: Raw Materials" in resp.text
 
-    def test_scope_label_for_location(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_scope_label_for_location(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = _make_location(db_session, name="Safe")
         _make_stock_take(db_session, scope_location=loc, created_by=mgr)
@@ -342,9 +320,7 @@ class TestListRendering:
         resp = client.get("/admin/stock-takes")
         assert "Location: Safe" in resp.text
 
-    def test_scope_label_for_all(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_scope_label_for_all(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
@@ -358,9 +334,7 @@ class TestListRendering:
 
 
 class TestNewFormRendering:
-    def test_form_inputs_present(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_inputs_present(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/stock-takes/new")
@@ -375,9 +349,7 @@ class TestNewFormRendering:
         assert 'data-testid="stock-take-notes-input"' in body
         assert 'data-testid="stock-take-submit"' in body
 
-    def test_active_nodes_in_select(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_active_nodes_in_select(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         active = _make_node(db_session, name="Active Tools")
         _login_as(client, mgr)
@@ -420,9 +392,7 @@ class TestNewFormRendering:
 
 
 class TestValidation:
-    def test_invalid_scope_type_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_invalid_scope_type_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -436,9 +406,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_scope_type_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_scope_type_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -452,9 +420,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_scheduled_for_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_scheduled_for_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -468,9 +434,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_bad_scheduled_for_format_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_bad_scheduled_for_format_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -484,9 +448,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_node_scope_blank_node_id_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_node_scope_blank_node_id_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -535,9 +497,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_node_scope_archived_node_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_node_scope_archived_node_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         archived = _make_node(db_session, name="Old", archived=True)
         _login_as(client, mgr)
@@ -588,9 +548,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
 
-    def test_oversize_notes_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_oversize_notes_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -621,9 +579,7 @@ class TestValidation:
         )
         assert resp.status_code == 400
         # No StockTake row, no audit row.
-        assert (
-            db_session.execute(select(StockTake)).scalars().first() is None
-        )
+        assert db_session.execute(select(StockTake)).scalars().first() is None
         assert _audit_rows(db_session, action="stock_take.created") == []
 
 
@@ -660,9 +616,7 @@ class TestHappyPathAll:
         assert st.started_at is None
         assert st.completed_at is None
 
-    def test_audit_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_shape(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -687,9 +641,7 @@ class TestHappyPathAll:
             "notes": None,
         }
 
-    def test_flash_visible_after_redirect(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_visible_after_redirect(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -708,9 +660,7 @@ class TestHappyPathAll:
 
 
 class TestHappyPathNode:
-    def test_creates_row_with_node_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_creates_row_with_node_id(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         node = _make_node(db_session, name="Polishing supplies")
         _login_as(client, mgr)
@@ -730,9 +680,7 @@ class TestHappyPathNode:
         assert st.scope_node_id == node.id
         assert st.scope_location_id is None
 
-    def test_audit_carries_node_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_carries_node_id(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         node = _make_node(db_session, name="Tools")
         _login_as(client, mgr)
@@ -753,9 +701,7 @@ class TestHappyPathNode:
 
 
 class TestHappyPathLocation:
-    def test_creates_row_with_location_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_creates_row_with_location_id(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = _make_location(db_session, name="Vault")
         _login_as(client, mgr)
@@ -775,9 +721,7 @@ class TestHappyPathLocation:
         assert st.scope_node_id is None
         assert st.scope_location_id == loc.id
 
-    def test_audit_carries_location_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_carries_location_id(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = _make_location(db_session, name="Vault")
         _login_as(client, mgr)
@@ -829,34 +773,26 @@ class TestScopeAllIgnoresIdInputs:
 
 
 class TestLayoutNav:
-    def test_manager_sees_nav_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_sees_nav_link(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/")
         assert 'data-testid="nav-stock-takes"' in resp.text
         assert 'href="/admin/stock-takes"' in resp.text
 
-    def test_office_sees_nav_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_sees_nav_link(self, client: TestClient, db_session: Session) -> None:
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         resp = client.get("/")
         assert 'data-testid="nav-stock-takes"' in resp.text
 
-    def test_admin_sees_nav_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_sees_nav_link(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/")
         assert 'data-testid="nav-stock-takes"' in resp.text
 
-    def test_workshop_does_not_see_nav_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_does_not_see_nav_link(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/")
@@ -939,17 +875,13 @@ def _make_line(
 
 
 class TestDetailRoleEnforcement:
-    def test_anonymous_get_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_is_401(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         resp = client.get(f"/admin/stock-takes/{st.id}")
         assert resp.status_code == 401
 
-    def test_pending_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         pending = _make_user(
@@ -961,27 +893,21 @@ class TestDetailRoleEnforcement:
         _login_as(client, pending)
         assert client.get(f"/admin/stock-takes/{st.id}").status_code == 403
 
-    def test_workshop_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         assert client.get(f"/admin/stock-takes/{st.id}").status_code == 403
 
-    def test_office_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         assert client.get(f"/admin/stock-takes/{st.id}").status_code == 200
 
-    def test_admin_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -995,9 +921,7 @@ class TestDetailRoleEnforcement:
 
 
 class TestDetailRenderScheduled:
-    def test_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         assert client.get("/admin/stock-takes/9999").status_code == 404
@@ -1007,9 +931,7 @@ class TestDetailRenderScheduled:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session, name="Tools")
-        _make_item(
-            db_session, leaf=leaf, sku="WID-1", current_qty=Decimal("42")
-        )
+        _make_item(db_session, leaf=leaf, sku="WID-1", current_qty=Decimal("42"))
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/stock-takes/{st.id}")
@@ -1036,9 +958,7 @@ class TestDetailRenderScheduled:
         assert 'data-testid="stock-take-no-items-note"' in body
         assert 'data-testid="stock-take-start-form"' not in body
 
-    def test_scope_label_visible(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_scope_label_visible(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         node = _make_node(db_session, name="Polishing supplies")
         st = _make_stock_take(db_session, created_by=mgr, scope_node=node)
@@ -1048,14 +968,10 @@ class TestDetailRenderScheduled:
 
 
 class TestDetailRenderInProgress:
-    def test_shows_count_form_with_lines(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_shows_count_form_with_lines(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session, name="Tools")
-        item = _make_item(
-            db_session, leaf=leaf, sku="WID-1", current_qty=Decimal("10")
-        )
+        item = _make_item(db_session, leaf=leaf, sku="WID-1", current_qty=Decimal("10"))
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
         _make_line(db_session, st=st, item=item, system_qty=Decimal("10"))
@@ -1070,9 +986,7 @@ class TestDetailRenderInProgress:
         assert 'data-testid="stock-take-count-submit"' in body
         assert 'data-testid="stock-take-start-form"' not in body
 
-    def test_shows_progress_summary(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_shows_progress_summary(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="WID-1")
@@ -1117,9 +1031,7 @@ class TestDetailRenderInProgress:
 
 
 class TestDetailRenderCompleted:
-    def test_shows_read_only_table(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_shows_read_only_table(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="WID-1")
@@ -1151,9 +1063,7 @@ class TestDetailRenderCompleted:
 
 
 class TestStartRoleEnforcement:
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         token = _csrf(client)
@@ -1163,9 +1073,7 @@ class TestStartRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         pending = _make_user(
@@ -1182,9 +1090,7 @@ class TestStartRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1196,9 +1102,7 @@ class TestStartRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_office_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_is_303(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1215,9 +1119,7 @@ class TestStartRoleEnforcement:
 
 
 class TestStartValidation:
-    def test_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -1227,9 +1129,7 @@ class TestStartValidation:
         )
         assert resp.status_code == 404
 
-    def test_already_started_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_already_started_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1243,9 +1143,7 @@ class TestStartValidation:
         )
         assert resp.status_code == 400
 
-    def test_already_completed_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_already_completed_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1263,9 +1161,7 @@ class TestStartValidation:
         )
         assert resp.status_code == 400
 
-    def test_zero_items_in_scope_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_items_in_scope_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1", archived=True)
@@ -1297,11 +1193,9 @@ class TestStartValidation:
         db_session.refresh(st)
         assert st.started_at == before_started
         assert (
-            db_session.execute(
-                select(StockTakeLine).where(
-                    StockTakeLine.stock_take_id == st.id
-                )
-            ).scalars().all()
+            db_session.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id == st.id))
+            .scalars()
+            .all()
             == []
         )
         assert _audit_rows(db_session, action="stock_take.started") == []
@@ -1318,15 +1212,9 @@ class TestStartHappyPathAllScope:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
-        a = _make_item(
-            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10")
-        )
-        b = _make_item(
-            db_session, leaf=leaf, sku="B-1", current_qty=Decimal("20")
-        )
-        _make_item(
-            db_session, leaf=leaf, sku="ARCH", archived=True
-        )  # excluded
+        a = _make_item(db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10"))
+        b = _make_item(db_session, leaf=leaf, sku="B-1", current_qty=Decimal("20"))
+        _make_item(db_session, leaf=leaf, sku="ARCH", archived=True)  # excluded
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -1335,11 +1223,9 @@ class TestStartHappyPathAllScope:
             data={"csrf_token": token},
         )
         lines = (
-            db_session.execute(
-                select(StockTakeLine).where(
-                    StockTakeLine.stock_take_id == st.id
-                )
-            ).scalars().all()
+            db_session.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id == st.id))
+            .scalars()
+            .all()
         )
         assert len(lines) == 2
         by_item = {ln.item_id: ln for ln in lines}
@@ -1349,9 +1235,7 @@ class TestStartHappyPathAllScope:
         assert by_item[a.id].variance is None
         assert by_item[a.id].committed is False
 
-    def test_started_at_is_set(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_started_at_is_set(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1366,14 +1250,10 @@ class TestStartHappyPathAllScope:
         assert st.started_at is not None
         assert st.completed_at is None
 
-    def test_audit_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_shape(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
-        a = _make_item(
-            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10")
-        )
+        a = _make_item(db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10"))
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -1396,9 +1276,7 @@ class TestStartHappyPathAllScope:
         assert snapshot_row["system_qty"] == "10.0000"
         assert isinstance(snapshot_row["line_id"], int)
 
-    def test_flash_visible_after_redirect(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_visible_after_redirect(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1415,17 +1293,13 @@ class TestStartHappyPathAllScope:
 
 
 class TestStartHappyPathNodeScope:
-    def test_only_node_items_become_lines(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_only_node_items_become_lines(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf_a = _make_node(db_session, name="Cat A", sku_prefix="CATA")
         leaf_b = _make_node(db_session, name="Cat B", sku_prefix="CATB")
         in_a = _make_item(db_session, leaf=leaf_a, sku="IN-A")
         _make_item(db_session, leaf=leaf_b, sku="IN-B")
-        st = _make_stock_take(
-            db_session, created_by=mgr, scope_node=leaf_a
-        )
+        st = _make_stock_take(db_session, created_by=mgr, scope_node=leaf_a)
         _login_as(client, mgr)
         token = _csrf(client)
         client.post(
@@ -1433,17 +1307,13 @@ class TestStartHappyPathNodeScope:
             data={"csrf_token": token},
         )
         lines = (
-            db_session.execute(
-                select(StockTakeLine).where(
-                    StockTakeLine.stock_take_id == st.id
-                )
-            ).scalars().all()
+            db_session.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id == st.id))
+            .scalars()
+            .all()
         )
         assert {ln.item_id for ln in lines} == {in_a.id}
 
-    def test_descendant_items_included(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_descendant_items_included(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         parent = _make_node(db_session, name="Parent")
         child = TaxonomyNode(name="Child", parent_id=parent.id)
@@ -1460,11 +1330,9 @@ class TestStartHappyPathNodeScope:
             data={"csrf_token": token},
         )
         lines = (
-            db_session.execute(
-                select(StockTakeLine).where(
-                    StockTakeLine.stock_take_id == st.id
-                )
-            ).scalars().all()
+            db_session.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id == st.id))
+            .scalars()
+            .all()
         )
         assert {ln.item_id for ln in lines} == {in_parent.id, in_child.id}
 
@@ -1477,13 +1345,9 @@ class TestStartHappyPathLocationScope:
         leaf = _make_node(db_session)
         loc = _make_location(db_session, name="Vault")
         loc_b = _make_location(db_session, name="Bench")
-        in_loc = _make_item(
-            db_session, leaf=leaf, sku="IN-L", location=loc
-        )
+        in_loc = _make_item(db_session, leaf=leaf, sku="IN-L", location=loc)
         _make_item(db_session, leaf=leaf, sku="OUT-L", location=loc_b)
-        st = _make_stock_take(
-            db_session, created_by=mgr, scope_location=loc
-        )
+        st = _make_stock_take(db_session, created_by=mgr, scope_location=loc)
         _login_as(client, mgr)
         token = _csrf(client)
         client.post(
@@ -1491,11 +1355,9 @@ class TestStartHappyPathLocationScope:
             data={"csrf_token": token},
         )
         lines = (
-            db_session.execute(
-                select(StockTakeLine).where(
-                    StockTakeLine.stock_take_id == st.id
-                )
-            ).scalars().all()
+            db_session.execute(select(StockTakeLine).where(StockTakeLine.stock_take_id == st.id))
+            .scalars()
+            .all()
         )
         assert {ln.item_id for ln in lines} == {in_loc.id}
 
@@ -1506,9 +1368,7 @@ class TestStartHappyPathLocationScope:
 
 
 class TestCountsRoleEnforcement:
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -1519,9 +1379,7 @@ class TestCountsRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -1539,9 +1397,7 @@ class TestCountsRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -1554,9 +1410,7 @@ class TestCountsRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_office_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_is_303(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -1572,9 +1426,7 @@ class TestCountsRoleEnforcement:
 
 
 class TestCountsValidation:
-    def test_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -1615,9 +1467,7 @@ class TestCountsValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1632,9 +1482,7 @@ class TestCountsValidation:
         )
         assert resp.status_code == 400
 
-    def test_negative_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1676,17 +1524,13 @@ class TestCountsValidation:
 
 
 class TestCountsHappyPath:
-    def test_single_line_update(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_single_line_update(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
-        line = _make_line(
-            db_session, st=st, item=item, system_qty=Decimal("10")
-        )
+        line = _make_line(db_session, st=st, item=item, system_qty=Decimal("10"))
         _login_as(client, mgr)
         token = _csrf(client)
         resp = client.post(
@@ -1699,9 +1543,7 @@ class TestCountsHappyPath:
         assert line.counted_qty == Decimal("12")
         assert line.variance == Decimal("2")
 
-    def test_blank_uncounts(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_uncounts(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1725,9 +1567,7 @@ class TestCountsHappyPath:
         assert line.counted_qty is None
         assert line.variance is None
 
-    def test_multi_line_partial_update(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_line_partial_update(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         a = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1753,9 +1593,7 @@ class TestCountsHappyPath:
         assert line_b.counted_qty == Decimal("10")
         assert line_b.variance == Decimal("2")
 
-    def test_no_op_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_op_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1815,9 +1653,7 @@ class TestCountsHappyPath:
 
 
 class TestCountsAuditShape:
-    def test_only_changed_lines_in_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_only_changed_lines_in_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         a = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -1865,14 +1701,10 @@ class TestCountsAuditShape:
 
 
 class TestEngineIsolation:
-    def test_start_writes_no_engine_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_start_writes_no_engine_state(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("42")
-        )
+        item = _make_item(db_session, leaf=leaf, sku="A-1", current_qty=Decimal("42"))
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -1884,28 +1716,17 @@ class TestEngineIsolation:
         # current_qty unchanged.
         assert item.current_qty == Decimal("42.0000")
         # No movements / cost layers / consumption rows.
-        assert (
-            db_session.execute(select(StockMovement)).scalars().all() == []
-        )
+        assert db_session.execute(select(StockMovement)).scalars().all() == []
         assert db_session.execute(select(CostLayer)).scalars().all() == []
-        assert (
-            db_session.execute(select(CostLayerConsumption)).scalars().all()
-            == []
-        )
+        assert db_session.execute(select(CostLayerConsumption)).scalars().all() == []
 
-    def test_counts_writes_no_engine_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_counts_writes_no_engine_state(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("42")
-        )
+        item = _make_item(db_session, leaf=leaf, sku="A-1", current_qty=Decimal("42"))
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
-        line = _make_line(
-            db_session, st=st, item=item, system_qty=Decimal("42")
-        )
+        line = _make_line(db_session, st=st, item=item, system_qty=Decimal("42"))
         _login_as(client, mgr)
         token = _csrf(client)
         client.post(
@@ -1914,9 +1735,7 @@ class TestEngineIsolation:
         )
         db_session.refresh(item)
         assert item.current_qty == Decimal("42.0000")
-        assert (
-            db_session.execute(select(StockMovement)).scalars().all() == []
-        )
+        assert db_session.execute(select(StockMovement)).scalars().all() == []
         assert db_session.execute(select(CostLayer)).scalars().all() == []
 
 
@@ -1926,9 +1745,7 @@ class TestEngineIsolation:
 
 
 class TestListDetailLink:
-    def test_detail_link_visible_per_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_detail_link_visible_per_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
@@ -1984,9 +1801,7 @@ def _seed_layer(
 
 
 class TestCommitRoleEnforcement:
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -1997,9 +1812,7 @@ class TestCommitRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -2017,9 +1830,7 @@ class TestCommitRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_is_403(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
@@ -2032,9 +1843,7 @@ class TestCommitRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_office_negative_variance_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_negative_variance_is_303(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2102,9 +1911,7 @@ class TestCommitRoleEnforcement:
 
 
 class TestCommitValidation:
-    def test_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         token = _csrf(client)
@@ -2114,9 +1921,7 @@ class TestCommitValidation:
         )
         assert resp.status_code == 404
 
-    def test_scheduled_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_scheduled_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(db_session, created_by=mgr)
         _login_as(client, mgr)
@@ -2127,9 +1932,7 @@ class TestCommitValidation:
         )
         assert resp.status_code == 400
 
-    def test_completed_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_completed_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         st = _make_stock_take(
             db_session,
@@ -2145,9 +1948,7 @@ class TestCommitValidation:
         )
         assert resp.status_code == 400
 
-    def test_no_variances_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_variances_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2170,18 +1971,14 @@ class TestCommitValidation:
         )
         assert resp.status_code == 400
 
-    def test_uncounted_lines_alone_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_uncounted_lines_alone_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
         # Variance is None — uncounted; should not commit.
-        _make_line(
-            db_session, st=st, item=item, system_qty=Decimal("10")
-        )
+        _make_line(db_session, st=st, item=item, system_qty=Decimal("10"))
         _login_as(client, mgr)
         token = _csrf(client)
         resp = client.post(
@@ -2217,9 +2014,7 @@ class TestCommitValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_unit_cost_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_unit_cost_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2299,9 +2094,7 @@ class TestCommitValidation:
         db_session.refresh(st)
         assert line.committed is False
         assert st.completed_at is None
-        assert (
-            db_session.execute(select(StockMovement)).scalars().all() == []
-        )
+        assert db_session.execute(select(StockMovement)).scalars().all() == []
         assert _audit_rows(db_session, action="stock_take.committed") == []
 
 
@@ -2311,9 +2104,7 @@ class TestCommitValidation:
 
 
 class TestCommitPositiveHappyPath:
-    def test_creates_movement_and_layer(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_creates_movement_and_layer(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2336,9 +2127,7 @@ class TestCommitPositiveHappyPath:
                 f"unit_cost_{line.id}": "2.50",
             },
         )
-        movements = (
-            db_session.execute(select(StockMovement)).scalars().all()
-        )
+        movements = db_session.execute(select(StockMovement)).scalars().all()
         assert len(movements) == 1
         mov = movements[0]
         assert mov.type == MovementType.ADJUSTMENT
@@ -2395,14 +2184,10 @@ class TestCommitPositiveHappyPath:
         delta = abs((completed - now_utc).total_seconds())
         assert delta < 5
 
-    def test_current_qty_bumped(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_current_qty_bumped(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10")
-        )
+        item = _make_item(db_session, leaf=leaf, sku="A-1", current_qty=Decimal("10"))
         st = _make_stock_take(db_session, created_by=mgr)
         _start_st(db_session, st)
         line = _make_line(
@@ -2425,9 +2210,7 @@ class TestCommitPositiveHappyPath:
         db_session.refresh(item)
         assert item.current_qty == Decimal("13.0000")
 
-    def test_zero_unit_cost_allowed(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_unit_cost_allowed(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2492,11 +2275,7 @@ class TestCommitNegativeHappyPath:
         )
         # Two movements: the seed IN + the new ADJUSTMENT.
         movements = (
-            db_session.execute(
-                select(StockMovement).order_by(StockMovement.id)
-            )
-            .scalars()
-            .all()
+            db_session.execute(select(StockMovement).order_by(StockMovement.id)).scalars().all()
         )
         assert len(movements) == 2
         adj = movements[1]
@@ -2505,18 +2284,14 @@ class TestCommitNegativeHappyPath:
         assert adj.stock_take_id == st.id
         assert adj.total_cost == Decimal("6.0000")  # 3 * 2.0000
 
-        consumptions = (
-            db_session.execute(select(CostLayerConsumption)).scalars().all()
-        )
+        consumptions = db_session.execute(select(CostLayerConsumption)).scalars().all()
         assert len(consumptions) == 1
         cons = consumptions[0]
         assert cons.movement_id == adj.id
         assert cons.qty_consumed == Decimal("3.0000")
         assert cons.unit_cost_at_consumption == Decimal("2.0000")
 
-    def test_current_qty_decremented(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_current_qty_decremented(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2546,9 +2321,7 @@ class TestCommitNegativeHappyPath:
         db_session.refresh(item)
         assert item.current_qty == Decimal("7.0000")
 
-    def test_multi_layer_fifo_consume(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_layer_fifo_consume(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2586,20 +2359,14 @@ class TestCommitNegativeHappyPath:
         # Take 4 from old layer + 3 from new = 4*2 + 3*3 = 17.
         movements = (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.ADJUSTMENT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
             )
             .scalars()
             .all()
         )
         assert movements[0].total_cost == Decimal("17.0000")
         consumptions = (
-            db_session.execute(
-                select(CostLayerConsumption).order_by(
-                    CostLayerConsumption.id
-                )
-            )
+            db_session.execute(select(CostLayerConsumption).order_by(CostLayerConsumption.id))
             .scalars()
             .all()
         )
@@ -2696,9 +2463,7 @@ class TestCommitMixed:
 
 
 class TestCommitInsufficientStock:
-    def test_rolls_back_atomically(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_rolls_back_atomically(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2735,25 +2500,19 @@ class TestCommitInsufficientStock:
         db_session.refresh(st)
         adjusts = (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.ADJUSTMENT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
             )
             .scalars()
             .all()
         )
         assert adjusts == []
-        consumptions = (
-            db_session.execute(select(CostLayerConsumption)).scalars().all()
-        )
+        consumptions = db_session.execute(select(CostLayerConsumption)).scalars().all()
         assert consumptions == []
         assert line.committed is False
         assert st.completed_at is None
         assert _audit_rows(db_session, action="stock_take.committed") == []
 
-    def test_partial_failure_leaves_no_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_partial_failure_leaves_no_state(self, client: TestClient, db_session: Session) -> None:
         """First line succeeds, second raises shortage — the whole tx rolls back."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
@@ -2798,9 +2557,7 @@ class TestCommitInsufficientStock:
         # back when line_b fails.
         adjusts = (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.ADJUSTMENT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
             )
             .scalars()
             .all()
@@ -2809,9 +2566,7 @@ class TestCommitInsufficientStock:
         # No new layer for the positive-variance item.
         layers = (
             db_session.execute(
-                select(CostLayer).where(
-                    CostLayer.source == CostLayerSource.POSITIVE_ADJUSTMENT
-                )
+                select(CostLayer).where(CostLayer.source == CostLayerSource.POSITIVE_ADJUSTMENT)
             )
             .scalars()
             .all()
@@ -2833,9 +2588,7 @@ class TestCommitInsufficientStock:
 
 
 class TestCommitAuditShape:
-    def test_committed_audit_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_committed_audit_shape(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -2882,9 +2635,7 @@ class TestCommitAuditShape:
         # Decimal("7.500000"). Same wart as M3 / M4's audit shape.
         assert m["total_cost"] == "7.500000"
 
-    def test_negative_audit_has_no_unit_cost(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_audit_has_no_unit_cost(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_node(db_session)
         item = _make_item(db_session, leaf=leaf, sku="A-1")
@@ -3095,9 +2846,7 @@ class TestStockTakesListCsvRoleEnforcement:
         resp = client.get("/admin/stock-takes?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -3108,25 +2857,19 @@ class TestStockTakesListCsvRoleEnforcement:
         resp = client.get("/admin/stock-takes?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/stock-takes?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/stock-takes?format=csv")
         assert resp.status_code == 200
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/stock-takes?format=csv")
@@ -3164,20 +2907,14 @@ class TestStockTakesListCsvHeaders:
 
 
 class TestStockTakesListCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/stock-takes?format=csv")
         assert resp.status_code == 200
-        assert resp.text == (
-            "id,scope,scheduled_for,status,created_by_email,created_at\r\n"
-        )
+        assert resp.text == ("id,scope,scheduled_for,status,created_by_email,created_at\r\n")
 
-    def test_one_stock_take_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_stock_take_one_data_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         node = _make_node(db_session, name="Tools")
         st = _make_stock_take(
@@ -3200,9 +2937,7 @@ class TestStockTakesListCsvBody:
         # cells[5] is the created_at ISO timestamp.
         assert cells[5].startswith("20")
 
-    def test_show_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         scheduled = _make_stock_take(db_session, created_by=mgr)
         completed = _make_stock_take(
@@ -3225,16 +2960,10 @@ class TestStockTakesListCsvBody:
         assert f"\r\n{completed.id}," in body
         assert f"\r\n{scheduled.id}," not in body
 
-    def test_newest_first_ordering_in_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_newest_first_ordering_in_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        old = _make_stock_take(
-            db_session, created_by=mgr, scheduled_for=date(2026, 5, 1)
-        )
-        new = _make_stock_take(
-            db_session, created_by=mgr, scheduled_for=date(2026, 7, 1)
-        )
+        old = _make_stock_take(db_session, created_by=mgr, scheduled_for=date(2026, 5, 1))
+        new = _make_stock_take(db_session, created_by=mgr, scheduled_for=date(2026, 7, 1))
         _login_as(client, mgr)
         resp = client.get("/admin/stock-takes?format=csv")
         body = resp.text
@@ -3261,9 +2990,7 @@ class TestStockTakesListCsvBody:
 
 
 class TestStockTakesListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/stock-takes")
@@ -3271,9 +2998,7 @@ class TestStockTakesListCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="stock-takes-heading"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/stock-takes?format=garbage")
@@ -3282,9 +3007,7 @@ class TestStockTakesListCsvHtmlBranch:
 
 
 class TestStockTakesListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_stock_take(db_session, created_by=mgr)
         before = len(_audit_rows(db_session))

@@ -89,9 +89,7 @@ def _make_leaf(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
     return n
 
 
-def _make_supplier(
-    db: Session, name: str = "ACME", *, archived: bool = False
-) -> Supplier:
+def _make_supplier(db: Session, name: str = "ACME", *, archived: bool = False) -> Supplier:
     s = Supplier(
         name=name,
         archived_at=datetime(2026, 1, 1, tzinfo=UTC) if archived else None,
@@ -142,9 +140,7 @@ class TestReorderRoleEnforcement:
         resp = client.get("/admin/reorder")
         assert resp.status_code == 401
 
-    def test_pending_user_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -155,33 +151,25 @@ class TestReorderRoleEnforcement:
         resp = client.get("/admin/reorder")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/reorder")
         assert resp.status_code == 403
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/reorder")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/reorder")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/reorder")
@@ -194,9 +182,7 @@ class TestReorderRoleEnforcement:
 
 
 class TestReorderEmptyState:
-    def test_no_items_renders_empty_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_items_renders_empty_state(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")
@@ -440,9 +426,7 @@ class TestMultipleSuppliers:
 
 
 class TestThresholdEdgeCases:
-    def test_at_threshold_is_included(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_at_threshold_is_included(self, client: TestClient, db_session: Session) -> None:
         """``current_qty == reorder_threshold`` is the trigger point."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -636,9 +620,10 @@ class TestReorderDraftPOButton:
         archived_section_idx = resp.text.find('data-supplier-archived="true"')
         # No "draft-po-button" should appear within ~500 chars of the section
         # opener.
-        assert "reorder-draft-po-button" not in resp.text[
-            archived_section_idx : archived_section_idx + 1500
-        ]
+        assert (
+            "reorder-draft-po-button"
+            not in resp.text[archived_section_idx : archived_section_idx + 1500]
+        )
 
     def test_no_supplier_group_renders_blocked_note(
         self, client: TestClient, db_session: Session
@@ -655,9 +640,7 @@ class TestReorderDraftPOButton:
         )
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")
-        assert (
-            'data-testid="reorder-draft-po-blocked-no-supplier"' in resp.text
-        )
+        assert 'data-testid="reorder-draft-po-blocked-no-supplier"' in resp.text
         # No button under "(no supplier)".
         idx = resp.text.find('data-supplier-id="none"')
         assert "reorder-draft-po-button" not in resp.text[idx : idx + 1500]
@@ -725,41 +708,31 @@ class TestReorderCsvRoleEnforcement:
         resp = client.get("/admin/reorder?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get("/admin/reorder?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/reorder?format=csv")
         assert resp.status_code == 403
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         resp = client.get("/admin/reorder?format=csv")
         assert resp.status_code == 200
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder?format=csv")
         assert resp.status_code == 200
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/reorder?format=csv")
@@ -776,9 +749,7 @@ class TestReorderCsvHeaders:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "text/csv; charset=utf-8"
 
-    def test_content_disposition_filename(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_content_disposition_filename(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder?format=csv")
@@ -788,9 +759,7 @@ class TestReorderCsvHeaders:
 
 
 class TestReorderCsvBody:
-    def test_header_row_is_first_line(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_header_row_is_first_line(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder?format=csv")
@@ -928,9 +897,7 @@ class TestReorderCsvEmptyState:
 
 
 class TestReorderCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")
@@ -938,9 +905,7 @@ class TestReorderCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="reorder-heading"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder?format=garbage")
@@ -949,9 +914,7 @@ class TestReorderCsvHtmlBranch:
 
 
 class TestReorderCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _make_item(
@@ -961,9 +924,7 @@ class TestReorderCsvReadOnly:
             current_qty=Decimal("0"),
             threshold=Decimal("5"),
         )
-        before = (
-            db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
-        )
+        before = db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
         before_count = len(before)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder?format=csv")
@@ -975,9 +936,7 @@ class TestReorderCsvReadOnly:
 
 
 class TestReorderCsvLink:
-    def test_html_renders_csv_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_html_renders_csv_link(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/reorder")

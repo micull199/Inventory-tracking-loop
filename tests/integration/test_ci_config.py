@@ -13,9 +13,7 @@ from pathlib import Path
 
 import pytest
 
-_WORKFLOW_PATH = (
-    Path(__file__).parent.parent.parent / ".github" / "workflows" / "ci.yml"
-)
+_WORKFLOW_PATH = Path(__file__).parent.parent.parent / ".github" / "workflows" / "ci.yml"
 
 
 @pytest.fixture(scope="module")

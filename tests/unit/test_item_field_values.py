@@ -32,9 +32,7 @@ from app.models import (
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
@@ -116,11 +114,7 @@ class TestItemFieldValuePerType:
         node = _seed_node(db)
         item = _seed_item(db, node)
         fd = _seed_field_def(db, node, name="Alloy", field_type=FieldType.TEXT)
-        db.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db.commit()
         ifv = db.query(ItemFieldValue).one()
         assert ifv.value_text == "silver"
@@ -130,11 +124,7 @@ class TestItemFieldValuePerType:
         node = _seed_node(db)
         item = _seed_item(db, node)
         fd = _seed_field_def(db, node, name="Karat", field_type=FieldType.NUMBER)
-        db.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_number=18
-            )
-        )
+        db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_number=18))
         db.commit()
         ifv = db.query(ItemFieldValue).one()
         assert ifv.value_number == 18
@@ -142,9 +132,7 @@ class TestItemFieldValuePerType:
     def test_decimal_round_trip_preserves_precision(self, db: Session) -> None:
         node = _seed_node(db)
         item = _seed_item(db, node)
-        fd = _seed_field_def(
-            db, node, name="Density", field_type=FieldType.DECIMAL
-        )
+        fd = _seed_field_def(db, node, name="Density", field_type=FieldType.DECIMAL)
         db.add(
             ItemFieldValue(
                 item_id=item.id,
@@ -159,9 +147,7 @@ class TestItemFieldValuePerType:
     def test_date_round_trip(self, db: Session) -> None:
         node = _seed_node(db)
         item = _seed_item(db, node)
-        fd = _seed_field_def(
-            db, node, name="Last Calibrated", field_type=FieldType.DATE
-        )
+        fd = _seed_field_def(db, node, name="Last Calibrated", field_type=FieldType.DATE)
         db.add(
             ItemFieldValue(
                 item_id=item.id,
@@ -176,15 +162,9 @@ class TestItemFieldValuePerType:
     def test_boolean_round_trip(self, db: Session) -> None:
         node = _seed_node(db)
         item = _seed_item(db, node)
-        fd = _seed_field_def(
-            db, node, name="Hazardous", field_type=FieldType.BOOLEAN
-        )
+        fd = _seed_field_def(db, node, name="Hazardous", field_type=FieldType.BOOLEAN)
         # Both True and False round-trip cleanly.
-        db.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_bool=False
-            )
-        )
+        db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_bool=False))
         db.commit()
         ifv = db.query(ItemFieldValue).one()
         assert ifv.value_bool is False
@@ -217,20 +197,12 @@ class TestItemFieldValueUniqueness:
         item = _seed_item(db, node)
         fd = _seed_field_def(db, node, name="Alloy", field_type=FieldType.TEXT)
 
-        db.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db.commit()
 
         # Second row for the same (item, field_def) is rejected by the unique
         # index.
-        db.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="gold"
-            )
-        )
+        db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="gold"))
         with pytest.raises(IntegrityError):
             db.commit()
         db.rollback()
@@ -243,36 +215,24 @@ class TestItemFieldValueUniqueness:
 
         db.add_all(
             [
-                ItemFieldValue(
-                    item_id=a.id, field_def_id=fd.id, value_text="silver"
-                ),
-                ItemFieldValue(
-                    item_id=b.id, field_def_id=fd.id, value_text="gold"
-                ),
+                ItemFieldValue(item_id=a.id, field_def_id=fd.id, value_text="silver"),
+                ItemFieldValue(item_id=b.id, field_def_id=fd.id, value_text="gold"),
             ]
         )
         db.commit()
         assert db.query(ItemFieldValue).count() == 2
 
-    def test_different_field_defs_on_same_item_is_fine(
-        self, db: Session
-    ) -> None:
+    def test_different_field_defs_on_same_item_is_fine(self, db: Session) -> None:
         node = _seed_node(db)
         item = _seed_item(db, node)
-        a = _seed_field_def(
-            db, node, name="Alloy", field_type=FieldType.TEXT, key_override="alloy"
-        )
+        a = _seed_field_def(db, node, name="Alloy", field_type=FieldType.TEXT, key_override="alloy")
         b = _seed_field_def(
             db, node, name="Karat", field_type=FieldType.NUMBER, key_override="karat"
         )
         db.add_all(
             [
-                ItemFieldValue(
-                    item_id=item.id, field_def_id=a.id, value_text="silver"
-                ),
-                ItemFieldValue(
-                    item_id=item.id, field_def_id=b.id, value_number=18
-                ),
+                ItemFieldValue(item_id=item.id, field_def_id=a.id, value_text="silver"),
+                ItemFieldValue(item_id=item.id, field_def_id=b.id, value_number=18),
             ]
         )
         db.commit()

@@ -78,9 +78,7 @@ def _make_item(db: Session, leaf: TaxonomyNode, sku: str = "SKU-1") -> Item:
 
 
 class TestStockTakeModel:
-    def test_minimal_insert_with_scope_all(
-        self, db_session: Session
-    ) -> None:
+    def test_minimal_insert_with_scope_all(self, db_session: Session) -> None:
         st = StockTake(scheduled_for=date(2026, 6, 1))
         db_session.add(st)
         db_session.commit()
@@ -254,9 +252,7 @@ class TestVarianceSign:
 # ---------------------------------------------------------------------------
 
 
-def _make_archived_item(
-    db: Session, leaf: TaxonomyNode, sku: str = "ARCHIVED"
-) -> Item:
+def _make_archived_item(db: Session, leaf: TaxonomyNode, sku: str = "ARCHIVED") -> Item:
     item = Item(
         sku=sku,
         name="Archived",
@@ -272,9 +268,7 @@ def _make_archived_item(
 
 
 class TestResolveScopeItems:
-    def test_all_scope_returns_all_active_items(
-        self, db_session: Session
-    ) -> None:
+    def test_all_scope_returns_all_active_items(self, db_session: Session) -> None:
         leaf = _make_node(db_session)
         a = _make_item(db_session, leaf, sku="A-1")
         b = _make_item(db_session, leaf, sku="B-1")
@@ -305,9 +299,7 @@ class TestResolveScopeItems:
         items = _resolve_scope_items(db_session, st)
         assert {i.id for i in items} == {in_a.id}
 
-    def test_node_scope_includes_descendant_items(
-        self, db_session: Session
-    ) -> None:
+    def test_node_scope_includes_descendant_items(self, db_session: Session) -> None:
         parent = _make_node(db_session, name="Parent")
         child = TaxonomyNode(name="Child", parent_id=parent.id)
         db_session.add(child)
@@ -321,9 +313,7 @@ class TestResolveScopeItems:
         items = _resolve_scope_items(db_session, st)
         assert {i.id for i in items} == {in_parent.id, in_child.id}
 
-    def test_location_scope_returns_location_items(
-        self, db_session: Session
-    ) -> None:
+    def test_location_scope_returns_location_items(self, db_session: Session) -> None:
         leaf = _make_node(db_session)
         loc_a = _make_location(db_session, name="A")
         loc_b = _make_location(db_session, name="B")
@@ -345,9 +335,7 @@ class TestResolveScopeItems:
         )
         db_session.add_all([item_a, item_b])
         db_session.commit()
-        st = StockTake(
-            scheduled_for=date(2026, 6, 1), scope_location_id=loc_a.id
-        )
+        st = StockTake(scheduled_for=date(2026, 6, 1), scope_location_id=loc_a.id)
         db_session.add(st)
         db_session.commit()
         items = _resolve_scope_items(db_session, st)
@@ -403,9 +391,7 @@ class TestLastUnitCost:
         # Layers FK to a movement; build a minimal movement first.
         from app.models import MovementType
 
-        mov = StockMovement(
-            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
-        )
+        mov = StockMovement(item_id=item.id, type=MovementType.IN, qty=Decimal("5"))
         db_session.add(mov)
         db_session.flush()
         layer = CostLayer(
@@ -427,12 +413,8 @@ class TestLastUnitCost:
         from app.models import MovementType
 
         # Older layer at 2.00, newer at 3.00 — the newer should win.
-        mov_old = StockMovement(
-            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
-        )
-        mov_new = StockMovement(
-            item_id=item.id, type=MovementType.IN, qty=Decimal("5")
-        )
+        mov_old = StockMovement(item_id=item.id, type=MovementType.IN, qty=Decimal("5"))
+        mov_new = StockMovement(item_id=item.id, type=MovementType.IN, qty=Decimal("5"))
         db_session.add_all([mov_old, mov_new])
         db_session.flush()
         old_layer = CostLayer(
@@ -463,9 +445,7 @@ class TestLastUnitCost:
         b = _make_item(db_session, leaf, sku="B-1")
         from app.models import MovementType
 
-        mov = StockMovement(
-            item_id=a.id, type=MovementType.IN, qty=Decimal("5")
-        )
+        mov = StockMovement(item_id=a.id, type=MovementType.IN, qty=Decimal("5"))
         db_session.add(mov)
         db_session.flush()
         layer = CostLayer(
@@ -484,9 +464,7 @@ class TestLastUnitCost:
 
 class TestParseUnitCostForCommit:
     def test_blank_optional_returns_none(self) -> None:
-        assert (
-            _parse_unit_cost_for_commit("", line_id=1, required=False) is None
-        )
+        assert _parse_unit_cost_for_commit("", line_id=1, required=False) is None
 
     def test_blank_required_raises_400(self) -> None:
         with pytest.raises(HTTPException) as exc:
@@ -494,20 +472,13 @@ class TestParseUnitCostForCommit:
         assert exc.value.status_code == 400
 
     def test_whitespace_only_optional_returns_none(self) -> None:
-        assert (
-            _parse_unit_cost_for_commit("   ", line_id=1, required=False)
-            is None
-        )
+        assert _parse_unit_cost_for_commit("   ", line_id=1, required=False) is None
 
     def test_valid_decimal(self) -> None:
-        assert _parse_unit_cost_for_commit(
-            "2.50", line_id=1, required=True
-        ) == Decimal("2.50")
+        assert _parse_unit_cost_for_commit("2.50", line_id=1, required=True) == Decimal("2.50")
 
     def test_zero_allowed(self) -> None:
-        assert _parse_unit_cost_for_commit(
-            "0", line_id=1, required=True
-        ) == Decimal("0")
+        assert _parse_unit_cost_for_commit("0", line_id=1, required=True) == Decimal("0")
 
     def test_negative_raises(self) -> None:
         with pytest.raises(HTTPException) as exc:

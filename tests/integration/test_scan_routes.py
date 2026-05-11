@@ -151,43 +151,31 @@ class TestScanGetRoleEnforcement:
         resp = client.get("/scan")
         assert resp.status_code == 401
 
-    def test_pending_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        u = _make_user(
-            db_session, email="p@x.test", status=UserStatus.PENDING
-        )
+    def test_pending_get_is_403(self, client: TestClient, db_session: Session) -> None:
+        u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get("/scan")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
         assert resp.status_code == 200
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/scan")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/scan")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/scan")
@@ -200,18 +188,14 @@ class TestScanGetRoleEnforcement:
 
 
 class TestScanGetRender:
-    def test_renders_heading(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_heading(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
         assert resp.status_code == 200
         assert 'data-testid="scan-heading"' in resp.text
 
-    def test_renders_form_with_post_action(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_form_with_post_action(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
@@ -256,12 +240,8 @@ class TestScanResolveRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_post_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        u = _make_user(
-            db_session, email="p@x.test", status=UserStatus.PENDING
-        )
+    def test_pending_post_is_403(self, client: TestClient, db_session: Session) -> None:
+        u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
         _login_as(client, u)
         token = _csrf(client)
         resp = client.post(
@@ -271,9 +251,7 @@ class TestScanResolveRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         item = _make_item(db_session, sku="W-1", qr_code="QR-W")
         _login_as(client, u)
@@ -286,9 +264,7 @@ class TestScanResolveRoleEnforcement:
         assert resp.status_code == 303
         assert resp.headers["location"] == f"/scan/item/{item.id}"
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_item(db_session, sku="O-1", qr_code="QR-O")
         _login_as(client, u)
@@ -301,9 +277,7 @@ class TestScanResolveRoleEnforcement:
         assert resp.status_code == 303
         assert resp.headers["location"] == f"/scan/item/{item.id}"
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_item(db_session, sku="M-1", qr_code="QR-M")
         _login_as(client, u)
@@ -323,9 +297,7 @@ class TestScanResolveRoleEnforcement:
 
 
 class TestScanResolveMatching:
-    def test_resolves_by_qr_code(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_resolves_by_qr_code(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         item = _make_item(db_session, sku="ALLOY-A", qr_code="QR-ALLOY")
         _login_as(client, u)
@@ -390,15 +362,11 @@ class TestScanResolveMatching:
         assert resp.status_code == 303
         assert resp.headers["location"] == f"/scan/item/{item.id}"
 
-    def test_archived_item_still_resolves(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_still_resolves(self, client: TestClient, db_session: Session) -> None:
         """A scanner doesn't know an item was archived; the action picker
         page surfaces an archived badge + omits the action buttons."""
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
-        item = _make_item(
-            db_session, sku="ARCH-1", qr_code="QR-ARCH", archived=True
-        )
+        item = _make_item(db_session, sku="ARCH-1", qr_code="QR-ARCH", archived=True)
         _login_as(client, u)
         token = _csrf(client)
         resp = client.post(
@@ -475,9 +443,7 @@ class TestScanResolveEmptyOrNoMatch:
 
 
 class TestScanReadOnly:
-    def test_get_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         before = _audit_count(db_session)
@@ -485,9 +451,7 @@ class TestScanReadOnly:
         after = _audit_count(db_session)
         assert before == after
 
-    def test_resolve_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_resolve_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _make_item(db_session, sku="N-1", qr_code="QR-N")
         _login_as(client, u)
@@ -508,44 +472,32 @@ class TestScanReadOnly:
 
 
 class TestScanNav:
-    def test_workshop_sees_scan_nav(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_sees_scan_nav(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/")
         assert 'data-testid="nav-scan"' in resp.text
 
-    def test_office_sees_scan_nav(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_sees_scan_nav(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/")
         assert 'data-testid="nav-scan"' in resp.text
 
-    def test_manager_sees_scan_nav(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_sees_scan_nav(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/")
         assert 'data-testid="nav-scan"' in resp.text
 
-    def test_admin_sees_scan_nav(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_sees_scan_nav(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/")
         assert 'data-testid="nav-scan"' in resp.text
 
-    def test_pending_sees_no_nav_at_all(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        u = _make_user(
-            db_session, email="p@x.test", status=UserStatus.PENDING
-        )
+    def test_pending_sees_no_nav_at_all(self, client: TestClient, db_session: Session) -> None:
+        u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get("/")
         # base.html only renders the primary nav for active users — the scan
@@ -562,9 +514,7 @@ class TestScanNav:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
-        snippet = resp.text[
-            resp.text.find('data-testid="nav-scan"') :
-        ][:200]
+        snippet = resp.text[resp.text.find('data-testid="nav-scan"') :][:200]
         assert 'aria-current="page"' in snippet
 
 
@@ -574,45 +524,33 @@ class TestScanNav:
 
 
 class TestScanItemPageRoleEnforcement:
-    def test_anonymous_get_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_is_401(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="A-1", qr_code=None)
         resp = client.get(f"/scan/item/{item.id}")
         assert resp.status_code == 401
 
-    def test_pending_get_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_get_is_403(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="P-1", qr_code=None)
-        u = _make_user(
-            db_session, email="p@x.test", status=UserStatus.PENDING
-        )
+        u = _make_user(db_session, email="p@x.test", status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get(f"/scan/item/{item.id}")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_200(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="W-1", qr_code=None)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get(f"/scan/item/{item.id}")
         assert resp.status_code == 200
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="O-1", qr_code=None)
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get(f"/scan/item/{item.id}")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="M-1", qr_code=None)
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
@@ -626,9 +564,7 @@ class TestScanItemPageRoleEnforcement:
 
 
 class TestScanItemPageRender:
-    def test_renders_resolved_item_block(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_resolved_item_block(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="REND-1", name="Rendered Item")
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
@@ -771,9 +707,7 @@ class TestScanItemPageArchived:
 
 
 class TestScanItemPageNotFound:
-    def test_unknown_item_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_id_is_404(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan/item/999999")
@@ -781,9 +715,7 @@ class TestScanItemPageNotFound:
 
 
 class TestScanItemPageReadOnly:
-    def test_get_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="RO-1")
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
@@ -820,9 +752,7 @@ class TestScanItemPageResolveChain:
 
 
 class TestScanItemPageInlineForms:
-    def test_stock_out_form_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_stock_out_form_shape(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="OF-1", qr_code=None)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
@@ -834,9 +764,7 @@ class TestScanItemPageInlineForms:
         assert f'action="/admin/items/{item.id}/out"' in block
         assert 'name="csrf_token"' in block
 
-    def test_stock_in_form_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_stock_in_form_shape(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="IF-1", qr_code=None)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
@@ -848,9 +776,7 @@ class TestScanItemPageInlineForms:
         assert f'action="/admin/items/{item.id}/in"' in block
         assert 'name="csrf_token"' in block
 
-    def test_adjust_form_shape(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_adjust_form_shape(self, client: TestClient, db_session: Session) -> None:
         item = _make_item(db_session, sku="AF-1", qr_code=None)
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
@@ -965,9 +891,7 @@ class TestScanItemPageInlineFormFields:
             tag = resp.text[tag_start : tag_end + 1]
             assert "required" in tag, f"{testid} missing required"
 
-    def test_adjust_reason_input_is_required(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_adjust_reason_input_is_required(self, client: TestClient, db_session: Session) -> None:
         """Reason is required server-side on adjust (variance attribution).
         The inline form must mark the input as required so the browser
         blocks empty submits."""
@@ -1010,12 +934,8 @@ class TestScanItemPageInlineFormFields:
             ("in", in_block),
             ("adjust", adj_block),
         ):
-            assert 'name="next"' in block, (
-                f"{block_name} form missing hidden next input"
-            )
-            assert expected_value in block, (
-                f"{block_name} form's next value is wrong"
-            )
+            assert 'name="next"' in block, f"{block_name} form missing hidden next input"
+            assert expected_value in block, f"{block_name} form's next value is wrong"
 
 
 # ---------------------------------------------------------------------------
@@ -1212,9 +1132,7 @@ class TestScanCameraSurface:
         tag = resp.text[tag_start : tag_end + 1]
         assert " hidden" in tag or tag.endswith("hidden>")
 
-    def test_camera_surface_starts_hidden(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_camera_surface_starts_hidden(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")
@@ -1280,9 +1198,7 @@ class TestScanCameraSurface:
         tag = resp.text[tag_start : tag_end + 1]
         assert 'aria-live="polite"' in tag
 
-    def test_camera_viewfinder_div_present(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_camera_viewfinder_div_present(self, client: TestClient, db_session: Session) -> None:
         """SC2b will inject the html5-qrcode viewfinder into this
         container; SC2a renders it empty as a placeholder hook.
         """
@@ -1291,9 +1207,7 @@ class TestScanCameraSurface:
         resp = client.get("/scan")
         assert 'data-testid="scan-camera-viewfinder"' in resp.text
 
-    def test_inline_camera_script_present(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_inline_camera_script_present(self, client: TestClient, db_session: Session) -> None:
         """The inline feature-detect script is server-rendered and
         contains the ``navigator.mediaDevices.getUserMedia`` check (the
         guard that keeps the toggle button hidden on devices without
@@ -1333,8 +1247,7 @@ class TestScanCameraSurface:
         assert "src=" in tag
         assert "html5-qrcode" in tag
         assert (
-            'integrity="sha384-c9d8RFSL+u3exBOJ4Yp3HUJXS4znl9f+'
-            'z66d1y54ig+ea249SpqR+w1wyvXz/lk+"'
+            'integrity="sha384-c9d8RFSL+u3exBOJ4Yp3HUJXS4znl9f+z66d1y54ig+ea249SpqR+w1wyvXz/lk+"'
         ) in tag
         assert 'crossorigin="anonymous"' in tag
 
@@ -1356,9 +1269,7 @@ class TestScanCameraSurface:
         tag = resp.text[tag_start : tag_end + 1]
         assert "html5-qrcode@2.3.8" in tag
 
-    def test_no_other_scanning_libs_loaded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_other_scanning_libs_loaded(self, client: TestClient, db_session: Session) -> None:
         """SC2b picked html5-qrcode; this test pins that we did *not*
         also accidentally pull in jsQR / zxing / qrcode-scanner via a
         copy-paste from a how-to.
@@ -1470,9 +1381,7 @@ class TestScanCameraSurface:
         assert "Camera permission denied" in block
         assert "Use the keyboard input above to type a code instead" in block
 
-    def test_inline_glue_handles_no_camera(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_inline_glue_handles_no_camera(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/scan")

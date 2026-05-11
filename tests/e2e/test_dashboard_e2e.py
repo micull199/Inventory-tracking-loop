@@ -33,9 +33,7 @@ from __future__ import annotations
 from playwright.sync_api import BrowserContext, Page, expect
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -55,9 +53,7 @@ def _admin_promote(
     role: str,
 ) -> None:
     """Sign in as the bootstrap admin and promote ``email`` → ``role`` + active."""
-    admin_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    admin_context = context.browser.new_context() if context.browser else context
     admin_page = admin_context.new_page()
     _dev_login(
         admin_page,
@@ -67,15 +63,11 @@ def _admin_promote(
         name="Seed Admin",
     )
     admin_page.goto(f"{base_url}/admin/users")
-    row = admin_page.locator(
-        '[data-testid="user-row"]', has_text=email
-    )
+    row = admin_page.locator('[data-testid="user-row"]', has_text=email)
     row.locator('[data-testid="role-select"]').select_option(role)
     row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{base_url}/admin/users")
-    promoted = admin_page.locator(
-        '[data-testid="user-row"]', has_text=email
-    )
+    promoted = admin_page.locator('[data-testid="user-row"]', has_text=email)
     promoted.locator('[data-testid="status-select"]').select_option("active")
     promoted.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{base_url}/admin/users")
@@ -84,9 +76,7 @@ def _admin_promote(
         admin_context.close()
 
 
-def test_manager_dashboard_walk(
-    context: BrowserContext, app_server: str
-) -> None:
+def test_manager_dashboard_walk(context: BrowserContext, app_server: str) -> None:
     # Step 1: Future manager signs up (lands pending).
     pending_page = context.new_page()
     _dev_login(
@@ -112,15 +102,11 @@ def test_manager_dashboard_walk(
     expect(admin_page.get_by_test_id("welcome")).to_be_visible()
 
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="dashboard-mgr@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="dashboard-mgr@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("manager")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="dashboard-mgr@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="dashboard-mgr@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -153,16 +139,12 @@ def test_manager_dashboard_walk(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("DASH-1")
     mgr_page.get_by_test_id("item-name-input").fill("Dashboard alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Dashboard E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Dashboard E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
-    item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="DASH-1"
-    )
+    item_row = mgr_page.locator('[data-testid="item-row"]', has_text="DASH-1")
     item_id = item_row.get_attribute("data-item-id")
     assert item_id is not None
 
@@ -185,9 +167,7 @@ def test_manager_dashboard_walk(
     mgr_page.wait_for_url(f"{app_server}/admin/dashboard")
 
     # Total inventory value = (100 - 30) * 2.50 = 175 (scale-4 column round-trip).
-    expect(mgr_page.get_by_test_id("dashboard-total-value")).to_have_text(
-        "175.0000"
-    )
+    expect(mgr_page.get_by_test_id("dashboard-total-value")).to_have_text("175.0000")
 
     # No low-stock items (threshold=0, qty=70 > 0).
     expect(mgr_page.get_by_test_id("dashboard-low-stock-count")).to_have_text("0")
@@ -196,44 +176,28 @@ def test_manager_dashboard_walk(
     expect(mgr_page.get_by_test_id("dashboard-open-pos-count")).to_have_text("0")
 
     # Overdue checkouts placeholder.
-    expect(
-        mgr_page.get_by_test_id("dashboard-overdue-checkouts")
-    ).to_have_text("0")
+    expect(mgr_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text("0")
 
     # Top consumed table has one row showing DASH-1 with qty 30.
-    expect(
-        mgr_page.locator('[data-testid="dashboard-top-consumed-row"]')
-    ).to_have_count(1)
-    expect(mgr_page.get_by_test_id("dashboard-top-consumed-sku")).to_have_text(
-        "DASH-1"
-    )
+    expect(mgr_page.locator('[data-testid="dashboard-top-consumed-row"]')).to_have_count(1)
+    expect(mgr_page.get_by_test_id("dashboard-top-consumed-sku")).to_have_text("DASH-1")
     # Decimal scale 4 from the qty column round-trip.
-    expect(mgr_page.get_by_test_id("dashboard-top-consumed-qty")).to_have_text(
-        "30.0000"
-    )
+    expect(mgr_page.get_by_test_id("dashboard-top-consumed-qty")).to_have_text("30.0000")
 
     # COGS = 30 * 2.50 = 75. Default window covers today's movement.
-    expect(mgr_page.get_by_test_id("dashboard-cogs-amount")).to_have_text(
-        "75.0000"
-    )
+    expect(mgr_page.get_by_test_id("dashboard-cogs-amount")).to_have_text("75.0000")
 
     # The forms are present and pre-filled.
-    expect(mgr_page.get_by_test_id("dashboard-top-days-input")).to_have_value(
-        "30"
-    )
+    expect(mgr_page.get_by_test_id("dashboard-top-days-input")).to_have_value("30")
 
     # Step 7: Cleanup — archive the item + category.
     mgr_page.goto(f"{app_server}/admin/items")
-    item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="DASH-1"
-    )
+    item_row = mgr_page.locator('[data-testid="item-row"]', has_text="DASH-1")
     item_row.get_by_test_id("archive-item").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
     mgr_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = mgr_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Dashboard E2E Cat"
-    )
+    cat_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Dashboard E2E Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
@@ -292,9 +256,7 @@ def test_office_reads_dashboard_with_low_stock_widget(
         mgr_context.close()
 
     # Step 4: office signs in (own context) and reads the dashboard.
-    office_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    office_context = context.browser.new_context() if context.browser else context
     office_page = office_context.new_page()
     _dev_login(
         office_page,
@@ -312,25 +274,17 @@ def test_office_reads_dashboard_with_low_stock_widget(
     # Low-stock count = 1 — D7-LOW is below its threshold (qty=0 ≤ 10) and
     # is the only active item below threshold (every other walk archives in
     # cleanup, and ``_low_stock_count`` filters ``Item.archived_at IS NULL``).
-    expect(
-        office_page.get_by_test_id("dashboard-low-stock-count")
-    ).to_have_text("1")
+    expect(office_page.get_by_test_id("dashboard-low-stock-count")).to_have_text("1")
 
     # Total value = 0 — no FIFO layers seeded for D7-LOW; archived items
     # from prior walks don't contribute (filter ``archived_at IS NULL``).
-    expect(office_page.get_by_test_id("dashboard-total-value")).to_have_text(
-        "0.0000"
-    )
+    expect(office_page.get_by_test_id("dashboard-total-value")).to_have_text("0.0000")
 
     # No POs, no checkouts — both counters at 0. (PO statuses don't archive,
     # but no e2e walk leaves a non-received/non-cancelled PO around;
     # checkouts_e2e returns its unit in cleanup.)
-    expect(
-        office_page.get_by_test_id("dashboard-open-pos-count")
-    ).to_have_text("0")
-    expect(
-        office_page.get_by_test_id("dashboard-overdue-checkouts")
-    ).to_have_text("0")
+    expect(office_page.get_by_test_id("dashboard-open-pos-count")).to_have_text("0")
+    expect(office_page.get_by_test_id("dashboard-overdue-checkouts")).to_have_text("0")
 
     # Heading + form pre-fill render. ``dashboard-top-days-input`` defaults
     # to "30" days (the rolling-window default). The empty-state placeholder
@@ -341,18 +295,14 @@ def test_office_reads_dashboard_with_low_stock_widget(
     # e2e — that's an artefact of the e2e fixture being session-scoped, not
     # a regression in the dashboard itself.
     expect(office_page.get_by_test_id("dashboard-heading")).to_be_visible()
-    expect(
-        office_page.get_by_test_id("dashboard-top-days-input")
-    ).to_have_value("30")
+    expect(office_page.get_by_test_id("dashboard-top-days-input")).to_have_value("30")
 
     office_page.close()
     if office_context is not context:
         office_context.close()
 
     # Step 5: cleanup — manager archives the item + category.
-    cleanup_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    cleanup_context = context.browser.new_context() if context.browser else context
     cleanup_page = cleanup_context.new_page()
     _dev_login(
         cleanup_page,
@@ -363,16 +313,12 @@ def test_office_reads_dashboard_with_low_stock_widget(
     )
 
     cleanup_page.goto(f"{app_server}/admin/items")
-    item_row = cleanup_page.locator(
-        '[data-testid="item-row"]', has_text="D7-LOW"
-    )
+    item_row = cleanup_page.locator('[data-testid="item-row"]', has_text="D7-LOW")
     item_row.get_by_test_id("archive-item").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/items")
 
     cleanup_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = cleanup_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="D7 Cat"
-    )
+    cat_row = cleanup_page.locator('[data-testid="taxonomy-row"]', has_text="D7 Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/taxonomy")
 

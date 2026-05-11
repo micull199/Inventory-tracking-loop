@@ -127,11 +127,7 @@ def _active_nodes(db: Session) -> list[TaxonomyNode]:
 
 def _active_locations(db: Session) -> list[Location]:
     """Active locations for the form ``<select>``."""
-    stmt = (
-        select(Location)
-        .where(Location.archived_at.is_(None))
-        .order_by(Location.name)
-    )
+    stmt = select(Location).where(Location.archived_at.is_(None)).order_by(Location.name)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -270,9 +266,7 @@ def _last_unit_cost(db: Session, item_id: int) -> Decimal | None:
     return row[0] if row is not None else None
 
 
-def _parse_unit_cost_for_commit(
-    raw: str, *, line_id: int, required: bool
-) -> Decimal | None:
+def _parse_unit_cost_for_commit(raw: str, *, line_id: int, required: bool) -> Decimal | None:
     """Parse ``unit_cost_<line_id>`` for the commit form.
 
     Blank → ``None`` when ``required=False`` (negative-variance line; the
@@ -286,10 +280,7 @@ def _parse_unit_cost_for_commit(
         if required:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"unit_cost for line {line_id} is required for a "
-                    "positive variance"
-                ),
+                detail=(f"unit_cost for line {line_id} is required for a positive variance"),
             )
         return None
     try:
@@ -316,11 +307,7 @@ def _lines_with_non_zero_variance(
     commit route doesn't write a movement for them, doesn't flip ``committed``
     on them, and doesn't list them in the audit row's ``movements`` snapshot.
     """
-    return [
-        (line, item)
-        for line, item in rows
-        if line.variance is not None and line.variance != 0
-    ]
+    return [(line, item) for line, item in rows if line.variance is not None and line.variance != 0]
 
 
 def _resolve_scope_items(db: Session, st: StockTake) -> list[Item]:
@@ -338,11 +325,9 @@ def _resolve_scope_items(db: Session, st: StockTake) -> list[Item]:
     stmt = select(Item).where(Item.archived_at.is_(None))
     if st.scope_node_id is not None:
         child_ids = list(
-            db.execute(
-                select(TaxonomyNode.id).where(
-                    TaxonomyNode.parent_id == st.scope_node_id
-                )
-            ).scalars().all()
+            db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id == st.scope_node_id))
+            .scalars()
+            .all()
         )
         in_scope_node_ids = [st.scope_node_id, *child_ids]
         stmt = stmt.where(Item.taxonomy_node_id.in_(in_scope_node_ids))
@@ -399,9 +384,7 @@ def _parse_optional_count(raw: str, *, line_id: int) -> Decimal | None:
     return value
 
 
-def _lines_with_items(
-    db: Session, st_id: int
-) -> list[tuple[StockTakeLine, Item]]:
+def _lines_with_items(db: Session, st_id: int) -> list[tuple[StockTakeLine, Item]]:
     """Fetch lines joined to their item, ordered by ``Item.sku``."""
     stmt = (
         select(StockTakeLine, Item)
@@ -418,11 +401,7 @@ def _count_progress(
     """Per-status counters for the progress summary."""
     counted = sum(1 for line, _ in rows if line.counted_qty is not None)
     uncounted = len(rows) - counted
-    with_variance = sum(
-        1
-        for line, _ in rows
-        if line.variance is not None and line.variance != 0
-    )
+    with_variance = sum(1 for line, _ in rows if line.variance is not None and line.variance != 0)
     return {
         "counted": counted,
         "uncounted": uncounted,
@@ -449,16 +428,8 @@ def _detail_context(
     the operator's typed ``unit_cost_<line_id>`` inputs so a partial fix
     doesn't lose context.
     """
-    node = (
-        db.get(TaxonomyNode, st.scope_node_id)
-        if st.scope_node_id is not None
-        else None
-    )
-    location = (
-        db.get(Location, st.scope_location_id)
-        if st.scope_location_id is not None
-        else None
-    )
+    node = db.get(TaxonomyNode, st.scope_node_id) if st.scope_node_id is not None else None
+    location = db.get(Location, st.scope_location_id) if st.scope_location_id is not None else None
     status_label = _status_label(st)
     scope_label = _scope_label(st, node=node, location=location)
     creator_email: str | None = None
@@ -553,28 +524,31 @@ def _list_rows(db: Session, *, show: str) -> list[dict[str, Any]]:
     stock_takes = list(db.execute(stmt).scalars().all())
 
     node_ids = {st.scope_node_id for st in stock_takes if st.scope_node_id is not None}
-    loc_ids = {
-        st.scope_location_id for st in stock_takes if st.scope_location_id is not None
-    }
+    loc_ids = {st.scope_location_id for st in stock_takes if st.scope_location_id is not None}
     nodes = (
-        {n.id: n for n in db.execute(
-            select(TaxonomyNode).where(TaxonomyNode.id.in_(node_ids))
-        ).scalars().all()}
+        {
+            n.id: n
+            for n in db.execute(select(TaxonomyNode).where(TaxonomyNode.id.in_(node_ids)))
+            .scalars()
+            .all()
+        }
         if node_ids
         else {}
     )
     locations = (
-        {loc.id: loc for loc in db.execute(
-            select(Location).where(Location.id.in_(loc_ids))
-        ).scalars().all()}
+        {
+            loc.id: loc
+            for loc in db.execute(select(Location).where(Location.id.in_(loc_ids))).scalars().all()
+        }
         if loc_ids
         else {}
     )
     creator_ids = {st.created_by for st in stock_takes if st.created_by is not None}
     creators = (
-        {u.id: u.email for u in db.execute(
-            select(User).where(User.id.in_(creator_ids))
-        ).scalars().all()}
+        {
+            u.id: u.email
+            for u in db.execute(select(User).where(User.id.in_(creator_ids))).scalars().all()
+        }
         if creator_ids
         else {}
     )
@@ -582,11 +556,7 @@ def _list_rows(db: Session, *, show: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for st in stock_takes:
         node = nodes.get(st.scope_node_id) if st.scope_node_id is not None else None
-        loc = (
-            locations.get(st.scope_location_id)
-            if st.scope_location_id is not None
-            else None
-        )
+        loc = locations.get(st.scope_location_id) if st.scope_location_id is not None else None
         rows.append(
             {
                 "id": st.id,
@@ -751,9 +721,7 @@ def create_stock_take(
         request,
         f"Stock take scheduled for {parsed_scheduled.isoformat()}.",
     )
-    return RedirectResponse(
-        url="/admin/stock-takes", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/stock-takes", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -764,9 +732,7 @@ def create_stock_take(
 def _get_stock_take_or_404(db: Session, st_id: int) -> StockTake:
     st = db.get(StockTake, st_id)
     if st is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="stock take not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="stock take not found")
     return st
 
 
@@ -918,20 +884,14 @@ async def update_stock_take_counts(
         line_before.append(
             {
                 "line_id": line.id,
-                "counted_qty": (
-                    str(line.counted_qty) if line.counted_qty is not None else None
-                ),
+                "counted_qty": (str(line.counted_qty) if line.counted_qty is not None else None),
             }
         )
         line_after.append(
             {
                 "line_id": line.id,
-                "counted_qty": (
-                    str(new_counted) if new_counted is not None else None
-                ),
-                "variance": (
-                    str(new_variance) if new_variance is not None else None
-                ),
+                "counted_qty": (str(new_counted) if new_counted is not None else None),
+                "variance": (str(new_variance) if new_variance is not None else None),
             }
         )
         changed.append((line, new_counted, new_variance))
@@ -1067,9 +1027,7 @@ async def commit_stock_take(
             )
         else:
             try:
-                consume_fifo(
-                    db, item=item, qty=qty_abs, movement=movement
-                )
+                consume_fifo(db, item=item, qty=qty_abs, movement=movement)
             except InsufficientStockError as exc:
                 db.rollback()
                 # Re-load the stock take after rollback.
@@ -1100,15 +1058,9 @@ async def commit_stock_take(
                 "movement_id": movement.id,
                 "variance": str(line.variance),
                 "direction": direction,
-                "unit_cost": (
-                    str(parsed_unit_costs[line.id])
-                    if direction == "increase"
-                    else None
-                ),
+                "unit_cost": (str(parsed_unit_costs[line.id]) if direction == "increase" else None),
                 "total_cost": (
-                    str(movement.total_cost)
-                    if movement.total_cost is not None
-                    else None
+                    str(movement.total_cost) if movement.total_cost is not None else None
                 ),
             }
         )

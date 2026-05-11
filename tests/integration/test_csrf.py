@@ -62,9 +62,7 @@ class TestCSRFRequiredOnMutations:
         resp = client.post("/auth/logout", follow_redirects=False)
         assert resp.status_code == 403
 
-    def test_post_logout_with_mismatched_token_is_403(
-        self, client: TestClient
-    ) -> None:
+    def test_post_logout_with_mismatched_token_is_403(self, client: TestClient) -> None:
         client.get("/")  # bootstrap cookie
         resp = client.post(
             "/auth/logout",
@@ -107,9 +105,7 @@ class TestCSRFRequiredOnMutations:
         client.get("/")
         token = client.cookies["csrftoken"]
 
-        target = _make_user(
-            db_session, email="target@x.test", role=None, status=UserStatus.PENDING
-        )
+        target = _make_user(db_session, email="target@x.test", role=None, status=UserStatus.PENDING)
         resp = client.post(
             f"/admin/users/{target.id}/role",
             data={"role": "workshop"},  # no csrf_token field
@@ -120,9 +116,7 @@ class TestCSRFRequiredOnMutations:
 
 
 class TestCSRFExemptPaths:
-    def test_dev_login_does_not_require_csrf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_dev_login_does_not_require_csrf(self, client: TestClient, db_session: Session) -> None:
         """The dev-login backdoor is mounted only in test/dev. CSRF on a backdoor
         protects nothing — keep it exempt so Playwright's synthetic form post
         still works without first round-tripping for a token."""
@@ -163,9 +157,7 @@ class TestCSRFTokenInTemplates:
         # The token in the cookie matches the one rendered in the form.
         assert f'name="csrf_token" value="{token}"' in resp.text
 
-    def test_signout_form_renders_csrf_field(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_signout_form_renders_csrf_field(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="signed@x.test", role=Role.OFFICE)
         client.post(
             "/auth/_dev-login",
@@ -180,9 +172,7 @@ class TestCSRFTokenInTemplates:
 
 
 class TestCSRFOnNonFormBody:
-    def test_post_with_json_body_and_no_token_is_403(
-        self, client: TestClient
-    ) -> None:
+    def test_post_with_json_body_and_no_token_is_403(self, client: TestClient) -> None:
         """JSON callers must use the X-CSRF-Token header — no token, 403."""
         client.get("/")  # bootstrap cookie
         resp = client.post(

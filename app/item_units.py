@@ -137,9 +137,7 @@ def _normalise(
             detail="serial / label is required",
         )
     new_status = _coerce_status(status_value)
-    loc_id = _resolve_optional_location(
-        db, location_id, current_id=current_location_id
-    )
+    loc_id = _resolve_optional_location(db, location_id, current_id=current_location_id)
     return {
         "serial_or_label": clean_serial,
         "status": new_status,
@@ -171,9 +169,7 @@ def _check_serial_unique(
 def _get_item(db: Session, item_id: int) -> Item:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
     return item
 
 
@@ -191,15 +187,11 @@ def _require_unique_tracking(item: Item) -> None:
 def _get_unit(db: Session, unit_id: int) -> ItemUnit:
     unit = db.get(ItemUnit, unit_id)
     if unit is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="unit not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unit not found")
     return unit
 
 
-def _diff(
-    unit: ItemUnit, new: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def _diff(unit: ItemUnit, new: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     for f in _FIELDS:
@@ -217,29 +209,19 @@ def _flash(request: Request, message: str) -> None:
     request.session["flash"] = message
 
 
-def _location_options(
-    db: Session, *, current_id: int | None = None
-) -> list[dict[str, Any]]:
+def _location_options(db: Session, *, current_id: int | None = None) -> list[dict[str, Any]]:
     """Active locations + the assigned archived row (with "(archived)" suffix) if any.
 
     Identical contract to ``app.items._location_options`` — see the comment
     on ``_resolve_optional_location`` above for the duplication rationale.
     """
     rows = list(
-        db.execute(
-            select(Location)
-            .where(Location.archived_at.is_(None))
-            .order_by(Location.name)
-        )
+        db.execute(select(Location).where(Location.archived_at.is_(None)).order_by(Location.name))
         .scalars()
         .all()
     )
-    options: list[dict[str, Any]] = [
-        {"id": loc.id, "label": loc.name} for loc in rows
-    ]
-    if current_id is not None and not any(
-        opt["id"] == current_id for opt in options
-    ):
+    options: list[dict[str, Any]] = [{"id": loc.id, "label": loc.name} for loc in rows]
+    if current_id is not None and not any(opt["id"] == current_id for opt in options):
         cur = db.get(Location, current_id)
         if cur is not None:
             options.append({"id": cur.id, "label": f"{cur.name} (archived)"})
@@ -256,9 +238,7 @@ def _form_for_unit(unit: ItemUnit | None) -> dict[str, Any]:
     return {
         "serial_or_label": unit.serial_or_label,
         "status": unit.status.value,
-        "location_id": (
-            str(unit.location_id) if unit.location_id is not None else ""
-        ),
+        "location_id": (str(unit.location_id) if unit.location_id is not None else ""),
     }
 
 
@@ -381,9 +361,7 @@ def create_item_unit(
         status_value=status_value,
         location_id=location_id,
     )
-    _check_serial_unique(
-        db, item_id=item.id, serial_or_label=fields["serial_or_label"]
-    )
+    _check_serial_unique(db, item_id=item.id, serial_or_label=fields["serial_or_label"])
 
     unit = ItemUnit(
         item_id=item.id,
@@ -443,9 +421,7 @@ def edit_item_unit_form(
             "title": f"Edit unit {unit.serial_or_label}",
             "action": f"/admin/items/units/{unit.id}",
             "back_url": f"/admin/items/{item.id}/units",
-            "location_options": _location_options(
-                db, current_id=unit.location_id
-            ),
+            "location_options": _location_options(db, current_id=unit.location_id),
             "statuses": [s.value for s in ItemUnitStatus],
         },
     )

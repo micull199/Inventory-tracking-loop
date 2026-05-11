@@ -10,9 +10,7 @@ def test_anonymous_visitor_sees_sign_in(page: Page, app_server: str) -> None:
     expect(page.get_by_test_id("sign-in")).to_be_visible()
 
 
-def test_dev_login_lands_pending_user_on_pending_page(
-    page: Page, app_server: str
-) -> None:
+def test_dev_login_lands_pending_user_on_pending_page(page: Page, app_server: str) -> None:
     """Use the test-only login backdoor; verify the pending holding page renders."""
     # Submit a tiny HTML form that posts to the dev-login endpoint, then redirects to /.
     page.set_content(

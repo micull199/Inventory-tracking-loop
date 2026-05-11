@@ -138,9 +138,7 @@ class CSRFMiddleware:
         cast(dict[str, object], scope["state"])["csrf_token"] = active_token
 
         if method in SAFE_METHODS or path in self.exempt_paths:
-            await self._call_with_cookie(
-                scope, receive, send, active_token, need_set_cookie
-            )
+            await self._call_with_cookie(scope, receive, send, active_token, need_set_cookie)
             return
 
         # Mutating, non-exempt request: validate before forwarding.
@@ -149,9 +147,7 @@ class CSRFMiddleware:
         submitted = _extract_submitted_token(headers_dict, body)
 
         valid = bool(
-            existing_cookie
-            and submitted
-            and secrets.compare_digest(existing_cookie, submitted)
+            existing_cookie and submitted and secrets.compare_digest(existing_cookie, submitted)
         )
         if not valid:
             response = Response(
@@ -163,9 +159,7 @@ class CSRFMiddleware:
             return
 
         replay_receive = _make_replay_receive(body)
-        await self._call_with_cookie(
-            scope, replay_receive, send, active_token, need_set_cookie
-        )
+        await self._call_with_cookie(scope, replay_receive, send, active_token, need_set_cookie)
 
     @staticmethod
     async def _read_body(receive: Receive) -> bytes:

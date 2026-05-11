@@ -128,9 +128,7 @@ def upsert_user_from_userinfo(
 # ---------------------------------------------------------------------------
 
 
-def get_current_user(
-    request: Request, db: Session = Depends(get_session)
-) -> User | None:
+def get_current_user(request: Request, db: Session = Depends(get_session)) -> User | None:
     """Resolve the logged-in user from the session cookie, or ``None``."""
     user_id = request.session.get("user_id")
     if not user_id:
@@ -210,9 +208,7 @@ async def google_login(request: Request) -> Response:
 
 
 @router.get("/google/callback")
-async def google_callback(
-    request: Request, db: Session = Depends(get_session)
-) -> Response:
+async def google_callback(request: Request, db: Session = Depends(get_session)) -> Response:
     google = oauth.create_client("google")
     if google is None:
         raise HTTPException(

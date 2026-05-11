@@ -78,42 +78,32 @@ class TestRoleEnforcement:
         resp = client.get("/admin/locations")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/admin/locations")
         assert resp.status_code == 403
 
-    def test_office_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         """Locations are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/admin/locations")
         assert resp.status_code == 403
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/locations")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/locations")
         assert resp.status_code == 200
 
-    def test_workshop_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_create_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.post(
@@ -124,9 +114,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 403
         assert db_session.execute(select(Location)).first() is None
 
-    def test_pending_user_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         pending = _make_user(
             db_session, email="p@x.test", role=Role.MANAGER, status=UserStatus.PENDING
         )
@@ -141,9 +129,7 @@ class TestRoleEnforcement:
 
 
 class TestLocationsList:
-    def test_list_shows_active_by_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add_all(
             [
@@ -159,9 +145,7 @@ class TestLocationsList:
         assert "Workshop Bench" in resp.text
         assert "Old Bench" not in resp.text
 
-    def test_list_show_archived_filter(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_show_archived_filter(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add_all(
             [
@@ -177,9 +161,7 @@ class TestLocationsList:
         assert "Old Bench" in resp.text
         assert "Workshop Bench" not in resp.text
 
-    def test_list_renders_new_location_cta(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_renders_new_location_cta(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/locations")
@@ -192,9 +174,7 @@ class TestLocationsList:
 
 
 class TestLocationCreate:
-    def test_get_new_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/locations/new")
@@ -202,9 +182,7 @@ class TestLocationCreate:
         assert 'name="name"' in resp.text
         assert 'name="csrf_token"' in resp.text
 
-    def test_create_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -257,9 +235,7 @@ class TestLocationCreate:
         loc = db_session.execute(select(Location)).scalar_one()
         assert loc.notes is None
 
-    def test_create_rejects_empty_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_empty_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -285,9 +261,7 @@ class TestLocationCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(Location)).first() is None
 
-    def test_create_rejects_duplicate_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_duplicate_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add(Location(name="Workshop"))
         db_session.commit()
@@ -302,9 +276,7 @@ class TestLocationCreate:
         rows = list(db_session.execute(select(Location)).scalars().all())
         assert len(rows) == 1
 
-    def test_create_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
 
@@ -350,9 +322,7 @@ class TestLocationCreate:
 
 
 class TestLocationEdit:
-    def test_get_edit_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop", notes="bench")
         db_session.add(loc)
@@ -364,17 +334,13 @@ class TestLocationEdit:
         assert "Workshop" in resp.text
         assert "bench" in resp.text
 
-    def test_get_edit_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/locations/9999/edit")
         assert resp.status_code == 404
 
-    def test_post_update_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop", notes="old")
         db_session.add(loc)
@@ -398,9 +364,7 @@ class TestLocationEdit:
         assert refreshed.name == "Workshop A"
         assert refreshed.notes == "new notes"
 
-    def test_post_update_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -410,9 +374,7 @@ class TestLocationEdit:
         )
         assert resp.status_code == 404
 
-    def test_post_update_can_keep_same_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_can_keep_same_name(self, client: TestClient, db_session: Session) -> None:
         """Updating without renaming must not trip the unique constraint."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop", notes="old")
@@ -452,9 +414,7 @@ class TestLocationEdit:
         db_session.expire_all()
         assert db_session.get(Location, b.id).name == "Vault"  # type: ignore[union-attr]
 
-    def test_post_update_rejects_empty_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_rejects_empty_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop")
         db_session.add(loc)
@@ -524,9 +484,7 @@ class TestLocationEdit:
 
 
 class TestLocationArchive:
-    def test_archive_sets_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_sets_archived_at(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop")
         db_session.add(loc)
@@ -545,9 +503,7 @@ class TestLocationArchive:
         assert refreshed is not None
         assert refreshed.archived_at is not None
 
-    def test_archive_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop")
         db_session.add(loc)
@@ -584,9 +540,7 @@ class TestLocationArchive:
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="location.archived") == []
 
-    def test_unarchive_clears_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_clears_archived_at(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
@@ -605,9 +559,7 @@ class TestLocationArchive:
         assert refreshed is not None
         assert refreshed.archived_at is None
 
-    def test_unarchive_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
@@ -642,9 +594,7 @@ class TestLocationArchive:
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="location.unarchived") == []
 
-    def test_archive_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -667,9 +617,7 @@ class TestLocationsListCsvRoleEnforcement:
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(
             db_session,
             email="p@x.test",
@@ -680,34 +628,26 @@ class TestLocationsListCsvRoleEnforcement:
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 403
 
-    def test_office_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         """Locations are Manager-owned (MISSION §3) — Office is a sibling, not a subset."""
         off = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, off)
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 200
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
         resp = client.get("/admin/locations?format=csv")
@@ -745,18 +685,14 @@ class TestLocationsListCsvHeaders:
 
 
 class TestLocationsListCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/locations?format=csv")
         assert resp.status_code == 200
         assert resp.text == "id,name,notes\r\n"
 
-    def test_one_location_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_location_one_data_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         loc = Location(name="Workshop Bench", notes="Filer's bay")
         db_session.add(loc)
@@ -772,9 +708,7 @@ class TestLocationsListCsvBody:
         assert cells[1] == "Workshop Bench"
         assert cells[2] == "Filer's bay"
 
-    def test_show_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         active = Location(name="Workshop Bench")
         archived = Location(
@@ -814,15 +748,11 @@ class TestLocationsListCsvBody:
         assert cells[1] == "Minimal"
         assert cells[2] == ""
 
-    def test_alphabetical_ordering_in_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_alphabetical_ordering_in_csv(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         # Insert deliberately out-of-order; the route orders by name within
         # the bucket.
-        db_session.add_all(
-            [Location(name="Zebra Cabinet"), Location(name="Acme Bench")]
-        )
+        db_session.add_all([Location(name="Zebra Cabinet"), Location(name="Acme Bench")])
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get("/admin/locations?format=csv")
@@ -833,9 +763,7 @@ class TestLocationsListCsvBody:
 
 
 class TestLocationsListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/locations")
@@ -843,9 +771,7 @@ class TestLocationsListCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="locations-tabs"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/locations?format=garbage")
@@ -854,9 +780,7 @@ class TestLocationsListCsvHtmlBranch:
 
 
 class TestLocationsListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         db_session.add(Location(name="Workshop"))
         db_session.commit()

@@ -73,14 +73,8 @@ def _csrf(client: TestClient) -> str:
     return client.cookies["csrftoken"]
 
 
-def _audit_rows(
-    db: Session, *, action: str | None = None
-) -> list[AuditLog]:
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "item")
-        .order_by(AuditLog.id)
-    )
+def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
+    stmt = select(AuditLog).where(AuditLog.entity_type == "item").order_by(AuditLog.id)
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
     return list(db.execute(stmt).scalars().all())
@@ -154,18 +148,14 @@ class TestRoleEnforcement:
         resp = client.get("/admin/items")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         """I1c: Workshop can list items (read-only). Direct precursor to SC1."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/admin/items")
         assert resp.status_code == 200
 
-    def test_workshop_get_edit_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_edit_form_is_200(self, client: TestClient, db_session: Session) -> None:
         """I1c: Workshop can GET the edit form (renders read-only)."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db_session)
@@ -183,18 +173,14 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert resp.status_code == 200
 
-    def test_workshop_get_new_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_new_form_is_403(self, client: TestClient, db_session: Session) -> None:
         """I1c: Workshop cannot reach the create form."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get("/admin/items/new")
         assert resp.status_code == 403
 
-    def test_workshop_update_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_update_is_403(self, client: TestClient, db_session: Session) -> None:
         """I1c: Workshop cannot POST updates — and no audit row written."""
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db_session)
@@ -225,9 +211,7 @@ class TestRoleEnforcement:
         assert item.name == "W item"
         assert _audit_rows(db_session, action="item.updated") == []
 
-    def test_workshop_archive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_archive_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -250,9 +234,7 @@ class TestRoleEnforcement:
         db_session.refresh(item)
         assert item.archived_at is None
 
-    def test_workshop_unarchive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_unarchive_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -276,27 +258,21 @@ class TestRoleEnforcement:
         db_session.refresh(item)
         assert item.archived_at is not None
 
-    def test_office_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         """I1b: Office can list items (MISSION §3)."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/admin/items")
         assert resp.status_code == 200
 
-    def test_office_get_new_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_new_form_is_403(self, client: TestClient, db_session: Session) -> None:
         """I1b: Office cannot create items — only read + edit existing rows."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get("/admin/items/new")
         assert resp.status_code == 403
 
-    def test_office_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_create_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
         _login_as(client, office)
@@ -308,9 +284,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 403
         assert db_session.execute(select(Item)).first() is None
 
-    def test_office_archive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_archive_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -333,9 +307,7 @@ class TestRoleEnforcement:
         db_session.refresh(item)
         assert item.archived_at is None
 
-    def test_office_unarchive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_unarchive_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -359,25 +331,19 @@ class TestRoleEnforcement:
         db_session.refresh(item)
         assert item.archived_at is not None
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get("/admin/items")
         assert resp.status_code == 200
 
-    def test_admin_can_create_item(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_can_create_item(self, client: TestClient, db_session: Session) -> None:
         """DoD #2: Admin creates items. ``require_role(MANAGER)`` lets Admin
         through, but the explicit assertion lives here so a future tightening
         of that rule can't quietly remove Admin's create access."""
@@ -391,11 +357,10 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalar_one()
-        assert item.sku == "RM-001"
+        # SKU is server-allocated (see TestItemCreate.test_create_happy_path).
+        assert item.sku == "RAW-0001"
 
-    def test_workshop_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_create_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db_session)
         _login_as(client, worker)
@@ -407,9 +372,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 403
         assert db_session.execute(select(Item)).first() is None
 
-    def test_pending_user_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         pending = _make_user(
             db_session,
             email="p@x.test",
@@ -427,9 +390,7 @@ class TestRoleEnforcement:
 
 
 class TestItemList:
-    def test_list_shows_active_by_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         db_session.add_all(
@@ -459,9 +420,7 @@ class TestItemList:
         assert "Active Item" in resp.text
         assert "Old Item" not in resp.text
 
-    def test_list_show_archived_filter(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_show_archived_filter(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         db_session.add_all(
@@ -490,9 +449,7 @@ class TestItemList:
         assert "Old Item" in resp.text
         assert "Active Item" not in resp.text
 
-    def test_list_orders_by_sku(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_orders_by_sku(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         db_session.add_all(
@@ -527,9 +484,7 @@ class TestItemList:
         body = resp.text
         assert 0 < body.find("ALPHA") < body.find("BRAVO") < body.find("ZULU")
 
-    def test_list_filters_by_node_id(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_filters_by_node_id(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf_a = _make_leaf(db_session, "A")
         leaf_b = _make_leaf(db_session, "B")
@@ -558,17 +513,13 @@ class TestItemList:
         assert "In A" in resp.text
         assert "In B" not in resp.text
 
-    def test_list_renders_new_item_cta(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_renders_new_item_cta(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items")
         assert "/admin/items/new" in resp.text
 
-    def test_list_shows_category_label(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_category_label(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _top, child = _make_top_with_child(
             db_session, top_name="Raw Materials", child_name="Silver"
@@ -594,9 +545,7 @@ class TestItemList:
 
 
 class TestItemCreate:
-    def test_get_new_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_leaf(db_session, "Raw Materials")
         _login_as(client, mgr)
@@ -612,9 +561,7 @@ class TestItemCreate:
         assert 'name="csrf_token"' in resp.text
         assert "Raw Materials" in resp.text
 
-    def test_create_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -636,10 +583,18 @@ class TestItemCreate:
         assert resp.headers["location"] == "/admin/items"
 
         item = db_session.execute(select(Item)).scalar_one()
-        assert item.sku == "RM-001"
+        # Server now owns SKU allocation under the taxonomy refinement; the
+        # client-supplied ``sku`` is ignored. Leaf ``Raw Materials`` has the
+        # derived prefix ``RAW`` (model default from ``name``), and this is
+        # the first item under it → sequence 1 → ``RAW-0001``.
+        assert item.sku == "RAW-0001"
+        assert item.assigned_sequence == 1
         assert item.name == "Silver wire"
         assert item.taxonomy_node_id == leaf.id
         assert item.unit == "g"
+        # Effective archetype falls back to BULK for a fixture-built node
+        # without an explicit archetype; tracking_mode is derived from
+        # archetype on create.
         assert item.tracking_mode is TrackingMode.QTY
         assert item.requires_checkout is False
         assert item.current_qty == Decimal("0")
@@ -651,9 +606,7 @@ class TestItemCreate:
         assert item.notes is None
         assert item.archived_at is None
 
-    def test_create_with_optional_fields(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_with_optional_fields(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         supplier = Supplier(name="Acme Wax")
@@ -680,16 +633,18 @@ class TestItemCreate:
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalar_one()
-        assert item.tracking_mode is TrackingMode.UNIQUE
+        # tracking_mode submitted by the form is overridden by the
+        # archetype-derived value on create — a depth-0 leaf without an
+        # explicit archetype defaults to ``bulk`` → ``qty``. The edit form
+        # remains writable so an Office user can correct mistakes.
+        assert item.tracking_mode is TrackingMode.QTY
         assert item.requires_checkout is True
         assert item.supplier_id == supplier.id
         assert item.location_id == location.id
         assert item.qr_code == "qr-123"
         assert item.notes == "Some notes"
 
-    def test_create_strips_whitespace(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_strips_whitespace(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -707,22 +662,20 @@ class TestItemCreate:
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalar_one()
-        assert item.sku == "X-1"
+        # SKU is server-allocated (client-supplied is ignored). Whitespace
+        # is still trimmed from name / unit / qr_code.
+        assert item.sku == "RAW-0001"
         assert item.name == "Wire"
         assert item.unit == "g"
         assert item.qr_code == "qr-x"
 
-    def test_create_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
         client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         rows = _audit_rows(db_session, action="item.created")
@@ -731,7 +684,10 @@ class TestItemCreate:
         assert row.actor_id == mgr.id
         assert row.before_json is None
         assert row.after_json is not None
-        assert row.after_json["sku"] == "RM-001"
+        # SKU is server-allocated (``<leaf-prefix>-<NNNN>``); the audit
+        # blob also records the freshly-allocated sequence.
+        assert row.after_json["sku"] == "RAW-0001"
+        assert row.after_json["assigned_sequence"] == 1
         assert row.after_json["taxonomy_node_id"] == leaf.id
         assert row.after_json["tracking_mode"] == "qty"
 
@@ -746,53 +702,49 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="   ", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, sku="   ", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalars().one()
         assert item.sku == "RAW-0001"
 
-    def test_create_empty_name_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_empty_name_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, name="", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, name="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_empty_unit_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_empty_unit_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, unit="", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, unit="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_duplicate_sku_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_duplicate_sku_400(self, client: TestClient, db_session: Session) -> None:
+        """Even with server-allocated SKUs, a collision (e.g. a row that
+        pre-dates the refinement) is rejected rather than silently 500ing
+        on the unique index. We pre-stage an item already holding the SKU
+        the allocator would mint and assert the route returns 400 instead
+        of bypassing ``_check_sku_unique``.
+        """
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
+        # The allocator will mint ``RAW-0001`` (leaf prefix RAW, seq 1).
+        # Block it with a pre-existing item carrying that exact SKU.
         db_session.add(
             Item(
-                sku="RM-001",
+                sku="RAW-0001",
                 name="A",
                 taxonomy_node_id=leaf.id,
                 unit="g",
@@ -803,9 +755,7 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="RM-001", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -818,7 +768,7 @@ class TestItemCreate:
         leaf = _make_leaf(db_session)
         db_session.add(
             Item(
-                sku="RM-001",
+                sku="RAW-0001",
                 name="A",
                 taxonomy_node_id=leaf.id,
                 unit="g",
@@ -830,29 +780,21 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="RM-001", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_missing_node_id_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_missing_node_id_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         # Pass empty string for taxonomy_node_id.
         payload = _create_payload(taxonomy_node_id=0, csrf=_csrf(client))
         payload["taxonomy_node_id"] = ""
-        resp = client.post(
-            "/admin/items", data=payload, follow_redirects=False
-        )
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
         assert resp.status_code == 400
 
-    def test_create_unknown_node_id_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_unknown_node_id_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -862,9 +804,7 @@ class TestItemCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_archived_node_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_archived_node_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         leaf.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
@@ -872,25 +812,19 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_non_leaf_node_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_non_leaf_node_400(self, client: TestClient, db_session: Session) -> None:
         """A top-level node with an active sub-cat is NOT a leaf."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         top, _child = _make_top_with_child(db_session)
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=top.id, csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=top.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -904,18 +838,21 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=child.id, csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=child.id, csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalar_one()
         assert item.taxonomy_node_id == child.id
 
-    def test_create_invalid_tracking_mode_400(
+    def test_create_invalid_tracking_mode_silently_overridden(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """The form-submitted ``tracking_mode`` is overridden on create by
+        the leaf's effective archetype (``bulk`` → ``qty`` here). A
+        ``"bogus"`` submission therefore doesn't even reach validation —
+        the route saves the archetype-derived value and 303s. The edit
+        form remains where users correct mistakes."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -928,11 +865,11 @@ class TestItemCreate:
             ),
             follow_redirects=False,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.tracking_mode is TrackingMode.QTY
 
-    def test_create_negative_threshold_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_negative_threshold_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -964,14 +901,10 @@ class TestItemCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_archived_supplier_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_archived_supplier_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        supplier = Supplier(
-            name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        supplier = Supplier(name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(supplier)
         db_session.commit()
         db_session.refresh(supplier)
@@ -987,14 +920,10 @@ class TestItemCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_archived_location_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_archived_location_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        loc = Location(
-            name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        loc = Location(name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
         db_session.commit()
         db_session.refresh(loc)
@@ -1010,9 +939,7 @@ class TestItemCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_unknown_supplier_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_unknown_supplier_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -1027,9 +954,7 @@ class TestItemCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_dup_qr_code_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_dup_qr_code_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         db_session.add(
@@ -1065,17 +990,13 @@ class TestItemCreate:
         _login_as(client, mgr)
         resp1 = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="A", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, sku="A", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp1.status_code == 303
         resp2 = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="B", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, sku="B", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp2.status_code == 303
@@ -1083,9 +1004,7 @@ class TestItemCreate:
         assert len(rows) == 2
         assert all(r.qr_code is None for r in rows)
 
-    def test_create_failure_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_failure_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         # A blank-name submit is the simplest way to trigger a validation
         # failure post the SKU auto-gen change. (Blank SKU now auto-generates
         # rather than 400ing — see ``test_create_blank_sku_is_auto_generated``.)
@@ -1094,9 +1013,7 @@ class TestItemCreate:
         _login_as(client, mgr)
         client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, name="", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, name="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert _audit_rows(db_session) == []
@@ -1108,9 +1025,7 @@ class TestItemCreate:
 
 
 class TestItemEdit:
-    def test_get_edit_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -1129,17 +1044,13 @@ class TestItemEdit:
         assert "RM-1" in resp.text
         assert "Wire" in resp.text
 
-    def test_edit_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/9999/edit")
         assert resp.status_code == 404
 
-    def test_edit_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -1171,9 +1082,7 @@ class TestItemEdit:
         assert item.name == "Silver wire"
         assert item.reorder_threshold == Decimal("50")
 
-    def test_edit_records_sparse_diff_only(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_records_sparse_diff_only(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -1208,9 +1117,7 @@ class TestItemEdit:
         assert row.before_json["name"] == "Wire"
         assert row.after_json["name"] == "Silver wire"
 
-    def test_edit_no_op_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_no_op_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -1238,9 +1145,7 @@ class TestItemEdit:
         )
         assert _audit_rows(db_session, action="item.updated") == []
 
-    def test_edit_can_move_to_another_leaf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_can_move_to_another_leaf(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf_a = _make_leaf(db_session, "A")
         leaf_b = _make_leaf(db_session, "B")
@@ -1268,9 +1173,7 @@ class TestItemEdit:
         db_session.refresh(item)
         assert item.taxonomy_node_id == leaf_b.id
 
-    def test_edit_rejects_move_to_non_leaf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_rejects_move_to_non_leaf(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, "Leaf")
         top, _child = _make_top_with_child(db_session)
@@ -1297,9 +1200,7 @@ class TestItemEdit:
         )
         assert resp.status_code == 400
 
-    def test_edit_duplicate_sku_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_duplicate_sku_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         a = Item(
@@ -1332,9 +1233,7 @@ class TestItemEdit:
         )
         assert resp.status_code == 400
 
-    def test_edit_keeps_current_qty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_keeps_current_qty(self, client: TestClient, db_session: Session) -> None:
         """current_qty isn't on the form; edits must not zero it out."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
@@ -1443,9 +1342,7 @@ class TestItemArchive:
         rows = _audit_rows(db_session, action="item.unarchived")
         assert len(rows) == 1
 
-    def test_archive_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -1455,9 +1352,7 @@ class TestItemArchive:
         )
         assert resp.status_code == 404
 
-    def test_unarchive_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -1484,9 +1379,7 @@ class TestOfficeEdit:
     the way ``current_qty`` is already handled.
     """
 
-    def test_office_get_edit_form(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_edit_form(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -1712,9 +1605,7 @@ class TestArchivedFKPreservation:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        supplier = Supplier(
-            name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        supplier = Supplier(name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(supplier)
         db_session.commit()
         db_session.refresh(supplier)
@@ -1739,9 +1630,7 @@ class TestArchivedFKPreservation:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        loc = Location(
-            name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        loc = Location(name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
         db_session.commit()
         db_session.refresh(loc)
@@ -1815,9 +1704,7 @@ class TestArchivedFKPreservation:
         """Submit the same archived supplier id → 303, supplier unchanged, no diff for that field."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        supplier = Supplier(
-            name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        supplier = Supplier(name="Old Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(supplier)
         db_session.commit()
         db_session.refresh(supplier)
@@ -1860,9 +1747,7 @@ class TestArchivedFKPreservation:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        loc = Location(
-            name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        loc = Location(name="Old Bench", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
         db_session.commit()
         db_session.refresh(loc)
@@ -2152,18 +2037,14 @@ class TestItemCustomFieldsCreate:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/new?node_id={leaf.id}")
         assert resp.status_code == 200
         assert 'name="cf_alloy"' in resp.text
         assert "Alloy" in resp.text
 
-    def test_form_omits_archived_fields(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_omits_archived_fields(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _make_field_def(
@@ -2188,14 +2069,10 @@ class TestItemCustomFieldsCreate:
         assert resp.status_code == 200
         assert "Category fields" not in resp.text
 
-    def test_create_persists_text_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_persists_text_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_alloy"] = "silver"
@@ -2217,14 +2094,10 @@ class TestItemCustomFieldsCreate:
         assert audit[0].after_json is not None
         assert audit[0].after_json.get("custom_fields") == {"alloy": "silver"}
 
-    def test_create_persists_number_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_persists_number_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Karat", field_type=FieldType.NUMBER
-        )
+        _make_field_def(db_session, leaf, name="Karat", field_type=FieldType.NUMBER)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_karat"] = "18"
@@ -2233,14 +2106,10 @@ class TestItemCustomFieldsCreate:
         ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
         assert ifv.value_number == 18
 
-    def test_create_persists_decimal_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_persists_decimal_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Density", field_type=FieldType.DECIMAL
-        )
+        _make_field_def(db_session, leaf, name="Density", field_type=FieldType.DECIMAL)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_density"] = "10.49"
@@ -2253,14 +2122,10 @@ class TestItemCustomFieldsCreate:
         assert audit.after_json is not None
         assert audit.after_json["custom_fields"] == {"density": "10.49"}
 
-    def test_create_persists_date_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_persists_date_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Last Calibrated", field_type=FieldType.DATE
-        )
+        _make_field_def(db_session, leaf, name="Last Calibrated", field_type=FieldType.DATE)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_last_calibrated"] = "2026-04-15"
@@ -2272,18 +2137,14 @@ class TestItemCustomFieldsCreate:
         assert ifv.value_date == date_cls(2026, 4, 15)
         audit = _audit_rows(db_session, action="item.created")[0]
         assert audit.after_json is not None
-        assert audit.after_json["custom_fields"] == {
-            "last_calibrated": "2026-04-15"
-        }
+        assert audit.after_json["custom_fields"] == {"last_calibrated": "2026-04-15"}
 
     def test_create_persists_boolean_true_when_checked(
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN
-        )
+        _make_field_def(db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_hazardous"] = "true"
@@ -2301,9 +2162,7 @@ class TestItemCustomFieldsCreate:
         """
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN
-        )
+        _make_field_def(db_session, leaf, name="Hazardous", field_type=FieldType.BOOLEAN)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         # cf_hazardous intentionally absent — checkbox unchecked.
@@ -2312,9 +2171,7 @@ class TestItemCustomFieldsCreate:
         ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
         assert ifv.value_bool is False
 
-    def test_create_persists_select_value(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_persists_select_value(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _make_field_def(
@@ -2422,14 +2279,10 @@ class TestItemCustomFieldsCreate:
         assert resp.status_code == 400
         assert "Confirmed" in resp.text
 
-    def test_create_bad_number_value_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_bad_number_value_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Karat", field_type=FieldType.NUMBER
-        )
+        _make_field_def(db_session, leaf, name="Karat", field_type=FieldType.NUMBER)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_karat"] = "not-a-number"
@@ -2437,14 +2290,10 @@ class TestItemCustomFieldsCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(Item)).first() is None
 
-    def test_create_bad_date_value_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_bad_date_value_is_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        _make_field_def(
-            db_session, leaf, name="Calibrated", field_type=FieldType.DATE
-        )
+        _make_field_def(db_session, leaf, name="Calibrated", field_type=FieldType.DATE)
         _login_as(client, mgr)
         payload = _create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client))
         payload["cf_calibrated"] = "yesterday"
@@ -2524,15 +2373,9 @@ class TestItemCustomFieldsEdit:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
@@ -2552,11 +2395,7 @@ class TestItemCustomFieldsEdit:
             archived=True,
         )
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="ancient"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="ancient"))
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/edit")
@@ -2569,9 +2408,7 @@ class TestItemCustomFieldsEdit:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         item = _existing_item(db_session, leaf)
         _login_as(client, mgr)
         payload = _create_payload(
@@ -2581,9 +2418,7 @@ class TestItemCustomFieldsEdit:
             csrf=_csrf(client),
         )
         payload["cf_alloy"] = "silver"
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
 
         rows = list(db_session.execute(select(ItemFieldValue)).scalars())
@@ -2618,12 +2453,8 @@ class TestItemCustomFieldsEdit:
         item = _existing_item(db_session, leaf)
         db_session.add_all(
             [
-                ItemFieldValue(
-                    item_id=item.id, field_def_id=a.id, value_text="silver"
-                ),
-                ItemFieldValue(
-                    item_id=item.id, field_def_id=b.id, value_number=18
-                ),
+                ItemFieldValue(item_id=item.id, field_def_id=a.id, value_text="silver"),
+                ItemFieldValue(item_id=item.id, field_def_id=b.id, value_number=18),
             ]
         )
         db_session.commit()
@@ -2636,9 +2467,7 @@ class TestItemCustomFieldsEdit:
         )
         payload["cf_alloy"] = "gold"  # changed
         payload["cf_karat"] = "18"  # unchanged
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
 
         audit = _audit_rows(db_session, action="item.updated")
@@ -2661,15 +2490,9 @@ class TestItemCustomFieldsEdit:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db_session.commit()
         _login_as(client, mgr)
         payload = _create_payload(
@@ -2679,9 +2502,7 @@ class TestItemCustomFieldsEdit:
             csrf=_csrf(client),
         )
         payload["cf_alloy"] = ""
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
 
         assert db_session.execute(select(ItemFieldValue)).first() is None
@@ -2695,15 +2516,9 @@ class TestItemCustomFieldsEdit:
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db_session.commit()
         _login_as(client, mgr)
         payload = _create_payload(
@@ -2713,9 +2528,7 @@ class TestItemCustomFieldsEdit:
             csrf=_csrf(client),
         )
         payload["cf_alloy"] = "silver"
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="item.updated") == []
 
@@ -2732,11 +2545,7 @@ class TestItemCustomFieldsEdit:
             required=True,
         )
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db_session.commit()
         _login_as(client, mgr)
         payload = _create_payload(
@@ -2746,9 +2555,7 @@ class TestItemCustomFieldsEdit:
             csrf=_csrf(client),
         )
         payload["cf_alloy"] = ""
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 400
         # Existing row preserved (atomic: 400 short-circuits before any write).
         ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
@@ -2788,9 +2595,7 @@ class TestItemCustomFieldsEdit:
             taxonomy_node_id=leaf.id,
             csrf=_csrf(client),
         )
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
 
         # Archived value still present.
@@ -2810,15 +2615,9 @@ class TestItemCustomFieldsEdit:
         """Custom-field editing is part of editing the item, which Office can do."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
-        fd = _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT
-        )
+        fd = _make_field_def(db_session, leaf, name="Alloy", field_type=FieldType.TEXT)
         item = _existing_item(db_session, leaf)
-        db_session.add(
-            ItemFieldValue(
-                item_id=item.id, field_def_id=fd.id, value_text="silver"
-            )
-        )
+        db_session.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
         db_session.commit()
         _login_as(client, office)
         payload = _create_payload(
@@ -2828,9 +2627,7 @@ class TestItemCustomFieldsEdit:
             csrf=_csrf(client),
         )
         payload["cf_alloy"] = "gold"
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 303
         ifv = db_session.execute(select(ItemFieldValue)).scalars().one()
         assert ifv.value_text == "gold"
@@ -2849,9 +2646,7 @@ class TestItemCustomFieldsEdit:
 
 
 class TestWorkshopReadOnlyView:
-    def _seed(
-        self, db: Session, *, with_custom_field: bool = False
-    ) -> tuple[User, Item]:
+    def _seed(self, db: Session, *, with_custom_field: bool = False) -> tuple[User, Item]:
         worker = _make_user(db, email="w@x.test", role=Role.WORKSHOP)
         leaf = _make_leaf(db)
         item = Item(
@@ -2875,11 +2670,7 @@ class TestWorkshopReadOnlyView:
             db.add(fd)
             db.commit()
             db.refresh(fd)
-            db.add(
-                ItemFieldValue(
-                    item_id=item.id, field_def_id=fd.id, value_text="silver"
-                )
-            )
+            db.add(ItemFieldValue(item_id=item.id, field_def_id=fd.id, value_text="silver"))
             db.commit()
         return worker, item
 
@@ -2893,9 +2684,7 @@ class TestWorkshopReadOnlyView:
         assert 'data-testid="view-item"' in resp.text
         assert 'data-testid="edit-item"' not in resp.text
 
-    def test_list_hides_new_cta_for_workshop(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_hides_new_cta_for_workshop(self, client: TestClient, db_session: Session) -> None:
         worker, _ = self._seed(db_session)
         _login_as(client, worker)
         resp = client.get("/admin/items")
@@ -2910,9 +2699,7 @@ class TestWorkshopReadOnlyView:
         assert 'data-testid="archive-item"' not in resp.text
         assert 'data-testid="unarchive-item"' not in resp.text
 
-    def test_list_shows_edit_link_for_office(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_edit_link_for_office(self, client: TestClient, db_session: Session) -> None:
         """Confirms the link-label split: Office still sees 'Edit'."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         leaf = _make_leaf(db_session)
@@ -2959,13 +2746,9 @@ class TestWorkshopReadOnlyView:
             assert open_lt != -1
             assert close_gt != -1
             tag = body[open_lt:close_gt]
-            assert "disabled" in tag, (
-                f"input {tid!r} is not disabled in workshop view: {tag!r}"
-            )
+            assert "disabled" in tag, f"input {tid!r} is not disabled in workshop view: {tag!r}"
 
-    def test_form_hides_submit_for_workshop(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_hides_submit_for_workshop(self, client: TestClient, db_session: Session) -> None:
         worker, item = self._seed(db_session)
         _login_as(client, worker)
         resp = client.get(f"/admin/items/{item.id}/edit")
@@ -2979,9 +2762,7 @@ class TestWorkshopReadOnlyView:
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert 'data-testid="item-form-readonly-note"' in resp.text
 
-    def test_form_title_is_view_for_workshop(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_title_is_view_for_workshop(self, client: TestClient, db_session: Session) -> None:
         worker, item = self._seed(db_session)
         _login_as(client, worker)
         resp = client.get(f"/admin/items/{item.id}/edit")
@@ -3044,9 +2825,7 @@ class TestWorkshopReadOnlyView:
 class TestRequiresCheckoutFlag:
     """C1: items list shows the flag + filter; form shows explanatory help."""
 
-    def _seed_two(
-        self, db: Session
-    ) -> tuple[User, Item, Item]:
+    def _seed_two(self, db: Session) -> tuple[User, Item, Item]:
         mgr = _make_user(db, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db)
         flagged = Item(
@@ -3071,9 +2850,7 @@ class TestRequiresCheckoutFlag:
         db.refresh(plain)
         return mgr, flagged, plain
 
-    def test_list_shows_yes_for_flagged_item(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_yes_for_flagged_item(self, client: TestClient, db_session: Session) -> None:
         mgr, _flagged, _plain = self._seed_two(db_session)
         _login_as(client, mgr)
         resp = client.get("/admin/items")
@@ -3119,9 +2896,7 @@ class TestRequiresCheckoutFlag:
         assert "TOOL-A" in body
         assert "MAT-A" not in body
 
-    def test_list_filter_blank_shows_all(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_filter_blank_shows_all(self, client: TestClient, db_session: Session) -> None:
         mgr, _flagged, _plain = self._seed_two(db_session)
         _login_as(client, mgr)
         resp = client.get("/admin/items")
@@ -3140,9 +2915,7 @@ class TestRequiresCheckoutFlag:
         assert "TOOL-A" in body
         assert "MAT-A" in body
 
-    def test_list_filter_no_does_not_filter(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_filter_no_does_not_filter(self, client: TestClient, db_session: Session) -> None:
         """``requires_checkout=no`` doesn't mean 'show only non-flagged' — same as no filter."""
         mgr, _flagged, _plain = self._seed_two(db_session)
         _login_as(client, mgr)
@@ -3208,9 +2981,7 @@ class TestRequiresCheckoutFlag:
         assert "TOOL-OLD" in body
         assert "MAT-OLD" not in body
 
-    def test_form_renders_help_note(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_renders_help_note(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_leaf(db_session)
         _login_as(client, mgr)
@@ -3251,35 +3022,25 @@ class TestItemsListCsvRoleEnforcement:
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        u = _make_user(
-            db_session, email="p@x.test", role=None, status=UserStatus.PENDING
-        )
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
+        u = _make_user(db_session, email="p@x.test", role=None, status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 403
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 200
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
@@ -3317,9 +3078,7 @@ class TestItemsListCsvHeaders:
 
 
 class TestItemsListCsvBody:
-    def test_empty_emits_only_header_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
@@ -3329,9 +3088,7 @@ class TestItemsListCsvBody:
             "reorder_threshold,reorder_qty,requires_checkout\r\n"
         )
 
-    def test_one_item_one_data_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_one_item_one_data_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, name="Raw Materials")
         item = Item(
@@ -3367,9 +3124,7 @@ class TestItemsListCsvBody:
         assert Decimal(cells[8]) == Decimal("20")
         assert cells[9] == "no"
 
-    def test_flagged_item_renders_yes(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flagged_item_renders_yes(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, name="Tools")
         item = Item(
@@ -3391,9 +3146,7 @@ class TestItemsListCsvBody:
         # reorder; ends with a CRLF.
         assert ",unique,0.0000,0.0000,0.0000,yes\r\n" in resp.text
 
-    def test_show_filter_applies_to_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         active = Item(
@@ -3454,9 +3207,7 @@ class TestItemsListCsvBody:
         assert "TOOL-A" in resp.text
         assert "MAT-A" not in resp.text
 
-    def test_sku_ordering_preserved_in_csv(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_sku_ordering_preserved_in_csv(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         # Insert in non-alphabetical order to verify the route's _LIST_ORDER
@@ -3490,9 +3241,7 @@ class TestItemsListCsvBody:
     ) -> None:
         """Sub-cat under a top: category cell is 'Top / Leaf'."""
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _top, child = _make_top_with_child(
-            db_session, top_name="Tools", child_name="Hand"
-        )
+        _top, child = _make_top_with_child(db_session, top_name="Tools", child_name="Hand")
         item = Item(
             sku="HAM-1",
             name="Hammer",
@@ -3512,9 +3261,7 @@ class TestItemsListCsvBody:
 
 
 class TestItemsListCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/items")
@@ -3524,9 +3271,7 @@ class TestItemsListCsvHtmlBranch:
             'data-testid="items-empty"' in resp.text
         )
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/items?format=garbage")
@@ -3535,9 +3280,7 @@ class TestItemsListCsvHtmlBranch:
 
 
 class TestItemsListCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = Item(
@@ -3549,15 +3292,11 @@ class TestItemsListCsvReadOnly:
         )
         db_session.add(item)
         db_session.commit()
-        before = len(
-            list(db_session.execute(select(AuditLog)).scalars().all())
-        )
+        before = len(list(db_session.execute(select(AuditLog)).scalars().all()))
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 200
-        after = len(
-            list(db_session.execute(select(AuditLog)).scalars().all())
-        )
+        after = len(list(db_session.execute(select(AuditLog)).scalars().all()))
         assert after == before
 
 
@@ -3609,10 +3348,7 @@ class TestItemsListCsvLink:
         _login_as(client, u)
         resp = client.get("/admin/items?requires_checkout=yes")
         # The link's href carries requires_checkout=yes when the filter is on.
-        assert "format=csv&amp;show=active&amp;requires_checkout=yes" in (
-            resp.text
-        )
-
+        assert "format=csv&amp;show=active&amp;requires_checkout=yes" in (resp.text)
 
 
 class TestItemCustomFieldsFragmentRoute:
@@ -3631,12 +3367,8 @@ class TestItemCustomFieldsFragmentRoute:
         resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=1")
         assert resp.status_code == 401
 
-    def test_pending_blocked(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        u = _make_user(
-            db_session, email="p@x.test", role=None, status=UserStatus.PENDING
-        )
+    def test_pending_blocked(self, client: TestClient, db_session: Session) -> None:
+        u = _make_user(db_session, email="p@x.test", role=None, status=UserStatus.PENDING)
         _login_as(client, u)
         resp = client.get("/admin/items/_custom-fields?taxonomy_node_id=1")
         assert resp.status_code == 403
@@ -3646,11 +3378,17 @@ class TestItemCustomFieldsFragmentRoute:
     ) -> None:
         leaf = _make_leaf(db_session)
         _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
             required=True,
         )
         _make_field_def(
-            db_session, leaf, name="Karat", field_type=FieldType.SELECT,
+            db_session,
+            leaf,
+            name="Karat",
+            field_type=FieldType.SELECT,
             options=["9", "14", "18"],
         )
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3667,36 +3405,36 @@ class TestItemCustomFieldsFragmentRoute:
         # No <html> wrapper — this is a fragment, not a full page.
         assert "<!doctype" not in resp.text.lower()
 
-    def test_office_can_render_partial(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_can_render_partial(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
         )
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
         resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
         assert resp.status_code == 200
 
-    def test_workshop_can_render_partial(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_can_render_partial(self, client: TestClient, db_session: Session) -> None:
         # Workshop sees the items edit form read-only, but ``hx-trigger`` won't
         # fire on a disabled select; the permissive gate is just so a future
         # role-widening of the form doesn't 403 here silently.
         leaf = _make_leaf(db_session)
         _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
         )
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
         resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
         assert resp.status_code == 200
 
-    def test_admin_always_passes(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_always_passes(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         u = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, u)
@@ -3742,15 +3480,19 @@ class TestItemCustomFieldsFragmentRoute:
         assert resp.status_code == 200
         assert "Category fields" not in resp.text
 
-    def test_archived_field_def_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_field_def_excluded(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         _make_field_def(
-            db_session, leaf, name="Alloy", field_type=FieldType.TEXT,
+            db_session,
+            leaf,
+            name="Alloy",
+            field_type=FieldType.TEXT,
         )
         _make_field_def(
-            db_session, leaf, name="Old", field_type=FieldType.TEXT,
+            db_session,
+            leaf,
+            name="Old",
+            field_type=FieldType.TEXT,
             archived=True,
         )
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3793,30 +3535,29 @@ class TestItemFormHtmxWiring:
 
 
 class TestSkuAutoGeneration:
-    """SKU is auto-generated on create when the form / payload omits it.
+    """SKU is server-allocated on create under the taxonomy refinement.
 
-    The create form's SKU input was removed in the items-form-simplification
-    slice; explicit POSTs (existing tests, the public API surface) can still
-    pass their own SKU and override the auto-gen.
+    Client-supplied ``sku`` form values are ignored; the route composes the
+    SKU from the leaf's ancestor prefixes plus the leaf's monotonic
+    ``next_sequence``. See ``docs/taxonomy-refinement-plan.md`` and
+    ``app.sku``.
     """
 
-    def test_blank_sku_uses_leaf_name_prefix(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_sku_uses_leaf_name_prefix(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, "Wax Injection Moulds")
         _login_as(client, mgr)
         resp = client.post(
             "/admin/items",
-            data=_create_payload(
-                taxonomy_node_id=leaf.id, sku="", csrf=_csrf(client)
-            ),
+            data=_create_payload(taxonomy_node_id=leaf.id, sku="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         item = db_session.execute(select(Item)).scalars().one()
-        # First 3 alphanumeric chars of leaf name uppercased + 4-digit seq.
+        # Leaf name "Wax Injection Moulds" → derived prefix "WAX". First
+        # item under the leaf → sequence 1.
         assert item.sku == "WAX-0001"
+        assert item.assigned_sequence == 1
 
     def test_sequence_increments_within_a_prefix(
         self, client: TestClient, db_session: Session
@@ -3837,15 +3578,19 @@ class TestSkuAutoGeneration:
             )
             assert resp.status_code == 303
             assert (
-                db_session.execute(
-                    select(Item).where(Item.name == name)
-                ).scalar_one().sku
+                db_session.execute(select(Item).where(Item.name == name)).scalar_one().sku
                 == f"RAW-{i:04d}"
             )
 
-    def test_explicit_sku_overrides_auto_gen(
+    def test_explicit_sku_is_ignored_on_create(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """Behaviour change: a client-supplied SKU on create is ignored.
+
+        Pre-refinement the route honoured a hand-rolled SKU; the
+        refinement gives the server exclusive ownership so an item's SKU
+        always traces back to its leaf's ancestor chain.
+        """
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         _login_as(client, mgr)
@@ -3859,36 +3604,15 @@ class TestSkuAutoGeneration:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert (
-            db_session.execute(select(Item)).scalars().one().sku
-            == "MY-OWN-SKU"
-        )
-
-    def test_no_leaf_falls_back_to_itm_prefix(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        # Even though the route 400s on missing taxonomy_node_id, the helper
-        # itself defends against a None leaf with the ITM prefix. Pin via a
-        # non-numeric name leaf so the prefix path is exercised.
-        from app.items import _generate_sku
-        sku = _generate_sku(db_session, None)
-        assert sku == "ITM-0001"
-
-    def test_leaf_with_non_alpha_name_uses_itm(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        from app.items import _generate_sku
-        leaf = _make_leaf(db_session, "!@#$%^")
-        sku = _generate_sku(db_session, leaf)
-        assert sku == "ITM-0001"
+        item = db_session.execute(select(Item)).scalars().one()
+        assert item.sku != "MY-OWN-SKU"
+        assert item.sku == "RAW-0001"
 
 
 class TestItemsFormNotesRemoved:
     """Notes field removed from both create and edit forms."""
 
-    def test_create_form_has_no_notes_input(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_form_has_no_notes_input(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/new")
@@ -3896,9 +3620,7 @@ class TestItemsFormNotesRemoved:
         assert 'data-testid="item-notes-input"' not in resp.text
         assert 'name="notes"' not in resp.text
 
-    def test_edit_form_has_no_notes_input(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_form_has_no_notes_input(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         item = _existing_item(db_session, leaf)
@@ -3939,8 +3661,7 @@ class TestItemsFragmentDefaults:
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get(
-            f"/admin/items/_custom-fields"
-            f"?taxonomy_node_id={leaf.id}&include_defaults=1"
+            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}&include_defaults=1"
         )
         assert resp.status_code == 200
         # OOB swaps for the keys the leaf actually sets.
@@ -3959,8 +3680,7 @@ class TestItemsFragmentDefaults:
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get(
-            f"/admin/items/_custom-fields"
-            f"?taxonomy_node_id={leaf.id}&include_defaults=1"
+            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}&include_defaults=1"
         )
         assert resp.status_code == 200
         # ``unit`` does swap, ``tracking_mode`` doesn't (would erase user input).
@@ -3979,20 +3699,16 @@ class TestItemsFragmentDefaults:
         leaf.defaults_json = {"unit": "g", "tracking_mode": "unique"}
         db_session.commit()
         _login_as(client, mgr)
-        resp = client.get(
-            f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}"
-        )
+        resp = client.get(f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}")
         assert resp.status_code == 200
-        assert 'hx-swap-oob' not in resp.text
+        assert "hx-swap-oob" not in resp.text
 
 
 class TestItemsCreateFormPrefillsFromDefaults:
     """``GET /admin/items/new?node_id=…`` server-side renders inputs with the
     leaf's defaults_json values pre-filled."""
 
-    def test_unit_default_pre_fills_input(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unit_default_pre_fills_input(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         leaf.defaults_json = {"unit": "g"}
@@ -4010,9 +3726,7 @@ class TestItemsCreateFormPrefillsFromDefaults:
         tag = body[tag_start:tag_end]
         assert 'value="g"' in tag
 
-    def test_no_node_id_no_defaults_applied(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_node_id_no_defaults_applied(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session)
         leaf.defaults_json = {"unit": "g"}
@@ -4026,7 +3740,7 @@ class TestItemsCreateFormPrefillsFromDefaults:
         tag_start = body.rfind("<", 0, unit_idx)
         tag_end = body.find(">", unit_idx)
         tag = body[tag_start:tag_end]
-        assert 'value=""' in tag or 'value' not in tag.split('data-testid')[0]
+        assert 'value=""' in tag or "value" not in tag.split("data-testid")[0]
 
 
 class TestItemsFormReRendersOnValidationError:
@@ -4049,9 +3763,7 @@ class TestItemsFormReRendersOnValidationError:
             required=True,
         )
         _login_as(client, mgr)
-        payload = _create_payload(
-            taxonomy_node_id=leaf.id, name="Bar", csrf=_csrf(client)
-        )
+        payload = _create_payload(taxonomy_node_id=leaf.id, name="Bar", csrf=_csrf(client))
         payload["cf_purity"] = "not-a-number"
         resp = client.post("/admin/items", data=payload, follow_redirects=False)
         # Form re-rendered, not raw JSON.
@@ -4108,13 +3820,9 @@ class TestItemsFormReRendersOnValidationError:
             required=True,
         )
         _login_as(client, mgr)
-        payload = _create_payload(
-            taxonomy_node_id=leaf.id, name="Renamed", csrf=_csrf(client)
-        )
+        payload = _create_payload(taxonomy_node_id=leaf.id, name="Renamed", csrf=_csrf(client))
         payload["cf_purity"] = "bogus"
-        resp = client.post(
-            f"/admin/items/{item.id}", data=payload, follow_redirects=False
-        )
+        resp = client.post(f"/admin/items/{item.id}", data=payload, follow_redirects=False)
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="item-form-error"' in resp.text
@@ -4146,9 +3854,7 @@ class TestLeafOptionsNonLeafLabel:
         db_session.add(parent)
         db_session.commit()
         item = _existing_item(db_session, parent, name="Pre-existing")
-        sub = TaxonomyNode(
-            parent_id=parent.id, name="Silver", sort_order=10
-        )
+        sub = TaxonomyNode(parent_id=parent.id, name="Silver", sort_order=10)
         db_session.add(sub)
         db_session.commit()
         _login_as(client, mgr)
@@ -4157,8 +3863,10 @@ class TestLeafOptionsNonLeafLabel:
         # The parent appears as a selectable option (still the item's
         # current_id), but is NOT labelled archived.
         assert "Raw Materials (archived)" not in resp.text
-        # New label clearly explains the state.
-        assert "no longer a leaf" in resp.text
+        # New post-refinement label clearly flags the unreachable
+        # destination. ``_pickable_options`` flips ineligible-but-present
+        # current_ids to "no longer a pickable destination".
+        assert "no longer a pickable destination" in resp.text
 
     def test_archived_parent_still_labelled_archived(
         self, client: TestClient, db_session: Session
@@ -4176,3 +3884,226 @@ class TestLeafOptionsNonLeafLabel:
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert resp.status_code == 200
         assert "Old Cat (archived)" in resp.text
+
+
+# ===========================================================================
+# Taxonomy refinement: archetype-aware item create + list filter
+# ===========================================================================
+
+
+from app.models import Archetype  # noqa: E402
+
+
+class TestPerArchetypeCreate:
+    """Per-archetype item create paths.
+
+    Confirms the route picks the right SKU shape + tracking_mode for each
+    archetype, and that unique-variant items get an auto-created depth-2
+    leaf below the picked depth-1 sub-cat.
+    """
+
+    def _bulk_leaf(self, db: Session) -> TaxonomyNode:
+        node = TaxonomyNode(
+            name="Tools",
+            archetype=Archetype.BULK,
+            sku_prefix="TOOL",
+        )
+        db.add(node)
+        db.commit()
+        db.refresh(node)
+        return node
+
+    def _unique_leaf(self, db: Session) -> TaxonomyNode:
+        node = TaxonomyNode(
+            name="Rings",
+            archetype=Archetype.UNIQUE,
+            sku_prefix="RING",
+        )
+        db.add(node)
+        db.commit()
+        db.refresh(node)
+        return node
+
+    def _uv_tree(self, db: Session) -> tuple[TaxonomyNode, TaxonomyNode]:
+        top = TaxonomyNode(
+            name="RTS Rings",
+            archetype=Archetype.UNIQUE_VARIANT,
+            sku_prefix="RTS",
+        )
+        db.add(top)
+        db.commit()
+        db.refresh(top)
+        sub = TaxonomyNode(name="Emma", parent_id=top.id, sku_prefix="EM")
+        db.add(sub)
+        db.commit()
+        db.refresh(sub)
+        return top, sub
+
+    def test_bulk_create_yields_two_segment_sku_and_qty_mode(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = self._bulk_leaf(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                taxonomy_node_id=leaf.id,
+                # client-supplied tracking_mode is forced to archetype.
+                tracking_mode="unique",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.sku == "TOOL-0001"
+        assert item.assigned_sequence == 1
+        assert item.tracking_mode is TrackingMode.QTY
+        assert item.taxonomy_node_id == leaf.id
+
+    def test_unique_create_yields_two_segment_sku_and_unique_mode(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = self._unique_leaf(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=leaf.id, csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.sku == "RING-0001"
+        assert item.tracking_mode is TrackingMode.UNIQUE
+        assert item.assigned_sequence == 1
+
+    def test_unique_variant_create_yields_three_segments(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _top, sub = self._uv_tree(db_session)
+        _login_as(client, mgr)
+        # Pick the depth-1 sub-cat (the picker target for unique-variant
+        # trees). The server mints an auto-leaf and attaches the item to it.
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=sub.id, csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.sku == "RTS-EM-001"
+        assert item.tracking_mode is TrackingMode.UNIQUE
+        assert item.assigned_sequence == 1
+        # The item now lives on a freshly-created depth-2 auto-leaf, not
+        # on the sub-cat itself.
+        assert item.taxonomy_node_id != sub.id
+        leaf = db_session.get(TaxonomyNode, item.taxonomy_node_id)
+        assert leaf is not None
+        assert leaf.parent_id == sub.id
+        assert leaf.name == "001"
+        assert leaf.sku_prefix == "001"
+
+    def test_unique_variant_create_under_depth_0_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Picking the top-level node of a unique-variant tree is rejected
+        — items require the depth-1 sub-cat.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top, _sub = self._uv_tree(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=top.id, csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+
+    def test_unique_variant_sequential_creates_increment(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Two creates against the same sub-cat get SKUs ending in 001
+        then 002. The sub-cat's ``next_sequence`` advances to 3.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _top, sub = self._uv_tree(db_session)
+        _login_as(client, mgr)
+        for expected in ("RTS-EM-001", "RTS-EM-002"):
+            resp = client.post(
+                "/admin/items",
+                data=_create_payload(
+                    taxonomy_node_id=sub.id,
+                    name=f"Ring {expected}",
+                    csrf=_csrf(client),
+                ),
+                follow_redirects=False,
+            )
+            assert resp.status_code == 303
+        skus = list(db_session.execute(select(Item.sku).order_by(Item.id)).scalars().all())
+        assert skus == ["RTS-EM-001", "RTS-EM-002"]
+        db_session.expire_all()
+        sub_refreshed = db_session.get(TaxonomyNode, sub.id)
+        assert sub_refreshed is not None
+        assert sub_refreshed.next_sequence == 3
+
+    def test_client_supplied_sku_ignored_for_unique_variant(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _top, sub = self._uv_tree(db_session)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                taxonomy_node_id=sub.id,
+                sku="MY-OWN",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.sku != "MY-OWN"
+        assert item.sku == "RTS-EM-001"
+
+
+class TestListFilterDescendantTree:
+    def test_filter_by_uv_subcat_matches_descendant_items(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A list filter on a depth-1 unique_variant sub-cat must surface
+        items whose ``taxonomy_node_id`` points at depth-2 auto-leaves
+        under it.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        top = TaxonomyNode(
+            name="RTS",
+            archetype=Archetype.UNIQUE_VARIANT,
+            sku_prefix="RTS",
+        )
+        db_session.add(top)
+        db_session.commit()
+        db_session.refresh(top)
+        sub = TaxonomyNode(name="Emma", parent_id=top.id, sku_prefix="EM")
+        db_session.add(sub)
+        db_session.commit()
+        db_session.refresh(sub)
+        _login_as(client, mgr)
+        # Mint two items via the route so the auto-leaves are created.
+        client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=sub.id, name="A", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        client.post(
+            "/admin/items",
+            data=_create_payload(taxonomy_node_id=sub.id, name="B", csrf=_csrf(client)),
+            follow_redirects=False,
+        )
+        resp = client.get(f"/admin/items?node_id={sub.id}")
+        assert resp.status_code == 200
+        assert "RTS-EM-001" in resp.text
+        assert "RTS-EM-002" in resp.text

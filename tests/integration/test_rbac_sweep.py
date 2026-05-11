@@ -73,9 +73,7 @@ ALL_ROLES: tuple[str, ...] = (
     ROLE_ADMIN,
 )
 
-ALL_ACTIVE: frozenset[str] = frozenset(
-    {ROLE_WORKSHOP, ROLE_OFFICE, ROLE_MANAGER, ROLE_ADMIN}
-)
+ALL_ACTIVE: frozenset[str] = frozenset({ROLE_WORKSHOP, ROLE_OFFICE, ROLE_MANAGER, ROLE_ADMIN})
 
 # Per-gate: which roles get through the gate. Everyone else gets 401 (anon)
 # or 403 (any signed-in user without sufficient privilege).
@@ -137,6 +135,10 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/taxonomy/sub/99999", MANAGER),
     ("POST", "/admin/taxonomy/sub/99999/archive", MANAGER),
     ("POST", "/admin/taxonomy/sub/99999/unarchive", MANAGER),
+    # Depth-2 grandchildren list + create (taxonomy refinement).
+    ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren", MANAGER),
+    ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren/new", MANAGER),
+    ("POST", "/admin/taxonomy/99999/sub/99999/grandchildren", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields/new", MANAGER),
     ("POST", "/admin/taxonomy/99999/fields", MANAGER),
@@ -304,9 +306,7 @@ def _login_as(client: TestClient, user: User) -> None:
         data={"email": user.email, "sub": user.google_sub, "name": user.name},
         follow_redirects=False,
     )
-    assert resp.status_code == 303, (
-        f"_dev-login for {user.email} returned {resp.status_code}"
-    )
+    assert resp.status_code == 303, f"_dev-login for {user.email} returned {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------

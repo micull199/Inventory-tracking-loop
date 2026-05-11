@@ -91,9 +91,7 @@ _HTML5QRCODE_STUB_JS = """
 """
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -113,9 +111,7 @@ def _admin_promote(
     role: str,
 ) -> None:
     """Sign in as the bootstrap admin and promote ``email`` → ``role`` + active."""
-    admin_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    admin_context = context.browser.new_context() if context.browser else context
     admin_page = admin_context.new_page()
     _dev_login(
         admin_page,
@@ -178,17 +174,13 @@ def test_workshop_scans_via_camera_on_mobile_viewport(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("SC2C-CAM-001")
     mgr_page.get_by_test_id("item-name-input").fill("Camera test item")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Camera E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Camera E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("ea")
     mgr_page.get_by_test_id("item-qr-input").fill(_E2E_QR_PAYLOAD)
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
-    item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="SC2C-CAM-001"
-    )
+    item_row = mgr_page.locator('[data-testid="item-row"]', has_text="SC2C-CAM-001")
     item_id = item_row.get_attribute("data-item-id")
     assert item_id is not None
     mgr_page.close()
@@ -253,9 +245,7 @@ def test_workshop_scans_via_camera_on_mobile_viewport(
 
     # Step 9: Cleanup. Manager archives the item + category so downstream
     # walks see empty active lists.
-    cleanup_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    cleanup_context = context.browser.new_context() if context.browser else context
     cleanup_page = cleanup_context.new_page()
     _dev_login(
         cleanup_page,
@@ -265,16 +255,12 @@ def test_workshop_scans_via_camera_on_mobile_viewport(
         name="Scan Manager",
     )
     cleanup_page.goto(f"{app_server}/admin/items")
-    cleanup_row = cleanup_page.locator(
-        '[data-testid="item-row"]', has_text="SC2C-CAM-001"
-    )
+    cleanup_row = cleanup_page.locator('[data-testid="item-row"]', has_text="SC2C-CAM-001")
     cleanup_row.get_by_test_id("archive-item").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/items")
 
     cleanup_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = cleanup_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Camera E2E Cat"
-    )
+    cat_row = cleanup_page.locator('[data-testid="taxonomy-row"]', has_text="Camera E2E Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/taxonomy")
     cleanup_page.close()

@@ -118,9 +118,7 @@ class TestAdminUsersRoleEnforcement:
         resp = client.get("/admin/users")
         assert resp.status_code == 401
 
-    def test_workshop_user_gets_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_user_gets_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="w@example.com", role=Role.WORKSHOP)
         client.post(
             "/auth/_dev-login",
@@ -130,9 +128,7 @@ class TestAdminUsersRoleEnforcement:
         resp = client.get("/admin/users")
         assert resp.status_code == 403
 
-    def test_manager_user_gets_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_user_gets_403(self, client: TestClient, db_session: Session) -> None:
         user = _make_user(db_session, email="m@example.com", role=Role.MANAGER)
         client.post(
             "/auth/_dev-login",
@@ -241,9 +237,7 @@ class TestGoogleLogin:
         google_mock.authorize_redirect = AsyncMock(
             return_value=RedirectResponse(url=stub_url, status_code=307)
         )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/login", follow_redirects=False)
         assert resp.status_code == 307
@@ -276,17 +270,13 @@ class TestGoogleLogin:
 
         captured: dict[str, Any] = {}
 
-        async def _capture_authorize_redirect(
-            _request: Any, redirect_uri: str
-        ) -> RedirectResponse:
+        async def _capture_authorize_redirect(_request: Any, redirect_uri: str) -> RedirectResponse:
             captured["redirect_uri"] = redirect_uri
             return RedirectResponse(url="https://stub", status_code=307)
 
         google_mock = AsyncMock()
         google_mock.authorize_redirect = _capture_authorize_redirect
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/login", follow_redirects=False)
         assert resp.status_code == 307
@@ -388,9 +378,7 @@ class TestGoogleCallback:
         google_mock.authorize_access_token = AsyncMock(
             side_effect=OAuthError(error="invalid_state", description="state mismatch")
         )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/callback", follow_redirects=False)
         assert resp.status_code == 400
@@ -406,9 +394,7 @@ class TestGoogleCallback:
         google_mock.authorize_access_token = AsyncMock(
             return_value={"userinfo": {"sub": "g-no-email"}}
         )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/callback", follow_redirects=False)
         assert resp.status_code == 400
@@ -423,9 +409,7 @@ class TestGoogleCallback:
         google_mock.authorize_access_token = AsyncMock(
             return_value={"userinfo": {"email": "no-sub@example.com"}}
         )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/callback", follow_redirects=False)
         assert resp.status_code == 400
@@ -450,9 +434,7 @@ class TestGoogleCallback:
                 "name": "Separate Userinfo",
             }
         )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
         resp = client.get("/auth/google/callback", follow_redirects=False)
         assert resp.status_code == 303
@@ -507,28 +489,34 @@ class TestGoogleCallback:
         resp = client.get("/auth/google/callback", follow_redirects=False)
         assert resp.status_code == 303
 
-        user = db_session.execute(
-            select(User).where(User.google_sub == "g-boss-1")
-        ).scalar_one()
+        user = db_session.execute(select(User).where(User.google_sub == "g-boss-1")).scalar_one()
         assert user.role is Role.ADMIN
         assert user.status is UserStatus.ACTIVE
 
-        created_rows = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user.id,
-                AuditLog.action == "user.created",
+        created_rows = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user.id,
+                    AuditLog.action == "user.created",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(created_rows) == 1
 
-        bootstrap_rows = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user.id,
-                AuditLog.action == "user.bootstrap_admin_granted",
+        bootstrap_rows = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user.id,
+                    AuditLog.action == "user.bootstrap_admin_granted",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(bootstrap_rows) == 1
         bootstrap = bootstrap_rows[0]
         assert bootstrap.before_json == {"role": None, "status": "pending"}
@@ -553,9 +541,7 @@ class TestGoogleCallback:
             role=Role.ADMIN,
             status=UserStatus.ACTIVE,
         )
-        monkeypatch.setattr(
-            auth_module.settings, "bootstrap_admin_email", "newcomer@uc.example"
-        )
+        monkeypatch.setattr(auth_module.settings, "bootstrap_admin_email", "newcomer@uc.example")
 
         google_mock = AsyncMock()
         google_mock.authorize_access_token = AsyncMock(
@@ -578,13 +564,17 @@ class TestGoogleCallback:
         assert user.role is None
         assert user.status is UserStatus.PENDING
 
-        bootstrap_rows = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user.id,
-                AuditLog.action == "user.bootstrap_admin_granted",
+        bootstrap_rows = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user.id,
+                    AuditLog.action == "user.bootstrap_admin_granted",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert bootstrap_rows == []
 
     def test_callback_skips_bootstrap_when_email_does_not_match(
@@ -597,9 +587,7 @@ class TestGoogleCallback:
         someone else — the new user must stay pending and no bootstrap audit
         row is written.
         """
-        monkeypatch.setattr(
-            auth_module.settings, "bootstrap_admin_email", "owner@uc.example"
-        )
+        monkeypatch.setattr(auth_module.settings, "bootstrap_admin_email", "owner@uc.example")
 
         google_mock = AsyncMock()
         google_mock.authorize_access_token = AsyncMock(
@@ -622,13 +610,17 @@ class TestGoogleCallback:
         assert user.role is None
         assert user.status is UserStatus.PENDING
 
-        bootstrap_rows = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user.id,
-                AuditLog.action == "user.bootstrap_admin_granted",
+        bootstrap_rows = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user.id,
+                    AuditLog.action == "user.bootstrap_admin_granted",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert bootstrap_rows == []
 
     def test_callback_re_signin_does_not_emit_second_user_created_audit(
@@ -664,13 +656,17 @@ class TestGoogleCallback:
             select(User).where(User.google_sub == "g-returning-1")
         ).scalar_one()
 
-        created_rows = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user.id,
-                AuditLog.action == "user.created",
+        created_rows = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user.id,
+                    AuditLog.action == "user.created",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(created_rows) == 1
 
 
@@ -704,12 +700,8 @@ class TestDevLoginAndCallbackParity:
 
     def _patch_oauth(self, monkeypatch: pytest.MonkeyPatch) -> None:
         google_mock = AsyncMock()
-        google_mock.authorize_access_token = AsyncMock(
-            return_value={"userinfo": self._USERINFO}
-        )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        google_mock.authorize_access_token = AsyncMock(return_value={"userinfo": self._USERINFO})
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
 
     def _post_dev_login(self, client: TestClient) -> None:
         resp = client.post(
@@ -741,9 +733,7 @@ class TestDevLoginAndCallbackParity:
         )
         # dev_login is conditionally defined inside `if settings.app_env in
         # {"dev", "test"}:` — accessible at module level under APP_ENV=test.
-        assert hasattr(auth_module, "dev_login"), (
-            "dev_login should be mounted under APP_ENV=test"
-        )
+        assert hasattr(auth_module, "dev_login"), "dev_login should be mounted under APP_ENV=test"
         dev_login_src = inspect.getsource(auth_module.dev_login)
         assert "upsert_user_from_userinfo" in dev_login_src, (
             "dev_login must funnel through upsert_user_from_userinfo so its "
@@ -776,16 +766,10 @@ class TestDevLoginAndCallbackParity:
             "name": self._USERINFO["name"],
         }
         google_mock = AsyncMock()
-        google_mock.authorize_access_token = AsyncMock(
-            return_value={"userinfo": userinfo_b}
-        )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        google_mock.authorize_access_token = AsyncMock(return_value={"userinfo": userinfo_b})
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
         self._get_callback(client)
-        user_b = db_session.execute(
-            select(User).where(User.google_sub == "g-drift-2")
-        ).scalar_one()
+        user_b = db_session.execute(select(User).where(User.google_sub == "g-drift-2")).scalar_one()
         snapshot_b = (user_b.name, user_b.role, user_b.status)
 
         assert snapshot_a == snapshot_b
@@ -805,13 +789,17 @@ class TestDevLoginAndCallbackParity:
         user_a = db_session.execute(
             select(User).where(User.google_sub == self._USERINFO["sub"])
         ).scalar_one()
-        audit_a = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user_a.id,
-                AuditLog.action == "user.created",
+        audit_a = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user_a.id,
+                    AuditLog.action == "user.created",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Path B: google_callback with a distinct identity (users.email is
         # unique; audit_log immutability blocks DELETE on path A's row).
@@ -821,23 +809,21 @@ class TestDevLoginAndCallbackParity:
             "name": self._USERINFO["name"],
         }
         google_mock = AsyncMock()
-        google_mock.authorize_access_token = AsyncMock(
-            return_value={"userinfo": userinfo_b}
-        )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        google_mock.authorize_access_token = AsyncMock(return_value={"userinfo": userinfo_b})
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
         self._get_callback(client)
-        user_b = db_session.execute(
-            select(User).where(User.google_sub == "g-drift-3")
-        ).scalar_one()
-        audit_b = db_session.execute(
-            select(AuditLog).where(
-                AuditLog.entity_type == "user",
-                AuditLog.entity_id == user_b.id,
-                AuditLog.action == "user.created",
+        user_b = db_session.execute(select(User).where(User.google_sub == "g-drift-3")).scalar_one()
+        audit_b = (
+            db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.entity_type == "user",
+                    AuditLog.entity_id == user_b.id,
+                    AuditLog.action == "user.created",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         # Each path wrote exactly one user.created row of the same shape.
         assert len(audit_a) == 1
@@ -884,12 +870,8 @@ class TestDevLoginAndCallbackParity:
         userinfo_b["sub"] = "g-drift-4"
         userinfo_b["email"] = "drift-b@example.com"
         google_mock = AsyncMock()
-        google_mock.authorize_access_token = AsyncMock(
-            return_value={"userinfo": userinfo_b}
-        )
-        monkeypatch.setattr(
-            auth_module.oauth, "create_client", lambda _name: google_mock
-        )
+        google_mock.authorize_access_token = AsyncMock(return_value={"userinfo": userinfo_b})
+        monkeypatch.setattr(auth_module.oauth, "create_client", lambda _name: google_mock)
         # Drop the path-A cookie so the path-B test client is fresh.
         client.cookies.clear()
         self._get_callback(client)

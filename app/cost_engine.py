@@ -74,9 +74,7 @@ class InsufficientStockError(Exception):
         self.item_id = item_id
         self.requested = requested
         self.available = available
-        super().__init__(
-            f"item {item_id}: cannot consume {requested}; only {available} available"
-        )
+        super().__init__(f"item {item_id}: cannot consume {requested}; only {available} available")
 
 
 def record_receipt(
@@ -107,9 +105,7 @@ def record_receipt(
     if unit_cost < 0:
         raise ValueError(f"unit_cost cannot be negative; got {unit_cost}")
     if movement.id is None:
-        raise ValueError(
-            "movement must be flushed (have an id) before record_receipt"
-        )
+        raise ValueError("movement must be flushed (have an id) before record_receipt")
 
     layer = CostLayer(
         item_id=item.id,
@@ -157,9 +153,7 @@ def consume_fifo(
     if qty <= 0:
         raise ValueError(f"qty must be positive; got {qty}")
     if movement.id is None:
-        raise ValueError(
-            "movement must be flushed (have an id) before consume_fifo"
-        )
+        raise ValueError("movement must be flushed (have an id) before consume_fifo")
 
     layers = list(
         db.execute(
@@ -173,9 +167,7 @@ def consume_fifo(
     )
     available = sum((layer.qty_remaining for layer in layers), Decimal("0"))
     if available < qty:
-        raise InsufficientStockError(
-            item_id=item.id, requested=qty, available=available
-        )
+        raise InsufficientStockError(item_id=item.id, requested=qty, available=available)
 
     remaining = qty
     total_cost = Decimal("0")
@@ -210,14 +202,11 @@ def open_value(db: Session, item: Item) -> Decimal:
     Pure read; no side effects. The dashboard (R1) calls this once per item
     to compute the total-inventory-value figure.
     """
-    rows = (
-        db.execute(
-            select(CostLayer.qty_remaining, CostLayer.unit_cost)
-            .where(CostLayer.item_id == item.id)
-            .where(CostLayer.qty_remaining > 0)
-        )
-        .all()
-    )
+    rows = db.execute(
+        select(CostLayer.qty_remaining, CostLayer.unit_cost)
+        .where(CostLayer.item_id == item.id)
+        .where(CostLayer.qty_remaining > 0)
+    ).all()
     total = Decimal("0")
     for qty_remaining, unit_cost in rows:
         total += qty_remaining * unit_cost

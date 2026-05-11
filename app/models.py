@@ -159,9 +159,7 @@ class Supplier(Base):
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -191,9 +189,7 @@ class Location(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -300,9 +296,7 @@ class TaxonomyNode(Base):
         String(8),
         nullable=False,
         default=lambda context: _derive_sku_prefix(
-            context.get_current_parameters().get("name")
-            if context is not None
-            else None
+            context.get_current_parameters().get("name") if context is not None else None
         ),
     )
     # Per-leaf SKU sequence allocator (used by the SKU helper to mint the
@@ -312,9 +306,7 @@ class TaxonomyNode(Base):
         Integer, nullable=False, default=1, server_default=text("1")
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Per-category defaults for the items create form. Validated dict (or
     # None). Keys mirror the items form's field names: ``unit``,
     # ``tracking_mode``, ``requires_checkout``, ``reorder_threshold``,
@@ -441,9 +433,7 @@ class TaxonomyFieldDef(Base):
         Boolean, nullable=False, default=False, server_default=text("0")
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -563,9 +553,7 @@ class Item(Base):
     # 0016 migration. Round-trips the relationship to the leaf's
     # ``next_sequence`` without re-parsing the SKU string.
     assigned_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -634,9 +622,7 @@ class ItemFieldValue(Base):
     )
     value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     value_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    value_decimal: Mapped[Decimal | None] = mapped_column(
-        Numeric(14, 4), nullable=True
-    )
+    value_decimal: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     value_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     value_bool: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     value_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
@@ -652,8 +638,7 @@ class ItemFieldValue(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"<ItemFieldValue id={self.id} item_id={self.item_id} "
-            f"field_def_id={self.field_def_id}>"
+            f"<ItemFieldValue id={self.id} item_id={self.item_id} field_def_id={self.field_def_id}>"
         )
 
 
@@ -725,9 +710,7 @@ class ItemUnit(Base):
         ForeignKey("locations.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    archived_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -896,9 +879,7 @@ class CostLayer(Base):
     qty_received: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     qty_remaining: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source: Mapped[CostLayerSource] = mapped_column(
         SAEnum(
             CostLayerSource,
@@ -959,9 +940,7 @@ class CostLayerConsumption(Base):
         nullable=False,
     )
     qty_consumed: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    unit_cost_at_consumption: Mapped[Decimal] = mapped_column(
-        Numeric(14, 4), nullable=False
-    )
+    unit_cost_at_consumption: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -1024,15 +1003,9 @@ class Checkout(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    checked_out_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    expected_return: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    returned_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    checked_out_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expected_return: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    returned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     condition_note: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -1114,9 +1087,7 @@ class PurchaseOrder(Base):
         server_default=POStatus.DRAFT.value,
     )
     expected_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    sent_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         Integer,
@@ -1134,10 +1105,7 @@ class PurchaseOrder(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
-        return (
-            f"<PurchaseOrder id={self.id} supplier_id={self.supplier_id} "
-            f"status={self.status}>"
-        )
+        return f"<PurchaseOrder id={self.id} supplier_id={self.supplier_id} status={self.status}>"
 
 
 class PurchaseOrderLine(Base):
@@ -1180,9 +1148,7 @@ class PurchaseOrderLine(Base):
         default=Decimal("0"),
         server_default=text("0"),
     )
-    expected_unit_cost: Mapped[Decimal | None] = mapped_column(
-        Numeric(14, 4), nullable=True
-    )
+    expected_unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
@@ -1239,12 +1205,8 @@ class StockTake(Base):
         nullable=True,
     )
     scheduled_for: Mapped[date] = mapped_column(Date, nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         Integer,
@@ -1302,9 +1264,7 @@ class StockTakeLine(Base):
         nullable=False,
     )
     system_qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
-    counted_qty: Mapped[Decimal | None] = mapped_column(
-        Numeric(14, 4), nullable=True
-    )
+    counted_qty: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     variance: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     committed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("0")

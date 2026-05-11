@@ -24,9 +24,7 @@ from app.models import Item, TaxonomyNode, TrackingMode
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
@@ -190,9 +188,7 @@ class TestItemQrUniqueness:
             db.commit()
         db.rollback()
 
-    def test_qr_null_does_not_collide_with_other_null(
-        self, db: Session
-    ) -> None:
+    def test_qr_null_does_not_collide_with_other_null(self, db: Session) -> None:
         """Partial unique index — multiple NULL qr_code rows allowed."""
         node = _node(db)
         db.add_all(

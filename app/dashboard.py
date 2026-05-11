@@ -120,17 +120,11 @@ def _parse_cogs_date(raw: str | None, *, field_name: str) -> date | None:
         ) from exc
 
 
-def _resolve_cogs_range(
-    cogs_start: date | None, cogs_end: date | None
-) -> tuple[date, date]:
+def _resolve_cogs_range(cogs_start: date | None, cogs_end: date | None) -> tuple[date, date]:
     """Resolve the COGS date range. Defaults: last 30 days through today."""
     today = datetime.now(UTC).date()
     end = cogs_end if cogs_end is not None else today
-    start = (
-        cogs_start
-        if cogs_start is not None
-        else end - timedelta(days=_DEFAULT_COGS_DAYS)
-    )
+    start = cogs_start if cogs_start is not None else end - timedelta(days=_DEFAULT_COGS_DAYS)
     return start, end
 
 
@@ -175,9 +169,7 @@ def _low_stock_count(db: Session) -> int:
 
 def _open_pos_count(db: Session) -> int:
     """Count POs with status in (draft, sent, partially_received)."""
-    stmt = select(func.count(PurchaseOrder.id)).where(
-        PurchaseOrder.status.in_(_OPEN_PO_STATUSES)
-    )
+    stmt = select(func.count(PurchaseOrder.id)).where(PurchaseOrder.status.in_(_OPEN_PO_STATUSES))
     return int(db.execute(stmt).scalar_one())
 
 
@@ -219,9 +211,7 @@ def _cogs(db: Session, *, start: date, end: date) -> Decimal:
     (i.e. ``end`` is inclusive of the entire day).
     """
     start_dt = datetime.combine(start, datetime.min.time(), tzinfo=UTC)
-    end_dt = datetime.combine(end, datetime.min.time(), tzinfo=UTC) + timedelta(
-        days=1
-    )
+    end_dt = datetime.combine(end, datetime.min.time(), tzinfo=UTC) + timedelta(days=1)
     stmt = (
         select(
             func.coalesce(
@@ -229,11 +219,7 @@ def _cogs(db: Session, *, start: date, end: date) -> Decimal:
                 0,
             )
         )
-        .where(
-            StockMovement.id.in_(
-                select(CostLayerConsumption.movement_id).distinct()
-            )
-        )
+        .where(StockMovement.id.in_(select(CostLayerConsumption.movement_id).distinct()))
         .where(StockMovement.created_at >= start_dt)
         .where(StockMovement.created_at < end_dt)
     )

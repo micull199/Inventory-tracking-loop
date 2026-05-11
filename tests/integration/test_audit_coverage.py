@@ -106,9 +106,7 @@ _MUTATION_ROUTES: list[tuple[str, str, object]] = _enumerate_mutation_routes()
     _MUTATION_ROUTES,
     ids=[f"{m} {p}" for m, p, _ in _MUTATION_ROUTES],
 )
-def test_mutation_route_writes_audit_directly(
-    method: str, path: str, endpoint: object
-) -> None:
+def test_mutation_route_writes_audit_directly(method: str, path: str, endpoint: object) -> None:
     """Every state-changing route must call ``record_audit`` in its body
     (or be in the exempt set with a documented reason).
     """

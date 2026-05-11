@@ -61,6 +61,7 @@ from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
+    Archetype,
     FieldType,
     Item,
     ItemFieldValue,
@@ -71,6 +72,14 @@ from app.models import (
     TaxonomyNode,
     TrackingMode,
     User,
+)
+from app.sku import (
+    allocate_sequence,
+    ancestor_chain,
+    compose_sku,
+    create_unique_variant_leaf,
+    effective_archetype,
+    node_depth,
 )
 from app.template_env import templates
 
@@ -141,6 +150,29 @@ def _has_active_children(db: Session, node_id: int) -> bool:
     return db.execute(stmt).first() is not None
 
 
+def _collect_descendant_node_ids(db: Session, node_id: int) -> list[int]:
+    """Return ``[node_id]`` plus the ids of every descendant within two levels.
+
+    Used by the items list filter so a query against a depth-1 sub-cat in a
+    ``unique_variant`` tree matches every item living on its depth-2
+    auto-leaves. Includes both active and archived descendants — archived
+    rows still legally host items that show up in the archived items view.
+    """
+    ids: list[int] = [node_id]
+    children = list(
+        db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id == node_id)).scalars().all()
+    )
+    ids.extend(children)
+    if children:
+        grandchildren = list(
+            db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id.in_(children)))
+            .scalars()
+            .all()
+        )
+        ids.extend(grandchildren)
+    return ids
+
+
 def _is_leaf(db: Session, node: TaxonomyNode) -> bool:
     """Sub-cats are always leaves; top-level nodes are leaves iff no active children.
 
@@ -154,19 +186,50 @@ def _is_leaf(db: Session, node: TaxonomyNode) -> bool:
     return not _has_active_children(db, node.id)
 
 
+def _is_pickable(db: Session, node: TaxonomyNode) -> bool:
+    """Is this node a valid item destination per the taxonomy refinement?
+
+    A node is pickable if any of:
+    - It is a leaf (no active children) AND its effective archetype is
+      ``bulk`` / ``unique``. The item lands directly on this leaf.
+    - It is a depth-1 sub-category AND its effective archetype is
+      ``unique_variant``. The item lands on a freshly-allocated auto-leaf
+      below; the sub-cat itself looks like a container but acts as a leaf
+      for item-create purposes. See ``docs/taxonomy-refinement-plan.md``
+      §0 for the rationale.
+
+    Depth-0 nodes under a ``unique_variant`` archetype are NOT pickable
+    (the spec requires a 3-level path: root → sub-cat → auto-leaf). Depth-2
+    auto-leaves are also not pickable directly — each one holds exactly one
+    item and is full.
+    """
+
+    archetype = effective_archetype(db, node)
+    if archetype == Archetype.UNIQUE_VARIANT:
+        # Unique-variant items land on auto-leaves under a depth-1 sub-cat.
+        # The sub-cat is the picker target.
+        return node_depth(db, node) == 1
+    # bulk + unique: any leaf node is pickable.
+    return _is_leaf(db, node)
+
+
 def _resolve_leaf_node(
     db: Session, raw_node_id: str, *, current_id: int | None = None
 ) -> TaxonomyNode:
-    """Load a taxonomy node by id and verify it's a non-archived leaf.
+    """Load a taxonomy node by id and verify it's a non-archived pickable destination.
+
+    Post-refinement "pickable" generalises the previous "leaf" rule (see
+    ``_is_pickable``): for ``unique_variant`` trees a depth-1 sub-cat is
+    pickable even though it has children.
 
     ``current_id`` is the item's existing ``taxonomy_node_id`` on edit (None
     on create). If the user submits the same id and that node is archived,
     accept the unchanged assignment so editing other fields doesn't force a
     category change. Switching to any *different* archived id still 400s.
-    The leaf-rule check applies regardless: an archived top-level node with
-    active children would still 400 even if it's the current value, but
-    that's a degenerate state we can't construct (active children require
-    an active parent in the route layer).
+
+    The pickable-rule check applies regardless: a top-level node with
+    active children is rejected even when it's the current value, but that
+    state is unreachable under the route's other guards.
     """
     text = (raw_node_id or "").strip()
     if text == "":
@@ -192,13 +255,23 @@ def _resolve_leaf_node(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot move items to an archived category",
         )
-    if not _is_leaf(db, node):
+    if not _is_pickable(db, node):
+        archetype = effective_archetype(db, node)
+        if archetype == Archetype.UNIQUE_VARIANT and node_depth(db, node) == 0:
+            detail = (
+                "unique-variant trees require a sub-category — pick one of "
+                "this category's sub-categories instead"
+            )
+        elif archetype == Archetype.UNIQUE_VARIANT and node_depth(db, node) == 2:
+            detail = (
+                "this depth-2 auto-leaf is system-managed and already holds "
+                "its item — pick a sub-category to create another"
+            )
+        else:
+            detail = "category has sub-categories — pick one of its sub-categories instead"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "category has sub-categories — pick one of its sub-categories "
-                "instead"
-            ),
+            detail=detail,
         )
     return node
 
@@ -298,14 +371,10 @@ def _normalise(
     """
     clean_sku = (sku or "").strip()
     if not clean_sku:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required")
     clean_name = (name or "").strip()
     if not clean_name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     clean_unit = (unit or "").strip()
     if not clean_unit:
         raise HTTPException(
@@ -319,12 +388,8 @@ def _normalise(
     threshold = _parse_decimal(reorder_threshold, field_name="reorder threshold")
     qty = _parse_decimal(reorder_qty, field_name="reorder quantity")
 
-    sup_id = _resolve_optional_supplier(
-        db, supplier_id, current_id=current_supplier_id
-    )
-    loc_id = _resolve_optional_location(
-        db, location_id, current_id=current_location_id
-    )
+    sup_id = _resolve_optional_supplier(db, supplier_id, current_id=current_supplier_id)
+    loc_id = _resolve_optional_location(db, location_id, current_id=current_location_id)
 
     clean_qr = (qr_code or "").strip() or None
     clean_notes = (notes or "").strip() or None
@@ -345,9 +410,7 @@ def _normalise(
     }
 
 
-def _check_sku_unique(
-    db: Session, sku: str, *, exclude_id: int | None = None
-) -> None:
+def _check_sku_unique(db: Session, sku: str, *, exclude_id: int | None = None) -> None:
     stmt = select(Item.id).where(Item.sku == sku)
     if exclude_id is not None:
         stmt = stmt.where(Item.id != exclude_id)
@@ -358,9 +421,7 @@ def _check_sku_unique(
         )
 
 
-def _check_qr_unique(
-    db: Session, qr_code: str | None, *, exclude_id: int | None = None
-) -> None:
+def _check_qr_unique(db: Session, qr_code: str | None, *, exclude_id: int | None = None) -> None:
     if qr_code is None:
         return
     stmt = select(Item.id).where(Item.qr_code == qr_code)
@@ -373,9 +434,7 @@ def _check_qr_unique(
         )
 
 
-def _diff(
-    item: Item, new: dict[str, Any]
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def _diff(item: Item, new: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
     for f in _FIELDS:
@@ -393,9 +452,7 @@ def _flash(request: Request, message: str) -> None:
     request.session["flash"] = message
 
 
-def _custom_form_view_from_post(
-    raw: Any, field_defs: list[TaxonomyFieldDef]
-) -> dict[str, Any]:
+def _custom_form_view_from_post(raw: Any, field_defs: list[TaxonomyFieldDef]) -> dict[str, Any]:
     """Build the items-form custom-field view from raw POST data without parsing.
 
     Used by the create / update re-render path so a validation failure
@@ -469,9 +526,7 @@ _DEFAULT_KEYS_TO_FORM: dict[str, str] = {
 }
 
 
-def _apply_leaf_defaults(
-    form: dict[str, Any], leaf: TaxonomyNode | None
-) -> None:
+def _apply_leaf_defaults(form: dict[str, Any], leaf: TaxonomyNode | None) -> None:
     """Pre-fill ``form`` with the leaf's ``defaults_json`` (in-place).
 
     Only writes a key when the form's current value is "empty" (str
@@ -498,52 +553,102 @@ def _apply_leaf_defaults(
         form["requires_checkout"] = True
 
 
-def _generate_sku(db: Session, leaf: TaxonomyNode | None) -> str:
-    """Generate a unique, predictable SKU.
+def _allocate_sku(db: Session, leaf: TaxonomyNode) -> tuple[str, int, TaxonomyNode]:
+    """Allocate a server-owned SKU + sequence for a new item on ``leaf``.
 
-    Format: ``<PREFIX>-<NNNN>`` where ``PREFIX`` is the first 3 alphanumeric
-    chars of the leaf's name uppercased (or ``ITM`` if no leaf is supplied
-    or the name yields no usable chars), and ``NNNN`` is a 4-digit
-    zero-padded sequence — the next number not already taken under that
-    prefix.
+    Returns ``(sku, sequence, destination_leaf)``. The destination leaf is
+    either the user-picked leaf itself (for ``bulk`` / ``unique`` items) or
+    a freshly-created depth-2 auto-leaf (for ``unique_variant`` items). The
+    caller attaches the item to the returned ``destination_leaf``.
 
-    Linear-scan collision check is fine for v1 volumes (a small workshop's
-    item count is in the hundreds, not millions). If this ever needs to
-    scale, replace the loop with ``MAX(SUBSTR(sku, ...))`` plus a single
-    increment — the format keeps that path open.
+    Behaviour by effective archetype:
+
+    - ``bulk`` / ``unique`` — atomically increment ``leaf.next_sequence``
+      and compose ``<ancestor-prefixes>-<NNNN>``. The item lives on
+      ``leaf``.
+    - ``unique_variant`` — atomically increment the depth-1 sub-cat's
+      ``next_sequence``, mint a depth-2 auto-leaf named ``"{seq:03d}"``,
+      and compose ``<root>-<sub>-<NNN>``. The item lives on the new leaf.
+
+    Raises ``HTTPException(400)`` if the picked node is not a valid
+    destination for its archetype (e.g. a unique-variant item submitted
+    against a depth-0 node). ``_resolve_leaf_node`` should already have
+    rejected those, but this re-check is defence-in-depth.
     """
-    if leaf is not None:
-        candidate_prefix = "".join(
-            ch for ch in leaf.name.upper() if ch.isalnum()
-        )[:3]
-        prefix = candidate_prefix or "ITM"
-    else:
-        prefix = "ITM"
-    n = 1
-    while True:
-        sku = f"{prefix}-{n:04d}"
-        if (
-            db.execute(select(Item.id).where(Item.sku == sku)).first()
-            is None
-        ):
-            return sku
-        n += 1
+
+    archetype = effective_archetype(db, leaf)
+    if archetype is None:
+        # Orphaned tree — defensive. ``effective_archetype`` returns None
+        # only when the parent chain is broken; the route layer guarantees
+        # we never get here under normal use.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="category is missing an archetype (data integrity)",
+        )
+
+    if archetype == Archetype.UNIQUE_VARIANT:
+        if node_depth(db, leaf) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "unique-variant items require a 2-level path: pick a "
+                    "sub-category under a unique-variant top-level"
+                ),
+            )
+        seq = allocate_sequence(db, leaf)
+        auto_leaf = create_unique_variant_leaf(db, leaf, seq)
+        chain = ancestor_chain(db, auto_leaf)
+        prefixes = [n.sku_prefix for n in chain]
+        return compose_sku(prefixes, seq, archetype), seq, auto_leaf
+
+    # bulk / unique
+    seq = allocate_sequence(db, leaf)
+    chain = ancestor_chain(db, leaf)
+    prefixes = [n.sku_prefix for n in chain]
+    return compose_sku(prefixes, seq, archetype), seq, leaf
 
 
-def _leaf_options(
-    db: Session, *, current_id: int | None = None
-) -> list[dict[str, Any]]:
-    """Active leaf-node options for the form's category <select>.
+def _tracking_mode_for(archetype: Archetype) -> TrackingMode:
+    """Map an effective archetype to the operational tracking mode.
 
-    Top-level nodes appear only when they have no active children (i.e. they
-    *are* the leaf). Sub-cats appear under their parent. Output is shaped for
-    the template — list of ``{id, label, is_group}`` dicts.
-
-    If ``current_id`` references an archived node (or one not present in the
-    active set), it's appended as a selectable option with an "(archived)"
-    suffix and ``is_group=False`` so the user can keep the existing
-    assignment without seeing a missing dropdown value.
+    Bulk items are quantity-tracked; unique + unique-variant items are
+    per-unit-tracked. The column stays writable on edit (Office may need to
+    correct an entry mistake) but the create flow forces this value so a
+    bulk item never ships with ``tracking_mode=unique``.
     """
+    if archetype == Archetype.BULK:
+        return TrackingMode.QTY
+    return TrackingMode.UNIQUE
+
+
+def _node_breadcrumb(db: Session, node: TaxonomyNode) -> str:
+    """Compose a top-down breadcrumb label for a node.
+
+    Depth 0: ``"Tools"``. Depth 1: ``"Raw Materials / Silver"``. Depth 2:
+    ``"Raw Materials / Silver / 925"``. Defensive against orphaned parent
+    chains: a missing ancestor renders as ``"?"`` rather than 500ing.
+    """
+    chain = ancestor_chain(db, node)
+    return " / ".join(n.name for n in chain)
+
+
+def _pickable_options(db: Session, *, current_id: int | None = None) -> list[dict[str, Any]]:
+    """Item-destination options for the create / edit form's category picker.
+
+    Returns a flat list of ``{id, label, breadcrumb, archetype, sku_prefix,
+    is_group}`` dicts. The picker UI (Agent 4) will consume the
+    ``breadcrumb`` field for display + filtering. ``is_group`` stays in the
+    output so legacy templates that iterate the list don't break.
+
+    Pickable means (see ``_is_pickable``):
+    - leaf with bulk / unique archetype (depth 0, 1, or 2).
+    - depth-1 sub-cat under a unique_variant top-level.
+
+    If ``current_id`` references an archived row or one no longer
+    pickable, it is appended with an explanatory suffix so the edit form
+    can keep the existing assignment without dropping the option.
+    """
+
     rows = list(
         db.execute(
             select(TaxonomyNode)
@@ -553,121 +658,73 @@ def _leaf_options(
         .scalars()
         .all()
     )
-    # Index children by parent id so we can render under each top-level node.
-    children: dict[int, list[TaxonomyNode]] = {}
-    tops: list[TaxonomyNode] = []
-    for n in rows:
-        if n.parent_id is None:
-            tops.append(n)
-        else:
-            children.setdefault(n.parent_id, []).append(n)
 
     options: list[dict[str, Any]] = []
     rendered_ids: set[int] = set()
-    for top in tops:
-        kids = children.get(top.id, [])
-        if kids:
-            # Top with active children is NOT a leaf — render the parent as a
-            # disabled group label, then each child as a selectable option
-            # prefixed with its parent name for screen-reader clarity.
-            options.append(
-                {
-                    "id": None,
-                    "label": top.name,
-                    "is_group": True,
-                }
-            )
-            for kid in kids:
-                options.append(
-                    {
-                        "id": kid.id,
-                        "label": f"{top.name} / {kid.name}",
-                        "is_group": False,
-                    }
-                )
-                rendered_ids.add(kid.id)
-        else:
-            options.append(
-                {"id": top.id, "label": top.name, "is_group": False}
-            )
-            rendered_ids.add(top.id)
+    for node in rows:
+        if not _is_pickable(db, node):
+            continue
+        archetype = effective_archetype(db, node)
+        options.append(
+            {
+                "id": node.id,
+                "label": _node_breadcrumb(db, node),
+                "breadcrumb": _node_breadcrumb(db, node),
+                "archetype": archetype.value if archetype else None,
+                "sku_prefix": node.sku_prefix,
+                "is_group": False,
+            }
+        )
+        rendered_ids.add(node.id)
 
     if current_id is not None and current_id not in rendered_ids:
         cur = db.get(TaxonomyNode, current_id)
         if cur is not None:
-            # Two distinct "current_id not in rendered_ids" cases:
-            # (1) the node is archived (archived_at IS NOT NULL); or
-            # (2) the node is a top-level that has *gained* sub-categories
-            #     since this item was assigned to it — it's no longer a
-            #     leaf, so it doesn't render in the active leaf list, but
-            #     it isn't archived either. Labelling case (2) "(archived)"
-            #     misleads the manager into thinking they archived
-            #     something they didn't.
             archived = cur.archived_at is not None
-            if archived:
-                suffix = " (archived)"
-            elif cur.parent_id is None:
-                # Non-archived top-level not in the leaf set ⇒ it has
-                # active children. Tell the manager to pick a sub-category.
-                suffix = " (no longer a leaf — pick a sub-category)"
-            else:
-                suffix = ""
-            if cur.parent_id is None:
-                label = f"{cur.name}{suffix}"
-            else:
-                parent = db.get(TaxonomyNode, cur.parent_id)
-                parent_name = parent.name if parent is not None else "?"
-                label = f"{parent_name} / {cur.name}{suffix}"
+            suffix = " (archived)" if archived else " (no longer a pickable destination)"
+            archetype = effective_archetype(db, cur)
             options.append(
-                {"id": cur.id, "label": label, "is_group": False}
+                {
+                    "id": cur.id,
+                    "label": _node_breadcrumb(db, cur) + suffix,
+                    "breadcrumb": _node_breadcrumb(db, cur) + suffix,
+                    "archetype": archetype.value if archetype else None,
+                    "sku_prefix": cur.sku_prefix,
+                    "is_group": False,
+                }
             )
     return options
 
 
-def _supplier_options(
-    db: Session, *, current_id: int | None = None
-) -> list[dict[str, Any]]:
+# Backwards-compatible alias retained for callers that still expect
+# ``_leaf_options``. New code should call ``_pickable_options``.
+_leaf_options = _pickable_options
+
+
+def _supplier_options(db: Session, *, current_id: int | None = None) -> list[dict[str, Any]]:
     """Active suppliers + the assigned archived row (with "(archived)" suffix) if any."""
     rows = list(
-        db.execute(
-            select(Supplier)
-            .where(Supplier.archived_at.is_(None))
-            .order_by(Supplier.name)
-        )
+        db.execute(select(Supplier).where(Supplier.archived_at.is_(None)).order_by(Supplier.name))
         .scalars()
         .all()
     )
-    options: list[dict[str, Any]] = [
-        {"id": s.id, "label": s.name} for s in rows
-    ]
-    if current_id is not None and not any(
-        opt["id"] == current_id for opt in options
-    ):
+    options: list[dict[str, Any]] = [{"id": s.id, "label": s.name} for s in rows]
+    if current_id is not None and not any(opt["id"] == current_id for opt in options):
         cur = db.get(Supplier, current_id)
         if cur is not None:
             options.append({"id": cur.id, "label": f"{cur.name} (archived)"})
     return options
 
 
-def _location_options(
-    db: Session, *, current_id: int | None = None
-) -> list[dict[str, Any]]:
+def _location_options(db: Session, *, current_id: int | None = None) -> list[dict[str, Any]]:
     """Active locations + the assigned archived row (with "(archived)" suffix) if any."""
     rows = list(
-        db.execute(
-            select(Location)
-            .where(Location.archived_at.is_(None))
-            .order_by(Location.name)
-        )
+        db.execute(select(Location).where(Location.archived_at.is_(None)).order_by(Location.name))
         .scalars()
         .all()
     )
-    options: list[dict[str, Any]] = [
-        {"id": loc.id, "label": loc.name} for loc in rows
-    ]
-    if current_id is not None and not any(
-        opt["id"] == current_id for opt in options
-    ):
+    options: list[dict[str, Any]] = [{"id": loc.id, "label": loc.name} for loc in rows]
+    if current_id is not None and not any(opt["id"] == current_id for opt in options):
         cur = db.get(Location, current_id)
         if cur is not None:
             options.append({"id": cur.id, "label": f"{cur.name} (archived)"})
@@ -721,9 +778,7 @@ _VALUE_COLUMN: dict[FieldType, str] = {
 }
 
 
-def _get_active_field_defs(
-    db: Session, node_id: int
-) -> list[TaxonomyFieldDef]:
+def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
     """Active (non-archived) field defs for ``node_id``, ordered by sort_order then name."""
     stmt = (
         select(TaxonomyFieldDef)
@@ -734,9 +789,7 @@ def _get_active_field_defs(
     return list(db.execute(stmt).scalars().all())
 
 
-def _parse_custom_field(
-    field_def: TaxonomyFieldDef, raw: str | list[str] | None
-) -> Any:
+def _parse_custom_field(field_def: TaxonomyFieldDef, raw: str | list[str] | None) -> Any:
     """Coerce a raw form value (or list, for multiselect) into the right Python type.
 
     Returns ``None`` for blank / empty / unset (for booleans, returns ``False``
@@ -750,11 +803,7 @@ def _parse_custom_field(
     if field_def.type == FieldType.MULTISELECT:
         # ``raw`` may be a list (the form returned multiple values) or None
         # (no entries submitted). Empty list → None.
-        values = [
-            v.strip()
-            for v in (raw if isinstance(raw, list) else [])
-            if v and v.strip()
-        ]
+        values = [v.strip() for v in (raw if isinstance(raw, list) else []) if v and v.strip()]
         if not values:
             return None
         options = field_def.options_json or []
@@ -850,9 +899,7 @@ def _is_set(field_def: TaxonomyFieldDef, value: Any) -> bool:
     return True
 
 
-def _collect_custom_fields(
-    form: FormData, field_defs: list[TaxonomyFieldDef]
-) -> dict[int, Any]:
+def _collect_custom_fields(form: FormData, field_defs: list[TaxonomyFieldDef]) -> dict[int, Any]:
     """Parse every active field def's submission and enforce ``required``.
 
     Returns a dict keyed by ``field_def.id`` of parsed values (None for
@@ -928,9 +975,7 @@ def _persist_custom_field_values(
     return audit
 
 
-def _load_custom_field_value_rows(
-    db: Session, item_id: int
-) -> dict[int, ItemFieldValue]:
+def _load_custom_field_value_rows(db: Session, item_id: int) -> dict[int, ItemFieldValue]:
     """Existing ``ItemFieldValue`` rows for an item, keyed by ``field_def_id``."""
     stmt = select(ItemFieldValue).where(ItemFieldValue.item_id == item_id)
     return {row.field_def_id: row for row in db.execute(stmt).scalars().all()}
@@ -1093,9 +1138,7 @@ def list_items(
     node_id: int | None = None,
     requires_checkout: str = "",
     format: str = "",
-    _user: User = Depends(
-        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
-    ),
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
     db: Session = Depends(get_session),
 ) -> Response:
     if show not in {"active", "archived"}:
@@ -1122,7 +1165,14 @@ def list_items(
     else:
         stmt = stmt.where(Item.archived_at.is_not(None))
     if node_id is not None:
-        stmt = stmt.where(Item.taxonomy_node_id == node_id)
+        # Match items whose ``taxonomy_node_id`` is the given node OR any
+        # descendant of it (inclusive). The taxonomy is at most 3 levels,
+        # so a single down-walk through children + grandchildren is enough
+        # — no recursive CTE needed. This makes the unique-variant case
+        # work: items live on depth-2 auto-leaves, but a filter on the
+        # depth-1 sub-cat must surface them.
+        descendant_ids = _collect_descendant_node_ids(db, node_id)
+        stmt = stmt.where(Item.taxonomy_node_id.in_(descendant_ids))
     if requires_checkout_filter:
         stmt = stmt.where(Item.requires_checkout.is_(True))
     stmt = stmt.order_by(_LIST_ORDER, Item.sku)
@@ -1198,7 +1248,8 @@ def new_item_form(
             "form": form,
             "title": "New item",
             "action": "/admin/items",
-            "leaf_options": _leaf_options(db),
+            "leaf_options": _pickable_options(db),
+            "pickable_options": _pickable_options(db),
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -1214,9 +1265,7 @@ def custom_fields_fragment(
     request: Request,
     taxonomy_node_id: str = "",
     include_defaults: str = "",
-    _user: User = Depends(
-        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
-    ),
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     """HTMX fragment: custom-field inputs for the leaf identified by the picked
@@ -1264,9 +1313,7 @@ def custom_fields_fragment(
     if include_defaults == "1":
         _apply_leaf_defaults(form, leaf)
         if leaf is not None and leaf.defaults_json:
-            oob_keys = {
-                k for k in _DEFAULT_KEYS_TO_FORM if k in leaf.defaults_json
-            }
+            oob_keys = {k for k in _DEFAULT_KEYS_TO_FORM if k in leaf.defaults_json}
             if leaf.defaults_json.get("requires_checkout") is True:
                 oob_keys.add("requires_checkout")
     form["custom"] = _form_for_custom_fields(field_defs, {})
@@ -1319,9 +1366,7 @@ async def create_item(
         except ValueError:
             leaf_id_for_view = 0
         view_field_defs = (
-            _get_active_field_defs(db, leaf_id_for_view)
-            if leaf_id_for_view > 0
-            else []
+            _get_active_field_defs(db, leaf_id_for_view) if leaf_id_for_view > 0 else []
         )
         form_view: dict[str, Any] = {
             "sku": (sku or "").strip(),
@@ -1347,7 +1392,8 @@ async def create_item(
                 "form": form_view,
                 "title": "New item",
                 "action": "/admin/items",
-                "leaf_options": _leaf_options(db),
+                "leaf_options": _pickable_options(db),
+                "pickable_options": _pickable_options(db),
                 "supplier_options": _supplier_options(db),
                 "location_options": _location_options(db),
                 "tracking_modes": [m.value for m in TrackingMode],
@@ -1360,23 +1406,32 @@ async def create_item(
         )
 
     try:
-        # Auto-generate SKU when the form omits it. The form input was
-        # removed in the items-form-simplification slice; explicit POSTs
-        # (tests, the public API surface) can still pass their own SKU.
-        if not (sku or "").strip():
-            try:
-                leaf_int = int((taxonomy_node_id or "").strip())
-            except ValueError:
-                leaf_int = 0
-            leaf = db.get(TaxonomyNode, leaf_int) if leaf_int > 0 else None
-            sku = _generate_sku(db, leaf)
+        # Resolve the picker destination up front so the archetype-aware
+        # SKU + tracking_mode derivation has the node it needs. The
+        # client-supplied ``sku`` form field is intentionally ignored on
+        # create — the server owns SKU allocation under the taxonomy
+        # refinement.
+        picked = _resolve_leaf_node(db, taxonomy_node_id)
+        archetype = effective_archetype(db, picked)
+        if archetype is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="category is missing an archetype (data integrity)",
+            )
+        derived_tracking_mode = _tracking_mode_for(archetype)
+
+        # Normalise the remaining fields against the *picked* leaf id
+        # (which has already passed ``_resolve_leaf_node``). We feed a
+        # placeholder ``sku`` so ``_normalise`` doesn't 400 on the
+        # client-omitted value; the real SKU is allocated below and
+        # overwrites the placeholder before the row hits the DB.
         fields = _normalise(
             db,
-            sku=sku,
+            sku="__pending__",  # placeholder; overwritten post-allocation
             name=name,
-            taxonomy_node_id=taxonomy_node_id,
+            taxonomy_node_id=str(picked.id),
             unit=unit,
-            tracking_mode=tracking_mode,
+            tracking_mode=derived_tracking_mode.value,
             requires_checkout=requires_checkout,
             reorder_threshold=reorder_threshold,
             reorder_qty=reorder_qty,
@@ -1385,13 +1440,25 @@ async def create_item(
             qr_code=qr_code,
             notes=notes,
         )
-        _check_sku_unique(db, fields["sku"])
         _check_qr_unique(db, fields["qr_code"])
 
-        # Custom fields: parse against the leaf's active schema. Required
-        # fields raise 400 here, before any DB write — re-render path
-        # below catches that and echoes typed values back.
-        field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+        # Allocate SKU + sequence + destination leaf. For unique-variant
+        # this also mints the auto-leaf the item will live on. Allocation
+        # mutates ``next_sequence`` on the allocator row; a downstream
+        # validation failure rolls everything back because we never call
+        # ``db.commit`` until the very end of the route.
+        allocated_sku, allocated_seq, dest_leaf = _allocate_sku(db, picked)
+        fields["sku"] = allocated_sku
+        fields["taxonomy_node_id"] = dest_leaf.id
+        _check_sku_unique(db, fields["sku"])
+
+        # Custom fields parse against the picked node's schema. For
+        # unique-variant items the auto-leaf has no field defs (it's a
+        # naked numeric leaf); field defs live on the depth-1 sub-cat the
+        # user picked. For bulk / unique items the picked node is the
+        # destination leaf, so the same id covers both cases.
+        cf_node_id = picked.id
+        field_defs = _get_active_field_defs(db, cf_node_id)
         parsed_custom = _collect_custom_fields(raw_form, field_defs)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_400_BAD_REQUEST:
@@ -1412,17 +1479,17 @@ async def create_item(
         qr_code=fields["qr_code"],
         notes=fields["notes"],
         current_qty=Decimal("0"),
+        assigned_sequence=allocated_seq,
     )
     db.add(item)
     db.flush()
 
-    custom_audit = _persist_custom_field_values(
-        db, item.id, field_defs, parsed_custom
-    )
+    custom_audit = _persist_custom_field_values(db, item.id, field_defs, parsed_custom)
 
-    audit_after: dict[str, Any] = {
-        f: fields[f] for f in _FIELDS
-    } | {"current_qty": item.current_qty}
+    audit_after: dict[str, Any] = {f: fields[f] for f in _FIELDS} | {
+        "current_qty": item.current_qty,
+        "assigned_sequence": allocated_seq,
+    }
     if custom_audit:
         audit_after["custom_fields"] = custom_audit
 
@@ -1437,9 +1504,7 @@ async def create_item(
     )
     db.commit()
     _flash(request, f"Item “{item.name}” created.")
-    return RedirectResponse(
-        url="/admin/items", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -1451,16 +1516,12 @@ async def create_item(
 def edit_item_form(
     request: Request,
     item_id: int,
-    _user: User = Depends(
-        require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)
-    ),
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
     field_defs = _get_active_field_defs(db, item.taxonomy_node_id)
     existing_rows = _load_custom_field_value_rows(db, item.id)
     form = _form_for_item(item)
@@ -1473,17 +1534,12 @@ def edit_item_form(
             "current_user": _user,
             "item": item,
             "form": form,
-            "title": (
-                f"Edit {item.name}" if can_save else f"View {item.name}"
-            ),
+            "title": (f"Edit {item.name}" if can_save else f"View {item.name}"),
             "action": f"/admin/items/{item.id}",
-            "leaf_options": _leaf_options(db, current_id=item.taxonomy_node_id),
-            "supplier_options": _supplier_options(
-                db, current_id=item.supplier_id
-            ),
-            "location_options": _location_options(
-                db, current_id=item.location_id
-            ),
+            "leaf_options": _pickable_options(db, current_id=item.taxonomy_node_id),
+            "pickable_options": _pickable_options(db, current_id=item.taxonomy_node_id),
+            "supplier_options": _supplier_options(db, current_id=item.supplier_id),
+            "location_options": _location_options(db, current_id=item.location_id),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
@@ -1513,9 +1569,7 @@ async def update_item(
 ) -> Response:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
 
     # MISSION §3: Office cannot change reorder thresholds. Silently override
     # any inbound values with the existing row's values *before* validation,
@@ -1539,10 +1593,7 @@ async def update_item(
         form_view: dict[str, Any] = {
             "sku": (sku or "").strip() or item.sku,
             "name": (name or "").strip(),
-            "taxonomy_node_id": (
-                (taxonomy_node_id or "").strip()
-                or str(item.taxonomy_node_id)
-            ),
+            "taxonomy_node_id": ((taxonomy_node_id or "").strip() or str(item.taxonomy_node_id)),
             "unit": (unit or "").strip(),
             "tracking_mode": tracking_mode or item.tracking_mode.value,
             "requires_checkout": bool(requires_checkout),
@@ -1562,19 +1613,12 @@ async def update_item(
                 "current_user": user,
                 "item": item,
                 "form": form_view,
-                "title": (
-                    f"Edit {item.name}" if can_save else f"View {item.name}"
-                ),
+                "title": (f"Edit {item.name}" if can_save else f"View {item.name}"),
                 "action": f"/admin/items/{item.id}",
-                "leaf_options": _leaf_options(
-                    db, current_id=item.taxonomy_node_id
-                ),
-                "supplier_options": _supplier_options(
-                    db, current_id=item.supplier_id
-                ),
-                "location_options": _location_options(
-                    db, current_id=item.location_id
-                ),
+                "leaf_options": _pickable_options(db, current_id=item.taxonomy_node_id),
+                "pickable_options": _pickable_options(db, current_id=item.taxonomy_node_id),
+                "supplier_options": _supplier_options(db, current_id=item.supplier_id),
+                "location_options": _location_options(db, current_id=item.location_id),
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": _can_edit_thresholds(user),
                 "can_save": can_save,
@@ -1651,9 +1695,7 @@ async def update_item(
         # completes cleanly. Matches the suppliers/locations/taxonomy pattern.
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/items", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -1670,9 +1712,7 @@ def archive_item(
 ) -> Response:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
 
     if item.archived_at is None:
         item.archived_at = datetime.now(UTC)
@@ -1690,9 +1730,7 @@ def archive_item(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/items", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{item_id}/unarchive")
@@ -1704,9 +1742,7 @@ def unarchive_item(
 ) -> Response:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
 
     if item.archived_at is not None:
         previous = item.archived_at
@@ -1725,6 +1761,4 @@ def unarchive_item(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/items", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)

@@ -68,9 +68,7 @@ def _open_fresh_session(engine: Engine) -> Session:
 
 
 class TestMakeIsolatedSession:
-    def test_yields_writable_session_against_sqlite_file(
-        self, sqlite_file_engine: Engine
-    ) -> None:
+    def test_yields_writable_session_against_sqlite_file(self, sqlite_file_engine: Engine) -> None:
         with _make_isolated_session(sqlite_file_engine) as session:
             session.add(
                 User(
@@ -86,9 +84,7 @@ class TestMakeIsolatedSession:
             ).scalar_one()
             assert row.google_sub == "iso-sub-write"
 
-    def test_commit_does_not_escape_outer_transaction(
-        self, sqlite_file_engine: Engine
-    ) -> None:
+    def test_commit_does_not_escape_outer_transaction(self, sqlite_file_engine: Engine) -> None:
         # Inside the helper: write + commit. The commit operates on a SAVEPOINT
         # inside the outer transaction (because of join_transaction_mode=
         # "create_savepoint"), not on the outer transaction itself.
@@ -107,9 +103,7 @@ class TestMakeIsolatedSession:
         # session on the same engine and confirm the row never persisted.
         with _open_fresh_session(sqlite_file_engine) as fresh:
             assert (
-                fresh.execute(
-                    select(User).filter_by(email="iso-commit@example.com")
-                ).first()
+                fresh.execute(select(User).filter_by(email="iso-commit@example.com")).first()
                 is None
             )
 
@@ -141,15 +135,11 @@ class TestMakeIsolatedSession:
 
         with _open_fresh_session(sqlite_file_engine) as fresh:
             assert (
-                fresh.execute(
-                    select(User).filter_by(email="iso-rollback-1@example.com")
-                ).first()
+                fresh.execute(select(User).filter_by(email="iso-rollback-1@example.com")).first()
                 is None
             )
             assert (
-                fresh.execute(
-                    select(User).filter_by(email="iso-rollback-2@example.com")
-                ).first()
+                fresh.execute(select(User).filter_by(email="iso-rollback-2@example.com")).first()
                 is None
             )
 
@@ -207,9 +197,7 @@ class TestMakeIsolatedSession:
                 "iso-dup@example.com",
                 "iso-dup-recovered@example.com",
             ):
-                assert (
-                    fresh.execute(select(User).filter_by(email=email)).first() is None
-                )
+                assert fresh.execute(select(User).filter_by(email=email)).first() is None
 
     def test_uses_savepoint_mode(self) -> None:
         # Forcing function: a future PR that drops the join_transaction_mode
@@ -260,9 +248,7 @@ class TestSavepointPatternBehaviour:
     the connection-side state directly.
     """
 
-    def test_outer_transaction_is_rolled_back_at_teardown(
-        self, sqlite_file_engine: Engine
-    ) -> None:
+    def test_outer_transaction_is_rolled_back_at_teardown(self, sqlite_file_engine: Engine) -> None:
         # Listen for ROLLBACK events on the underlying connection so we can
         # confirm the outer transaction's rollback actually fires when the
         # context manager exits.

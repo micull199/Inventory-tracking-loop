@@ -78,13 +78,9 @@ class TestSupplierConstraints:
             db.commit()
         db.rollback()
 
-    def test_unique_constraint_applies_even_when_other_is_archived(
-        self, db: Session
-    ) -> None:
+    def test_unique_constraint_applies_even_when_other_is_archived(self, db: Session) -> None:
         """Archiving doesn't free the name. Operator must rename or unarchive."""
-        archived = Supplier(
-            name="Acme Wax Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        archived = Supplier(name="Acme Wax Co", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db.add(archived)
         db.commit()
 

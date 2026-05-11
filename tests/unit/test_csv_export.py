@@ -34,9 +34,7 @@ class TestCsvResponse:
 
     def test_filename_is_sanitised(self) -> None:
         """Whitespace / quotes / semicolons replaced with ``_``."""
-        resp = csv_response(
-            filename='bad ;"name.csv', headers=["a"], rows=[]
-        )
+        resp = csv_response(filename='bad ;"name.csv', headers=["a"], rows=[])
         cd = resp.headers["content-disposition"]
         # Disallowed chars replaced; dots + dashes survive.
         assert ";" not in cd.split('"', 2)[1]
@@ -169,9 +167,7 @@ class TestSafeFilename:
         assert _safe_filename("a/b\\c.csv") == "a_b_c.csv"
 
     def test_non_ascii_replaced(self) -> None:
-        assert _safe_filename("café.csv") == "caf__.csv" or "_" in _safe_filename(
-            "café.csv"
-        )
+        assert _safe_filename("café.csv") == "caf__.csv" or "_" in _safe_filename("café.csv")
 
 
 # ---------------------------------------------------------------------------

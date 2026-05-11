@@ -76,16 +76,12 @@ class TestStubGuard:
         resp = client.get("/auth/_stub/authorize?redirect_uri=/cb&state=abc")
         assert resp.status_code == 404
 
-    def test_token_returns_404_when_stub_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_token_returns_404_when_stub_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = self._guarded_client(monkeypatch)
         resp = client.post("/auth/_stub/token")
         assert resp.status_code == 404
 
-    def test_userinfo_returns_404_when_stub_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_userinfo_returns_404_when_stub_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = self._guarded_client(monkeypatch)
         resp = client.get("/auth/_stub/userinfo")
         assert resp.status_code == 404
@@ -102,9 +98,7 @@ class TestStubAuthorize:
         resp = client.get("/auth/_stub/authorize?redirect_uri=http://app/cb&state=abc123")
         assert resp.status_code == 302
 
-    def test_authorize_echoes_state_in_location(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_authorize_echoes_state_in_location(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         resp = client.get("/auth/_stub/authorize?redirect_uri=http://app/cb&state=test-state")
         location = resp.headers["location"]
@@ -118,9 +112,7 @@ class TestStubAuthorize:
         location = resp.headers["location"]
         assert "code=stub-auth-code" in location
 
-    def test_authorize_redirects_to_redirect_uri(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_authorize_redirects_to_redirect_uri(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         resp = client.get(
             "/auth/_stub/authorize?redirect_uri=http://app/auth/google/callback&state=s"
@@ -128,9 +120,7 @@ class TestStubAuthorize:
         location = resp.headers["location"]
         assert location.startswith("http://app/auth/google/callback")
 
-    def test_authorize_handles_missing_state(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_authorize_handles_missing_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         resp = client.get("/auth/_stub/authorize?redirect_uri=http://app/cb")
         assert resp.status_code == 302
@@ -153,24 +143,18 @@ class TestStubToken:
         resp = client.post("/auth/_stub/token")
         assert resp.headers["content-type"].startswith("application/json")
 
-    def test_token_response_has_access_token(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_token_response_has_access_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         data = client.post("/auth/_stub/token").json()
         assert "access_token" in data
         assert data["access_token"] == "stub-access-token"  # noqa: S105
 
-    def test_token_response_has_token_type(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_token_response_has_token_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         data = client.post("/auth/_stub/token").json()
         assert data.get("token_type") == "Bearer"
 
-    def test_token_response_has_no_id_token(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_token_response_has_no_id_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No id_token means Authlib won't attempt JWT verification."""
         client = _make_client(monkeypatch)
         data = client.post("/auth/_stub/token").json()
@@ -200,9 +184,7 @@ class TestStubUserinfo:
         assert data["email"] == STUB_USER["email"]
         assert data["name"] == STUB_USER["name"]
 
-    def test_userinfo_sub_matches_stub_user_constant(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_userinfo_sub_matches_stub_user_constant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _make_client(monkeypatch)
         data = client.get("/auth/_stub/userinfo").json()
         assert data == dict(STUB_USER)

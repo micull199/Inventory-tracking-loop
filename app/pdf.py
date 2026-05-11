@@ -44,9 +44,7 @@ def _fmt_date(value: date | None) -> str:
     return value.isoformat()
 
 
-def _line_total(
-    qty: Decimal, unit_cost: Decimal | None
-) -> Decimal | None:
+def _line_total(qty: Decimal, unit_cost: Decimal | None) -> Decimal | None:
     if unit_cost is None:
         return None
     return qty * unit_cost
@@ -97,14 +95,8 @@ def render_po_pdf(
     canv.drawString(left + 90 * mm, y, "Details")
     canv.setFont("Helvetica", 10)
     created_at = po["created_at"]
-    created_iso = (
-        created_at.date().isoformat()
-        if hasattr(created_at, "date")
-        else str(created_at)
-    )
-    canv.drawString(
-        left + 90 * mm, y - 5 * mm, f"Created: {created_iso}"
-    )
+    created_iso = created_at.date().isoformat() if hasattr(created_at, "date") else str(created_at)
+    canv.drawString(left + 90 * mm, y - 5 * mm, f"Created: {created_iso}")
     canv.drawString(
         left + 90 * mm,
         y - 10 * mm,

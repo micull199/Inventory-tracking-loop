@@ -49,15 +49,11 @@ def _normalise(form: dict[str, str]) -> dict[str, str | None]:
 
 def _validate_name(name: str | None) -> str:
     if not name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="name is required"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     return name
 
 
-def _check_name_unique(
-    db: Session, name: str, *, exclude_id: int | None = None
-) -> None:
+def _check_name_unique(db: Session, name: str, *, exclude_id: int | None = None) -> None:
     stmt = select(Location.id).where(Location.name == name)
     if exclude_id is not None:
         stmt = stmt.where(Location.id != exclude_id)
@@ -68,9 +64,9 @@ def _check_name_unique(
         )
 
 
-def _diff(location: Location, new: dict[str, str | None]) -> tuple[
-    dict[str, Any], dict[str, Any]
-] | None:
+def _diff(
+    location: Location, new: dict[str, str | None]
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Return ``(before, after)`` of *changed* fields only, or None if no-op."""
     before: dict[str, Any] = {}
     after: dict[str, Any] = {}
@@ -208,9 +204,7 @@ def create_location(
     )
     db.commit()
     _flash(request, f"Location “{location.name}” created.")
-    return RedirectResponse(
-        url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -227,9 +221,7 @@ def edit_location_form(
 ) -> HTMLResponse:
     location = db.get(Location, location_id)
     if location is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="location not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location not found")
     return templates.TemplateResponse(
         request,
         "locations_form.html",
@@ -257,9 +249,7 @@ def update_location(
 ) -> Response:
     location = db.get(Location, location_id)
     if location is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="location not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location not found")
 
     fields = _normalise({"name": name, "notes": notes})
     _validate_name(fields["name"])
@@ -284,9 +274,7 @@ def update_location(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +291,7 @@ def archive_location(
 ) -> Response:
     location = db.get(Location, location_id)
     if location is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="location not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location not found")
 
     if location.archived_at is None:
         location.archived_at = datetime.now(UTC)
@@ -323,9 +309,7 @@ def archive_location(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/{location_id}/unarchive")
@@ -337,9 +321,7 @@ def unarchive_location(
 ) -> Response:
     location = db.get(Location, location_id)
     if location is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="location not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="location not found")
 
     if location.archived_at is not None:
         previous = location.archived_at
@@ -358,6 +340,4 @@ def unarchive_location(
     else:
         db.rollback()
 
-    return RedirectResponse(
-        url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(url="/admin/locations", status_code=status.HTTP_303_SEE_OTHER)

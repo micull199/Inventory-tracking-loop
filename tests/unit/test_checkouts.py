@@ -39,9 +39,7 @@ def db() -> Iterator[Session]:
         conn.execute(text("PRAGMA foreign_keys=ON"))
         conn.commit()
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         session.execute(text("PRAGMA foreign_keys=ON"))
         yield session
@@ -122,18 +120,14 @@ class TestCheckoutDefaults:
         assert co.item_unit_id is None
         assert co.user_id == user.id
         # SQLite drops tzinfo on round-trip; compare naive forms.
-        assert co.checked_out_at.replace(tzinfo=None) == checked_out.replace(
-            tzinfo=None
-        )
+        assert co.checked_out_at.replace(tzinfo=None) == checked_out.replace(tzinfo=None)
         assert co.expected_return is None
         assert co.returned_at is None
         assert co.condition_note is None
         assert co.created_at is not None
         assert co.updated_at is not None
 
-    def test_checkout_with_unit_and_expected_return(
-        self, db: Session
-    ) -> None:
+    def test_checkout_with_unit_and_expected_return(self, db: Session) -> None:
         item = _item(db)
         unit = _unit(db, item)
         user = _user(db)
@@ -154,9 +148,7 @@ class TestCheckoutDefaults:
 
         assert co.item_unit_id == unit.id
         assert co.expected_return is not None
-        assert co.expected_return.replace(tzinfo=None) == expected.replace(
-            tzinfo=None
-        )
+        assert co.expected_return.replace(tzinfo=None) == expected.replace(tzinfo=None)
         assert co.condition_note == "Test handle ahead of weekend casting run"
 
     def test_returned_checkout_round_trips(self, db: Session) -> None:
@@ -177,9 +169,7 @@ class TestCheckoutDefaults:
         db.refresh(co)
 
         assert co.returned_at is not None
-        assert co.returned_at.replace(tzinfo=None) == returned.replace(
-            tzinfo=None
-        )
+        assert co.returned_at.replace(tzinfo=None) == returned.replace(tzinfo=None)
 
     def test_long_condition_note_round_trips(self, db: Session) -> None:
         item = _item(db, tracking_mode=TrackingMode.QTY)

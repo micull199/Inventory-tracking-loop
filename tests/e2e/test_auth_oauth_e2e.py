@@ -46,17 +46,13 @@ def _oauth_sign_in(page: Page, base_url: str) -> None:
     page.wait_for_url(f"{base_url}/")
 
 
-def test_google_oauth_stub_new_user_lands_pending(
-    page: Page, oauth_stub_app_server: str
-) -> None:
+def test_google_oauth_stub_new_user_lands_pending(page: Page, oauth_stub_app_server: str) -> None:
     """A first-time OAuth sign-in creates a pending user."""
     _oauth_sign_in(page, oauth_stub_app_server)
     expect(page.get_by_test_id("pending-heading")).to_be_visible()
 
 
-def test_google_oauth_stub_full_cycle(
-    context: BrowserContext, oauth_stub_app_server: str
-) -> None:
+def test_google_oauth_stub_full_cycle(context: BrowserContext, oauth_stub_app_server: str) -> None:
     """Full DoD #1 cycle via Google OAuth stub: sign-in → pending → promote → active.
 
     Step 1: stub user signs in via Google OAuth → lands on pending page.

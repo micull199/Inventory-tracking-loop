@@ -10,9 +10,7 @@ from __future__ import annotations
 from playwright.sync_api import BrowserContext, Page, expect
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -54,16 +52,12 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
 
     # Step 3: Admin promotes the pending user → manager + active.
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="tax-mgr@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="tax-mgr@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("manager")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="tax-mgr@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="tax-mgr@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -101,34 +95,26 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
 
     # Flash and row both visible.
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Raw Materials")
-    rm_row = mgr_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Raw Materials"
-    )
+    rm_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Raw Materials")
     expect(rm_row).to_be_visible()
 
     # Step 8: Archive the category.
     rm_row.get_by_test_id("archive-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
     expect(
-        mgr_page.locator(
-            '[data-testid="taxonomy-row"]', has_text="Raw Materials"
-        )
+        mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Raw Materials")
     ).to_have_count(0)
 
     # Step 9: Switch to archived tab — Raw Materials is there.
     mgr_page.get_by_test_id("tab-archived").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy?show=archived")
-    archived_row = mgr_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Raw Materials"
-    )
+    archived_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Raw Materials")
     expect(archived_row).to_be_visible()
 
     # Step 10: Unarchive — moves back to active.
     archived_row.get_by_test_id("unarchive-taxonomy").click()
     mgr_page.wait_for_url(f"{app_server}/admin/taxonomy")
-    restored_row = mgr_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Raw Materials"
-    )
+    restored_row = mgr_page.locator('[data-testid="taxonomy-row"]', has_text="Raw Materials")
     expect(restored_row).to_be_visible()
 
     # Step 11: Click into the category's sub-categories.
@@ -143,32 +129,24 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.get_by_test_id("taxonomy-submit").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/children"))
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Silver")
-    silver_row = mgr_page.locator(
-        '[data-testid="sub-row"]', has_text="Silver"
-    )
+    silver_row = mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
     expect(silver_row).to_be_visible()
 
     # Step 13: Archive the sub-category.
     silver_row.get_by_test_id("archive-sub").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/children"))
-    expect(
-        mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
-    ).to_have_count(0)
+    expect(mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")).to_have_count(0)
 
     # Step 14: Switch to the archived sub-cat tab — Silver is there.
     mgr_page.get_by_test_id("sub-tab-archived").click()
     mgr_page.wait_for_url(lambda u: "show=archived" in u)
-    archived_silver = mgr_page.locator(
-        '[data-testid="sub-row"]', has_text="Silver"
-    )
+    archived_silver = mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
     expect(archived_silver).to_be_visible()
 
     # Step 15: Unarchive — back to active.
     archived_silver.get_by_test_id("unarchive-sub").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/children"))
-    restored_silver = mgr_page.locator(
-        '[data-testid="sub-row"]', has_text="Silver"
-    )
+    restored_silver = mgr_page.locator('[data-testid="sub-row"]', has_text="Silver")
     expect(restored_silver).to_be_visible()
 
     # Step 16: Click into the sub-cat's Fields page.
@@ -186,9 +164,7 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.get_by_test_id("field-def-submit").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Karat")
-    karat_row = mgr_page.locator(
-        '[data-testid="field-def-row"]', has_text="Karat"
-    )
+    karat_row = mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
     expect(karat_row).to_be_visible()
     expect(karat_row.get_by_test_id("field-def-type")).to_have_text("select")
     expect(karat_row.get_by_test_id("field-def-required")).to_have_text("Yes")
@@ -196,24 +172,18 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     # Step 18: Archive it.
     karat_row.get_by_test_id("archive-field-def").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
-    expect(
-        mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
-    ).to_have_count(0)
+    expect(mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")).to_have_count(0)
 
     # Step 19: Switch to archived tab — Karat is there.
     mgr_page.get_by_test_id("field-defs-tab-archived").click()
     mgr_page.wait_for_url(lambda u: "show=archived" in u)
-    archived_karat = mgr_page.locator(
-        '[data-testid="field-def-row"]', has_text="Karat"
-    )
+    archived_karat = mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
     expect(archived_karat).to_be_visible()
 
     # Step 20: Unarchive — back to active.
     archived_karat.get_by_test_id("unarchive-field-def").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
-    restored_karat = mgr_page.locator(
-        '[data-testid="field-def-row"]', has_text="Karat"
-    )
+    restored_karat = mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
     expect(restored_karat).to_be_visible()
 
     mgr_page.close()

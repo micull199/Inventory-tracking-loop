@@ -73,9 +73,7 @@ def _make_node(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
     return node
 
 
-def _make_sub(
-    db: Session, parent: TaxonomyNode, name: str = "Silver"
-) -> TaxonomyNode:
+def _make_sub(db: Session, parent: TaxonomyNode, name: str = "Silver") -> TaxonomyNode:
     sub = TaxonomyNode(name=name, parent_id=parent.id)
     db.add(sub)
     db.commit()
@@ -83,13 +81,9 @@ def _make_sub(
     return sub
 
 
-def _audit_rows(
-    db: Session, *, action: str | None = None
-) -> list[AuditLog]:
+def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
     stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "taxonomy_field_def")
-        .order_by(AuditLog.id)
+        select(AuditLog).where(AuditLog.entity_type == "taxonomy_field_def").order_by(AuditLog.id)
     )
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
@@ -102,52 +96,40 @@ def _audit_rows(
 
 
 class TestFieldDefRoleEnforcement:
-    def test_anonymous_get_list_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_list_is_401(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 403
 
-    def test_office_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, office)
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 403
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         _login_as(client, admin)
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 200
 
-    def test_pending_user_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         pending = _make_user(
             db_session,
@@ -159,9 +141,7 @@ class TestFieldDefRoleEnforcement:
         resp = client.get(f"/admin/taxonomy/{node.id}/fields")
         assert resp.status_code == 403
 
-    def test_workshop_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_create_is_403(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, worker)
@@ -180,17 +160,13 @@ class TestFieldDefRoleEnforcement:
 
 
 class TestFieldDefList:
-    def test_list_unknown_node_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_unknown_node_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/taxonomy/9999/fields")
         assert resp.status_code == 404
 
-    def test_list_empty_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_empty_state(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -198,9 +174,7 @@ class TestFieldDefList:
         assert resp.status_code == 200
         assert "field-defs-empty" in resp.text
 
-    def test_list_shows_active_by_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         db_session.add_all(
             [
@@ -226,9 +200,7 @@ class TestFieldDefList:
         assert "Karat" in resp.text
         assert "OldField" not in resp.text
 
-    def test_list_show_archived(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_show_archived(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         db_session.add_all(
             [
@@ -300,9 +272,7 @@ class TestFieldDefList:
         b = _make_node(db_session, "Tools")
         db_session.add_all(
             [
-                TaxonomyFieldDef(
-                    node_id=a.id, name="Karat", key="karat", type=FieldType.TEXT
-                ),
+                TaxonomyFieldDef(node_id=a.id, name="Karat", key="karat", type=FieldType.TEXT),
                 TaxonomyFieldDef(
                     node_id=b.id,
                     name="HandleSize",
@@ -333,9 +303,7 @@ class TestFieldDefList:
     def test_list_for_archived_node_shows_note_and_no_cta(
         self, client: TestClient, db_session: Session
     ) -> None:
-        node = TaxonomyNode(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        node = TaxonomyNode(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(node)
         db_session.commit()
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -352,9 +320,7 @@ class TestFieldDefList:
 
 
 class TestFieldDefCreate:
-    def test_get_new_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -381,9 +347,7 @@ class TestFieldDefCreate:
     def test_get_new_form_under_archived_node_is_400(
         self, client: TestClient, db_session: Session
     ) -> None:
-        node = TaxonomyNode(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        node = TaxonomyNode(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(node)
         db_session.commit()
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -419,9 +383,7 @@ class TestFieldDefCreate:
         resp = client.get(f"/admin/taxonomy/{parent.id}/fields/new")
         assert resp.status_code == 200
 
-    def test_create_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_happy_path(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -438,9 +400,7 @@ class TestFieldDefCreate:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert (
-            resp.headers["location"] == f"/admin/taxonomy/{node.id}/fields"
-        )
+        assert resp.headers["location"] == f"/admin/taxonomy/{node.id}/fields"
 
         f = db_session.execute(select(TaxonomyFieldDef)).scalar_one()
         assert f.node_id == node.id
@@ -451,9 +411,7 @@ class TestFieldDefCreate:
         assert f.required is False
         assert f.sort_order == 5
 
-    def test_create_strips_whitespace(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_strips_whitespace(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -471,9 +429,7 @@ class TestFieldDefCreate:
         assert f.name == "Karat"
         assert f.key == "karat"
 
-    def test_create_derives_key_from_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_derives_key_from_name(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -510,9 +466,7 @@ class TestFieldDefCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(TaxonomyFieldDef)).first() is None
 
-    def test_create_rejects_empty_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_empty_name(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -527,9 +481,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_rejects_unknown_type(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_unknown_type(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -544,9 +496,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_select_requires_options(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_select_requires_options(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -580,9 +530,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_select_with_options(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_select_with_options(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -636,9 +584,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_required_checkbox_stored(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_required_checkbox_stored(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -749,14 +695,10 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_rejects_duplicate_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_rejects_duplicate_name(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         db_session.add(
-            TaxonomyFieldDef(
-                node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-            )
+            TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         )
         db_session.commit()
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -833,9 +775,7 @@ class TestFieldDefCreate:
         a = _make_node(db_session, "Raw Materials")
         b = _make_node(db_session, "Tools")
         db_session.add(
-            TaxonomyFieldDef(
-                node_id=a.id, name="Karat", key="karat", type=FieldType.TEXT
-            )
+            TaxonomyFieldDef(node_id=a.id, name="Karat", key="karat", type=FieldType.TEXT)
         )
         db_session.commit()
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -851,9 +791,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 303
 
-    def test_create_under_non_leaf_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_under_non_leaf_is_400(self, client: TestClient, db_session: Session) -> None:
         parent = _make_node(db_session)
         _make_sub(db_session, parent)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -872,9 +810,7 @@ class TestFieldDefCreate:
     def test_create_under_archived_node_is_400(
         self, client: TestClient, db_session: Session
     ) -> None:
-        node = TaxonomyNode(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        node = TaxonomyNode(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(node)
         db_session.commit()
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -890,9 +826,7 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 400
 
-    def test_create_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
@@ -933,9 +867,7 @@ class TestFieldDefCreate:
 
 
 class TestFieldDefEdit:
-    def test_get_edit_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_form_renders(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=node.id,
@@ -954,17 +886,13 @@ class TestFieldDefEdit:
         assert "Karat" in resp.text
         assert "9\n14" in resp.text  # textarea pre-filled
 
-    def test_get_edit_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/taxonomy/fields/9999/edit")
         assert resp.status_code == 404
 
-    def test_post_update_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_happy_path(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=node.id,
@@ -1066,9 +994,7 @@ class TestFieldDefEdit:
         self, client: TestClient, db_session: Session
     ) -> None:
         node = _make_node(db_session)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db_session.add(f)
         db_session.commit()
         f_id = f.id
@@ -1091,9 +1017,7 @@ class TestFieldDefEdit:
         assert refreshed.type == FieldType.SELECT
         assert refreshed.options_json == ["9", "14"]
 
-    def test_post_update_required_toggle(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_required_toggle(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=node.id,
@@ -1127,12 +1051,8 @@ class TestFieldDefEdit:
         self, client: TestClient, db_session: Session
     ) -> None:
         node = _make_node(db_session)
-        a = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
-        b = TaxonomyFieldDef(
-            node_id=node.id, name="Other", key="other", type=FieldType.TEXT
-        )
+        a = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
+        b = TaxonomyFieldDef(node_id=node.id, name="Other", key="other", type=FieldType.TEXT)
         db_session.add_all([a, b])
         db_session.commit()
         b_id = b.id
@@ -1149,9 +1069,7 @@ class TestFieldDefEdit:
         )
         assert resp.status_code == 400
 
-    def test_post_update_writes_audit_diff(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_post_update_writes_audit_diff(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=node.id,
@@ -1189,9 +1107,7 @@ class TestFieldDefEdit:
         self, client: TestClient, db_session: Session
     ) -> None:
         node = _make_node(db_session)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db_session.add(f)
         db_session.commit()
         f_id = f.id
@@ -1257,13 +1173,9 @@ class TestFieldDefEdit:
 
 
 class TestFieldDefArchive:
-    def test_archive_sets_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_sets_archived_at(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db_session.add(f)
         db_session.commit()
         f_id = f.id
@@ -1281,13 +1193,9 @@ class TestFieldDefArchive:
         assert refreshed is not None
         assert refreshed.archived_at is not None
 
-    def test_archive_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db_session.add(f)
         db_session.commit()
         f_id = f.id
@@ -1329,9 +1237,7 @@ class TestFieldDefArchive:
         rows = _audit_rows(db_session, action="taxonomy_field_def.archived")
         assert rows == []
 
-    def test_archive_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -1341,9 +1247,7 @@ class TestFieldDefArchive:
         )
         assert resp.status_code == 404
 
-    def test_unarchive_clears_archived_at(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_clears_archived_at(self, client: TestClient, db_session: Session) -> None:
         node = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=node.id,
@@ -1372,9 +1276,7 @@ class TestFieldDefArchive:
         self, client: TestClient, db_session: Session
     ) -> None:
         node = _make_node(db_session)
-        f = TaxonomyFieldDef(
-            node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT
-        )
+        f = TaxonomyFieldDef(node_id=node.id, name="Karat", key="karat", type=FieldType.TEXT)
         db_session.add(f)
         db_session.commit()
         f_id = f.id
@@ -1424,9 +1326,7 @@ class TestFieldDefArchive:
     def test_unarchive_on_archived_node_is_400(
         self, client: TestClient, db_session: Session
     ) -> None:
-        node = TaxonomyNode(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        node = TaxonomyNode(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(node)
         db_session.commit()
         f = TaxonomyFieldDef(
@@ -1448,9 +1348,7 @@ class TestFieldDefArchive:
         )
         assert resp.status_code == 400
 
-    def test_unarchive_unknown_id_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_unknown_id_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -1550,39 +1448,25 @@ class TestFieldDefOptionsFragmentRoute:
     """
 
     def test_anon_blocked(self, client: TestClient) -> None:
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=select"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=select")
         assert resp.status_code == 401
 
-    def test_office_blocked(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_blocked(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=select"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=select")
         assert resp.status_code == 403
 
-    def test_workshop_blocked(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_blocked(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=select"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=select")
         assert resp.status_code == 403
 
-    def test_select_renders_options_textarea(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_select_renders_options_textarea(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=select"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=select")
         assert resp.status_code == 200
         assert 'name="options_text"' in resp.text
         assert 'data-testid="field-def-options-input"' in resp.text
@@ -1592,42 +1476,28 @@ class TestFieldDefOptionsFragmentRoute:
     ) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=multiselect"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=multiselect")
         assert resp.status_code == 200
         assert 'name="options_text"' in resp.text
 
-    def test_text_hides_options_textarea(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_text_hides_options_textarea(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=text"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=text")
         assert resp.status_code == 200
         assert 'name="options_text"' not in resp.text
 
-    def test_number_hides_options_textarea(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_number_hides_options_textarea(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=number"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=number")
         assert resp.status_code == 200
         assert 'name="options_text"' not in resp.text
 
-    def test_boolean_hides_options_textarea(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_boolean_hides_options_textarea(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
-        resp = client.get(
-            "/admin/taxonomy/fields/_options-partial?type=boolean"
-        )
+        resp = client.get("/admin/taxonomy/fields/_options-partial?type=boolean")
         assert resp.status_code == 200
         assert 'name="options_text"' not in resp.text
 
@@ -1640,9 +1510,7 @@ class TestFieldDefOptionsFragmentRoute:
         assert resp.status_code == 200
         assert 'name="options_text"' not in resp.text
 
-    def test_options_text_round_trips(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_options_text_round_trips(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get(

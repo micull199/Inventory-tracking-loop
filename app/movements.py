@@ -217,9 +217,7 @@ def _safe_scan_next(raw: str) -> str | None:
 def _get_item_or_404(db: Session, item_id: int) -> Item:
     item = db.get(Item, item_id)
     if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="item not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
     return item
 
 
@@ -284,9 +282,7 @@ def _recent_movements(db: Session, item_id: int) -> list[dict[str, Any]]:
 def stock_in_form(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = _get_item_or_404(db, item_id)
@@ -322,18 +318,14 @@ def record_stock_in(
     reason: str = Form(""),
     note: str = Form(""),
     next_: str = Form("", alias="next"),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
     _reject_archived(item)
 
     qty_decimal = _parse_positive_decimal(qty, field_name="quantity")
-    unit_cost_decimal = _parse_non_negative_decimal(
-        unit_cost, field_name="unit cost"
-    )
+    unit_cost_decimal = _parse_non_negative_decimal(unit_cost, field_name="unit cost")
     clean_reason = (reason or "").strip() or None
     clean_note = (note or "").strip() or None
 
@@ -426,9 +418,7 @@ def _render_stock_out_form(
 def stock_out_form(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = _get_item_or_404(db, item_id)
@@ -455,9 +445,7 @@ def record_stock_out(
     reason: str = Form(""),
     note: str = Form(""),
     next_: str = Form("", alias="next"),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
@@ -498,10 +486,7 @@ def record_stock_out(
                 "reason": (reason or "").strip(),
                 "note": (note or "").strip(),
             },
-            error=(
-                f"Not enough stock: requested {exc.requested}, "
-                f"only {exc.available} available."
-            ),
+            error=(f"Not enough stock: requested {exc.requested}, only {exc.available} available."),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -515,11 +500,7 @@ def record_stock_out(
         after={
             "item_id": item.id,
             "qty": str(qty_decimal),
-            "total_cost": (
-                str(movement.total_cost)
-                if movement.total_cost is not None
-                else None
-            ),
+            "total_cost": (str(movement.total_cost) if movement.total_cost is not None else None),
             "reason": clean_reason,
             "note": clean_note,
         },
@@ -572,9 +553,7 @@ def _render_stock_adjust_form(
 def stock_adjust_form(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     item = _get_item_or_404(db, item_id)
@@ -609,9 +588,7 @@ def record_stock_adjustment(
     reason: str = Form(""),
     note: str = Form(""),
     next_: str = Form("", alias="next"),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
@@ -626,9 +603,7 @@ def record_stock_adjustment(
     # ignored (consumption price is per-layer; same as the ``out`` route).
     unit_cost_decimal: Decimal | None = None
     if direction_value == "increase":
-        unit_cost_decimal = _parse_non_negative_decimal(
-            unit_cost, field_name="unit cost"
-        )
+        unit_cost_decimal = _parse_non_negative_decimal(unit_cost, field_name="unit cost")
 
     received_at = datetime.now(UTC)
     movement = StockMovement(
@@ -659,20 +634,13 @@ def record_stock_adjustment(
             "qty": str(qty_decimal),
             "direction": direction_value,
             "unit_cost": str(unit_cost_decimal),
-            "total_cost": (
-                str(movement.total_cost)
-                if movement.total_cost is not None
-                else None
-            ),
+            "total_cost": (str(movement.total_cost) if movement.total_cost is not None else None),
             "source": CostLayerSource.POSITIVE_ADJUSTMENT.value,
             "reason": clean_reason,
             "note": clean_note,
             "received_at": received_at.isoformat(),
         }
-        flash_message = (
-            f"Adjustment recorded: +{qty_decimal} {item.unit} of "
-            f"“{item.name}”."
-        )
+        flash_message = f"Adjustment recorded: +{qty_decimal} {item.unit} of “{item.name}”."
     else:
         try:
             consume_fifo(db, item=item, qty=qty_decimal, movement=movement)
@@ -692,8 +660,7 @@ def record_stock_adjustment(
                     "note": (note or "").strip(),
                 },
                 error=(
-                    f"Not enough stock: requested {exc.requested}, "
-                    f"only {exc.available} available."
+                    f"Not enough stock: requested {exc.requested}, only {exc.available} available."
                 ),
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
@@ -701,18 +668,11 @@ def record_stock_adjustment(
             "item_id": item.id,
             "qty": str(qty_decimal),
             "direction": direction_value,
-            "total_cost": (
-                str(movement.total_cost)
-                if movement.total_cost is not None
-                else None
-            ),
+            "total_cost": (str(movement.total_cost) if movement.total_cost is not None else None),
             "reason": clean_reason,
             "note": clean_note,
         }
-        flash_message = (
-            f"Adjustment recorded: -{qty_decimal} {item.unit} of "
-            f"“{item.name}”."
-        )
+        flash_message = f"Adjustment recorded: -{qty_decimal} {item.unit} of “{item.name}”."
 
     record_audit(
         db,
@@ -782,9 +742,7 @@ def _resolve_active_location(db: Session, location_id: int) -> Location:
     return loc
 
 
-def _other_active_locations(
-    db: Session, *, exclude_id: int
-) -> list[dict[str, Any]]:
+def _other_active_locations(db: Session, *, exclude_id: int) -> list[dict[str, Any]]:
     """Active locations other than ``exclude_id`` (the item's current).
 
     Returned as view-shaped dicts so the template can iterate without ORM
@@ -820,8 +778,7 @@ def _render_stock_transfer_form(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "this item has no location yet — set one via the edit form "
-                "before transferring"
+                "this item has no location yet — set one via the edit form before transferring"
             ),
         )
     from_location = db.get(Location, item.location_id)
@@ -832,9 +789,7 @@ def _render_stock_transfer_form(
             "current_user": user,
             "item": item,
             "from_location": from_location,
-            "to_location_options": _other_active_locations(
-                db, exclude_id=item.location_id
-            ),
+            "to_location_options": _other_active_locations(db, exclude_id=item.location_id),
             "recent_movements": _recent_movements(db, item.id),
             "form": form_values,
         },
@@ -846,9 +801,7 @@ def _render_stock_transfer_form(
 def stock_transfer_form(
     request: Request,
     item_id: int,
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
@@ -888,9 +841,7 @@ def record_stock_transfer(
     qty: str = Form(""),
     reason: str = Form(""),
     note: str = Form(""),
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     item = _get_item_or_404(db, item_id)
@@ -903,8 +854,7 @@ def record_stock_transfer(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "this item has no location yet — set one via the edit form "
-                "before transferring"
+                "this item has no location yet — set one via the edit form before transferring"
             ),
         )
 
@@ -1009,11 +959,7 @@ def _open_layers(db: Session, item_id: int) -> list[dict[str, Any]]:
 
 
 def _count_movements(db: Session, item_id: int) -> int:
-    total = db.scalar(
-        select(func.count(StockMovement.id)).where(
-            StockMovement.item_id == item_id
-        )
-    )
+    total = db.scalar(select(func.count(StockMovement.id)).where(StockMovement.item_id == item_id))
     return int(total or 0)
 
 
@@ -1053,9 +999,7 @@ def _movements_page(
     return out
 
 
-def _attach_directions_and_breakdown(
-    db: Session, movements: list[dict[str, Any]]
-) -> None:
+def _attach_directions_and_breakdown(db: Session, movements: list[dict[str, Any]]) -> None:
     """Merge ``direction`` ("+"/"-") and ``breakdown`` (list) into each row.
 
     Direction is derived from whether the movement created a cost layer
@@ -1134,9 +1078,7 @@ _MOVEMENTS_CSV_HEADERS: list[str] = [
 ]
 
 
-def _all_movements_for_csv(
-    db: Session, item_id: int
-) -> list[dict[str, Any]]:
+def _all_movements_for_csv(db: Session, item_id: int) -> list[dict[str, Any]]:
     """Every movement for an item, newest-first, with directions attached.
 
     The CSV branch ignores the HTML's 20-per-page pagination — the receiver
@@ -1225,9 +1167,7 @@ def item_detail(
     item_id: int,
     page: int = 1,
     format: str = "",
-    user: User = Depends(
-        require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)
-    ),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
     """Read-only item detail page (M6).

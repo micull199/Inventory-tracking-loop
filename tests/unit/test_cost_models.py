@@ -33,9 +33,7 @@ from app.models import (
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
@@ -260,9 +258,7 @@ class TestCostLayerConsumptionDefaults:
     def test_minimal_consumption_round_trips(self, db: Session) -> None:
         item = _item(db)
         movement_in = _movement(db, item=item, type_=MovementType.IN)
-        movement_out = _movement(
-            db, item=item, type_=MovementType.OUT, qty=Decimal("3")
-        )
+        movement_out = _movement(db, item=item, type_=MovementType.OUT, qty=Decimal("3"))
         layer = CostLayer(
             item_id=item.id,
             qty_received=Decimal("10"),

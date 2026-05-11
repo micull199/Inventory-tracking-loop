@@ -23,16 +23,12 @@ from app.models import Item, ItemUnit, ItemUnitStatus, Location, TaxonomyNode, T
 def db() -> Iterator[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(
-        bind=engine, autoflush=False, autocommit=False, future=True
-    )
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     with SessionLocal() as session:
         yield session
 
 
-def _node(
-    db: Session, name: str = "Tools", sku_prefix: str | None = None
-) -> TaxonomyNode:
+def _node(db: Session, name: str = "Tools", sku_prefix: str | None = None) -> TaxonomyNode:
     # ``sku_prefix`` defaults to the name-derived value; callers that build
     # multiple sibling nodes from similar names must pass an explicit
     # value to dodge the partial unique index on ``(sku_prefix)``.

@@ -59,9 +59,7 @@ def _make_alembic_config(db_path: Path) -> Config:
 
 
 @pytest.fixture(autouse=True)
-def _patch_settings_url(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _patch_settings_url(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point ``app.config.settings.database_url`` at the temp DB.
 
     ``migrations/env.py`` reads from ``settings.database_url`` to build the
@@ -81,9 +79,7 @@ def db_path(tmp_path: Path) -> Iterator[Path]:
 
 
 class TestFreshDBUpgrade:
-    def test_partial_unique_index_rejects_duplicate_top_level_prefix(
-        self, db_path: Path
-    ) -> None:
+    def test_partial_unique_index_rejects_duplicate_top_level_prefix(self, db_path: Path) -> None:
         # Upgrade through 0016 on a fresh DB.
         cfg = _make_alembic_config(db_path)
         command.upgrade(cfg, "head")

@@ -52,9 +52,7 @@ class TestTaxonomyDefaults:
         assert node.sort_order == 42
 
     def test_archived_at_can_be_set(self, db: Session) -> None:
-        node = TaxonomyNode(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        node = TaxonomyNode(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db.add(node)
         db.commit()
         db.refresh(node)
@@ -85,13 +83,9 @@ class TestTaxonomyConstraints:
             db.commit()
         db.rollback()
 
-    def test_top_level_unique_applies_even_when_other_is_archived(
-        self, db: Session
-    ) -> None:
+    def test_top_level_unique_applies_even_when_other_is_archived(self, db: Session) -> None:
         """Archiving doesn't free the name. Operator must rename or unarchive."""
-        archived = TaxonomyNode(
-            name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        archived = TaxonomyNode(name="Raw Materials", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db.add(archived)
         db.commit()
 
@@ -139,9 +133,7 @@ class TestTaxonomyConstraints:
         db.add(TaxonomyNode(name="Silver", parent_id=parent.id))
         db.commit()  # must not raise
 
-    def test_same_name_under_different_parents_is_allowed(
-        self, db: Session
-    ) -> None:
+    def test_same_name_under_different_parents_is_allowed(self, db: Session) -> None:
         a = TaxonomyNode(name="Raw Materials")
         b = TaxonomyNode(name="Consumables")
         db.add_all([a, b])

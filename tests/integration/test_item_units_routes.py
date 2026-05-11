@@ -70,22 +70,14 @@ def _csrf(client: TestClient) -> str:
     return client.cookies["csrftoken"]
 
 
-def _audit_rows(
-    db: Session, *, action: str | None = None
-) -> list[AuditLog]:
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "item_unit")
-        .order_by(AuditLog.id)
-    )
+def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
+    stmt = select(AuditLog).where(AuditLog.entity_type == "item_unit").order_by(AuditLog.id)
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
     return list(db.execute(stmt).scalars().all())
 
 
-def _make_leaf(
-    db: Session, name: str = "Tools", sku_prefix: str | None = None
-) -> TaxonomyNode:
+def _make_leaf(db: Session, name: str = "Tools", sku_prefix: str | None = None) -> TaxonomyNode:
     # Default ``sku_prefix`` is derived from ``name`` (see ``TaxonomyNode``).
     # Callers that build sibling leaves from similar names (e.g. ``Cat-X``,
     # ``Cat-Y``) must pass an explicit prefix to dodge the partial unique
@@ -123,9 +115,7 @@ def _make_unique_item(
     return item
 
 
-def _make_qty_item(
-    db: Session, *, sku: str = "RM-001", name: str = "Wire"
-) -> Item:
+def _make_qty_item(db: Session, *, sku: str = "RM-001", name: str = "Wire") -> Item:
     _alnum = "".join(c for c in sku if c.isalnum())[:8] or "TST"
     leaf = _make_leaf(db, name=f"Cat-{sku}", sku_prefix=_alnum)
     item = Item(
@@ -184,43 +174,33 @@ def _create_payload(
 
 
 class TestUnitsRoleEnforcement:
-    def test_anonymous_get_list_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_list_is_401(self, client: TestClient, db_session: Session) -> None:
         item = _make_unique_item(db_session)
         resp = client.get(f"/admin/items/{item.id}/units")
         assert resp.status_code == 401
 
-    def test_workshop_get_list_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_list_is_403(self, client: TestClient, db_session: Session) -> None:
         worker = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         item = _make_unique_item(db_session)
         _login_as(client, worker)
         resp = client.get(f"/admin/items/{item.id}/units")
         assert resp.status_code == 403
 
-    def test_office_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         _login_as(client, office)
         resp = client.get(f"/admin/items/{item.id}/units")
         assert resp.status_code == 200
 
-    def test_office_get_new_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_new_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         _login_as(client, office)
         resp = client.get(f"/admin/items/{item.id}/units/new")
         assert resp.status_code == 403
 
-    def test_office_create_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_create_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         _login_as(client, office)
@@ -232,9 +212,7 @@ class TestUnitsRoleEnforcement:
         assert resp.status_code == 403
         assert db_session.execute(select(ItemUnit)).first() is None
 
-    def test_office_edit_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_edit_is_200(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item)
@@ -242,9 +220,7 @@ class TestUnitsRoleEnforcement:
         resp = client.get(f"/admin/items/units/{unit.id}/edit")
         assert resp.status_code == 200
 
-    def test_office_update_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_update_is_200(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, serial="OLD")
@@ -258,9 +234,7 @@ class TestUnitsRoleEnforcement:
         db_session.refresh(unit)
         assert unit.serial_or_label == "NEW"
 
-    def test_office_archive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_archive_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item)
@@ -272,9 +246,7 @@ class TestUnitsRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_office_unarchive_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_unarchive_is_403(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, archived=True)
@@ -286,27 +258,21 @@ class TestUnitsRoleEnforcement:
         )
         assert resp.status_code == 403
 
-    def test_manager_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/units")
         assert resp.status_code == 200
 
-    def test_admin_get_list_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_list_is_200(self, client: TestClient, db_session: Session) -> None:
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         item = _make_unique_item(db_session)
         _login_as(client, admin)
         resp = client.get(f"/admin/items/{item.id}/units")
         assert resp.status_code == 200
 
-    def test_admin_create_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_create_is_303(self, client: TestClient, db_session: Session) -> None:
         """DoD #2: Admin creates units. ``require_role(MANAGER)`` lets Admin through."""
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
         item = _make_unique_item(db_session)
@@ -326,9 +292,7 @@ class TestUnitsRoleEnforcement:
 
 
 class TestUnitsList:
-    def test_list_unknown_item_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_unknown_item_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/9999/units")
@@ -347,9 +311,7 @@ class TestUnitsList:
         # CTA is hidden because tracking mode is qty.
         assert f"/admin/items/{item.id}/units/new" not in resp.text
 
-    def test_list_active_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_active_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _make_unit(db_session, item=item, serial="ACTIVE")
@@ -359,9 +321,7 @@ class TestUnitsList:
         assert "ACTIVE" in resp.text
         assert "ARCHIVED" not in resp.text
 
-    def test_list_show_archived_filter(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_show_archived_filter(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _make_unit(db_session, item=item, serial="ACTIVE")
@@ -371,9 +331,7 @@ class TestUnitsList:
         assert "ARCHIVED" in resp.text
         assert "ACTIVE" not in resp.text
 
-    def test_list_orders_by_serial(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_orders_by_serial(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         for s in ("ZULU", "ALPHA", "BRAVO"):
@@ -392,9 +350,7 @@ class TestUnitsList:
         resp = client.get(f"/admin/items/{item.id}/units")
         assert f"/admin/items/{item.id}/units/new" in resp.text
 
-    def test_list_hides_new_cta_for_office(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_hides_new_cta_for_office(self, client: TestClient, db_session: Session) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
         item = _make_unique_item(db_session)
         _login_as(client, office)
@@ -412,9 +368,7 @@ class TestUnitsList:
         assert 'data-testid="new-item-unit"' not in resp.text
         assert "archived" in resp.text.lower()
 
-    def test_list_renders_location_name(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_list_renders_location_name(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         loc = Location(name="Workshop bench")
@@ -433,9 +387,7 @@ class TestUnitsList:
 
 
 class TestUnitCreate:
-    def test_get_new_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
@@ -444,43 +396,33 @@ class TestUnitCreate:
         assert 'name="serial_or_label"' in resp.text
         assert 'name="csrf_token"' in resp.text
 
-    def test_get_new_form_unknown_item_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_unknown_item_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/9999/units/new")
         assert resp.status_code == 404
 
-    def test_get_new_form_qty_tracked_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_qty_tracked_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_qty_item(db_session)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/units/new")
         assert resp.status_code == 400
 
-    def test_get_new_form_archived_item_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_new_form_archived_item_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session, archived=True)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/units/new")
         assert resp.status_code == 400
 
-    def test_create_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="SN-001", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="SN-001", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -516,26 +458,20 @@ class TestUnitCreate:
         assert unit.status is ItemUnitStatus.LOST
         assert unit.location_id == loc.id
 
-    def test_create_strips_whitespace(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_strips_whitespace(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="  SN-A  ", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="  SN-A  ", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         unit = db_session.execute(select(ItemUnit)).scalar_one()
         assert unit.serial_or_label == "SN-A"
 
-    def test_create_writes_audit_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_writes_audit_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
@@ -555,34 +491,26 @@ class TestUnitCreate:
         assert row.after_json["status"] == "available"
         assert row.after_json["location_id"] is None
 
-    def test_create_blank_serial_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_blank_serial_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="   ", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="   ", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
         assert db_session.execute(select(ItemUnit)).first() is None
 
-    def test_create_dup_serial_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_dup_serial_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _make_unit(db_session, item=item, serial="SN-001")
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="SN-001", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="SN-001", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -597,16 +525,12 @@ class TestUnitCreate:
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="SN-001", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="SN-001", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_two_items_same_serial_ok(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_two_items_same_serial_ok(self, client: TestClient, db_session: Session) -> None:
         """Different items can have units with the same label."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item_a = _make_unique_item(db_session, sku="A", name="A")
@@ -615,16 +539,12 @@ class TestUnitCreate:
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item_b.id}/units",
-            data=_create_payload(
-                serial_or_label="SHARED", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="SHARED", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_create_qty_tracked_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_qty_tracked_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_qty_item(db_session)
         _login_as(client, mgr)
@@ -636,9 +556,7 @@ class TestUnitCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(ItemUnit)).first() is None
 
-    def test_create_archived_item_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_archived_item_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session, archived=True)
         _login_as(client, mgr)
@@ -650,9 +568,7 @@ class TestUnitCreate:
         assert resp.status_code == 400
         assert db_session.execute(select(ItemUnit)).first() is None
 
-    def test_create_unknown_item_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_unknown_item_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -662,69 +578,51 @@ class TestUnitCreate:
         )
         assert resp.status_code == 404
 
-    def test_create_bad_status_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_bad_status_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                status="checked-out", csrf=_csrf(client)
-            ),
+            data=_create_payload(status="checked-out", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
         assert db_session.execute(select(ItemUnit)).first() is None
 
-    def test_create_unknown_location_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_unknown_location_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                location_id="9999", csrf=_csrf(client)
-            ),
+            data=_create_payload(location_id="9999", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_archived_location_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_archived_location_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
-        loc = Location(
-            name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        loc = Location(name="Old", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(loc)
         db_session.commit()
         db_session.refresh(loc)
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                location_id=str(loc.id), csrf=_csrf(client)
-            ),
+            data=_create_payload(location_id=str(loc.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_create_failure_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_create_failure_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _login_as(client, mgr)
         client.post(
             f"/admin/items/{item.id}/units",
-            data=_create_payload(
-                serial_or_label="", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert _audit_rows(db_session) == []
@@ -736,9 +634,7 @@ class TestUnitCreate:
 
 
 class TestUnitEdit:
-    def test_get_edit_form_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_get_edit_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, serial="SN-EDIT")
@@ -747,17 +643,13 @@ class TestUnitEdit:
         assert resp.status_code == 200
         assert "SN-EDIT" in resp.text
 
-    def test_edit_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/units/9999/edit")
         assert resp.status_code == 404
 
-    def test_update_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_update_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, serial="OLD")
@@ -777,9 +669,7 @@ class TestUnitEdit:
         assert unit.serial_or_label == "NEW"
         assert unit.status is ItemUnitStatus.LOST
 
-    def test_update_sparse_audit_diff(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_update_sparse_audit_diff(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, serial="OLD")
@@ -801,26 +691,20 @@ class TestUnitEdit:
         assert before.get("status") == "available"
         assert after.get("status") == "lost"
 
-    def test_update_no_op_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_update_no_op_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, serial="SAME")
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/units/{unit.id}",
-            data=_create_payload(
-                serial_or_label="SAME", csrf=_csrf(client)
-            ),
+            data=_create_payload(serial_or_label="SAME", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
         assert _audit_rows(db_session, action="item_unit.updated") == []
 
-    def test_update_dup_serial_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_update_dup_serial_400(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         _make_unit(db_session, item=item, serial="A")
@@ -843,9 +727,7 @@ class TestUnitEdit:
         db_session.add(loc)
         db_session.commit()
         db_session.refresh(loc)
-        unit = _make_unit(
-            db_session, item=item, serial="SN", location_id=loc.id
-        )
+        unit = _make_unit(db_session, item=item, serial="SN", location_id=loc.id)
         # Archive the location after assignment.
         loc.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
         db_session.commit()
@@ -870,9 +752,7 @@ class TestUnitEdit:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item)
-        archived_loc = Location(
-            name="Archived", archived_at=datetime(2026, 1, 1, tzinfo=UTC)
-        )
+        archived_loc = Location(name="Archived", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
         db_session.add(archived_loc)
         db_session.commit()
         db_session.refresh(archived_loc)
@@ -887,9 +767,7 @@ class TestUnitEdit:
         )
         assert resp.status_code == 400
 
-    def test_update_clears_optional_location(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_update_clears_optional_location(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         loc = Location(name="Bench")
@@ -900,9 +778,7 @@ class TestUnitEdit:
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/units/{unit.id}",
-            data=_create_payload(
-                location_id="", csrf=_csrf(client)
-            ),
+            data=_create_payload(location_id="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -933,9 +809,7 @@ class TestUnitEdit:
 
 
 class TestUnitArchive:
-    def test_archive_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item)
@@ -951,9 +825,7 @@ class TestUnitArchive:
         rows = _audit_rows(db_session, action="item_unit.archived")
         assert len(rows) == 1
 
-    def test_archive_idempotent(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_idempotent(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, archived=True)
@@ -968,9 +840,7 @@ class TestUnitArchive:
         assert unit.archived_at == original
         assert _audit_rows(db_session, action="item_unit.archived") == []
 
-    def test_unarchive_happy_path(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_happy_path(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item, archived=True)
@@ -986,9 +856,7 @@ class TestUnitArchive:
         rows = _audit_rows(db_session, action="item_unit.unarchived")
         assert len(rows) == 1
 
-    def test_unarchive_idempotent(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_idempotent(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         item = _make_unique_item(db_session)
         unit = _make_unit(db_session, item=item)
@@ -1002,9 +870,7 @@ class TestUnitArchive:
         assert unit.archived_at is None
         assert _audit_rows(db_session, action="item_unit.unarchived") == []
 
-    def test_archive_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archive_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
@@ -1014,9 +880,7 @@ class TestUnitArchive:
         )
         assert resp.status_code == 404
 
-    def test_unarchive_unknown_id_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unarchive_unknown_id_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(

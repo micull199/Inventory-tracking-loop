@@ -54,16 +54,12 @@ def test_manager_creates_views_archives_and_unarchives_a_location(
 
     # Step 3: Admin promotes the pending user → manager + active.
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="loc-mgr@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="loc-mgr@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("manager")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="loc-mgr@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="loc-mgr@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -102,32 +98,26 @@ def test_manager_creates_views_archives_and_unarchives_a_location(
 
     # Flash and row both visible.
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Workshop Bench")
-    bench_row = mgr_page.locator(
-        '[data-testid="location-row"]', has_text="Workshop Bench"
-    )
+    bench_row = mgr_page.locator('[data-testid="location-row"]', has_text="Workshop Bench")
     expect(bench_row).to_be_visible()
 
     # Step 8: Archive the location.
     bench_row.get_by_test_id("archive-location").click()
     mgr_page.wait_for_url(f"{app_server}/admin/locations")
-    expect(mgr_page.locator(
-        '[data-testid="location-row"]', has_text="Workshop Bench"
-    )).to_have_count(0)
+    expect(
+        mgr_page.locator('[data-testid="location-row"]', has_text="Workshop Bench")
+    ).to_have_count(0)
 
     # Step 9: Switch to archived tab — Workshop Bench is there.
     mgr_page.get_by_test_id("tab-archived").click()
     mgr_page.wait_for_url(f"{app_server}/admin/locations?show=archived")
-    archived_row = mgr_page.locator(
-        '[data-testid="location-row"]', has_text="Workshop Bench"
-    )
+    archived_row = mgr_page.locator('[data-testid="location-row"]', has_text="Workshop Bench")
     expect(archived_row).to_be_visible()
 
     # Step 10: Unarchive — moves back to active.
     archived_row.get_by_test_id("unarchive-location").click()
     mgr_page.wait_for_url(f"{app_server}/admin/locations")
-    restored_row = mgr_page.locator(
-        '[data-testid="location-row"]', has_text="Workshop Bench"
-    )
+    restored_row = mgr_page.locator('[data-testid="location-row"]', has_text="Workshop Bench")
     expect(restored_row).to_be_visible()
 
     mgr_page.close()

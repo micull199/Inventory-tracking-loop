@@ -148,10 +148,7 @@ class TestAggregateLines:
             _line(committed=True, variance=Decimal("2")),
         ]
         agg = _aggregate_lines(lines)
-        assert (
-            agg["abs_variance"]
-            == agg["positive_variance"] + agg["negative_variance_abs"]
-        )
+        assert agg["abs_variance"] == agg["positive_variance"] + agg["negative_variance_abs"]
 
 
 # ---------------------------------------------------------------------------

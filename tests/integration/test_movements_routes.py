@@ -149,11 +149,7 @@ def _payload(
 
 
 def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "stock_movement")
-        .order_by(AuditLog.id)
-    )
+    stmt = select(AuditLog).where(AuditLog.entity_type == "stock_movement").order_by(AuditLog.id)
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
     return list(db.execute(stmt).scalars().all())
@@ -165,17 +161,13 @@ def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
 
 
 class TestRoleEnforcement:
-    def test_anonymous_get_form_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_form_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/in")
         assert resp.status_code == 401
 
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.post(
@@ -185,9 +177,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_user_get_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_form_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -200,9 +190,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/in")
         assert resp.status_code == 403
 
-    def test_workshop_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -210,9 +198,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/in")
         assert resp.status_code == 200
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         """Workshop's first positive-write surface (MISSION §3)."""
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -226,9 +212,7 @@ class TestRoleEnforcement:
         assert resp.status_code == 303
         assert db_session.execute(select(StockMovement)).first() is not None
 
-    def test_office_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -236,9 +220,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/in")
         assert resp.status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -250,9 +232,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_manager_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -260,9 +240,7 @@ class TestRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/in")
         assert resp.status_code == 200
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -274,9 +252,7 @@ class TestRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -295,9 +271,7 @@ class TestRoleEnforcement:
 
 
 class TestStockInForm:
-    def test_form_includes_inputs_and_csrf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_includes_inputs_and_csrf(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Silver wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -312,9 +286,7 @@ class TestStockInForm:
         assert 'name="note"' in body
         assert 'name="csrf_token"' in body
 
-    def test_form_shows_current_qty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_shows_current_qty(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = Item(
             sku="W",
@@ -332,9 +304,7 @@ class TestStockInForm:
         resp = client.get(f"/admin/items/{item.id}/in")
         assert "42" in resp.text
 
-    def test_form_recent_movements_empty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_recent_movements_empty(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -360,17 +330,13 @@ class TestStockInForm:
         # Two movement rows render.
         assert resp.text.count('data-testid="movement-row"') == 2
 
-    def test_unknown_item_form_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_form_is_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/items/999/in")
         assert resp.status_code == 404
 
-    def test_archived_item_form_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_form_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -392,9 +358,7 @@ class TestStockInValidation:
         _login_as(client, ws)
         return item
 
-    def test_blank_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -405,9 +369,7 @@ class TestStockInValidation:
         assert db_session.execute(select(StockMovement)).first() is None
         assert db_session.execute(select(CostLayer)).first() is None
 
-    def test_zero_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -417,9 +379,7 @@ class TestStockInValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(StockMovement)).first() is None
 
-    def test_negative_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -429,9 +389,7 @@ class TestStockInValidation:
         assert resp.status_code == 400
         assert db_session.execute(select(StockMovement)).first() is None
 
-    def test_non_numeric_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -440,9 +398,7 @@ class TestStockInValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_unit_cost_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_unit_cost_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -451,9 +407,7 @@ class TestStockInValidation:
         )
         assert resp.status_code == 400
 
-    def test_negative_unit_cost_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_unit_cost_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -462,9 +416,7 @@ class TestStockInValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_unit_cost_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_unit_cost_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/in",
@@ -473,9 +425,7 @@ class TestStockInValidation:
         )
         assert resp.status_code == 400
 
-    def test_zero_unit_cost_allowed(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_unit_cost_allowed(self, client: TestClient, db_session: Session) -> None:
         """Zero unit cost is intentionally allowed (sample / gifted stock)."""
         item = self._setup(db_session, client)
         resp = client.post(
@@ -487,9 +437,7 @@ class TestStockInValidation:
         layer = db_session.execute(select(CostLayer)).scalar_one()
         assert layer.unit_cost == Decimal("0")
 
-    def test_unknown_item_post_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_post_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -500,9 +448,7 @@ class TestStockInValidation:
         assert resp.status_code == 404
         assert db_session.execute(select(StockMovement)).first() is None
 
-    def test_archived_item_post_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_post_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -544,7 +490,10 @@ class TestStockInHappyPath:
         resp = client.post(
             f"/admin/items/{item.id}/in",
             data=_payload(
-                qty="10", unit_cost="2.50", reason="purchase", note="invoice 42",
+                qty="10",
+                unit_cost="2.50",
+                reason="purchase",
+                note="invoice 42",
                 csrf=_csrf(client),
             ),
             follow_redirects=False,
@@ -606,9 +555,7 @@ class TestStockInHappyPath:
         assert movement.reason is None
         assert movement.note is None
 
-    def test_audit_row_written(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_written(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -616,7 +563,9 @@ class TestStockInHappyPath:
         client.post(
             f"/admin/items/{item.id}/in",
             data=_payload(
-                qty="4", unit_cost="1.25", reason="received",
+                qty="4",
+                unit_cost="1.25",
+                reason="received",
                 csrf=_csrf(client),
             ),
             follow_redirects=False,
@@ -637,9 +586,7 @@ class TestStockInHappyPath:
         assert row.after_json["source"] == "manual_in"
         assert row.after_json["reason"] == "received"
 
-    def test_flash_message_set(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_message_set(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Silver wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -704,16 +651,10 @@ class TestMultipleReceipts:
         )
 
         movements = list(
-            db_session.execute(
-                select(StockMovement).order_by(StockMovement.id)
-            ).scalars()
+            db_session.execute(select(StockMovement).order_by(StockMovement.id)).scalars()
         )
         assert len(movements) == 2
-        layers = list(
-            db_session.execute(
-                select(CostLayer).order_by(CostLayer.id)
-            ).scalars()
-        )
+        layers = list(db_session.execute(select(CostLayer).order_by(CostLayer.id)).scalars())
         assert len(layers) == 2
         assert [layer.unit_cost for layer in layers] == [
             Decimal("2.00"),
@@ -747,9 +688,7 @@ class TestMultipleReceipts:
         idx_first = body.find("first")
         assert 0 < idx_second < idx_first
 
-    def test_other_items_movements_not_shown(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_other_items_movements_not_shown(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         a = _make_item(db_session, leaf=leaf, sku="A", name="Alpha")
         b = _make_item(db_session, leaf=leaf, sku="B", name="Bravo")
@@ -757,14 +696,12 @@ class TestMultipleReceipts:
         _login_as(client, ws)
         client.post(
             f"/admin/items/{a.id}/in",
-            data=_payload(qty="1", unit_cost="1", reason="alpha-receipt",
-                          csrf=_csrf(client)),
+            data=_payload(qty="1", unit_cost="1", reason="alpha-receipt", csrf=_csrf(client)),
             follow_redirects=False,
         )
         client.post(
             f"/admin/items/{b.id}/in",
-            data=_payload(qty="1", unit_cost="1", reason="bravo-receipt",
-                          csrf=_csrf(client)),
+            data=_payload(qty="1", unit_cost="1", reason="bravo-receipt", csrf=_csrf(client)),
             follow_redirects=False,
         )
         resp = client.get(f"/admin/items/{a.id}/in")
@@ -961,17 +898,13 @@ def _seed_layer(
 
 
 class TestStockOutRoleEnforcement:
-    def test_anonymous_get_form_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_form_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.status_code == 401
 
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.post(
@@ -981,9 +914,7 @@ class TestStockOutRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_user_get_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_form_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -996,9 +927,7 @@ class TestStockOutRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.status_code == 403
 
-    def test_workshop_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1006,9 +935,7 @@ class TestStockOutRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.status_code == 200
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         """Workshop's stock-out write surface (mirrors stock-in)."""
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -1022,9 +949,7 @@ class TestStockOutRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_office_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -1032,15 +957,11 @@ class TestStockOutRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
-        _seed_layer(
-            db_session, item=item, qty="10", unit_cost="2.00", actor=office
-        )
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.00", actor=office)
         _login_as(client, office)
         resp = client.post(
             f"/admin/items/{item.id}/out",
@@ -1049,9 +970,7 @@ class TestStockOutRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_manager_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -1059,9 +978,7 @@ class TestStockOutRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.status_code == 200
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -1074,9 +991,7 @@ class TestStockOutRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -1096,9 +1011,7 @@ class TestStockOutRoleEnforcement:
 
 
 class TestStockOutForm:
-    def test_form_includes_inputs_and_csrf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_includes_inputs_and_csrf(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Silver wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1121,9 +1034,7 @@ class TestStockOutForm:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
-        _seed_layer(
-            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
-        )
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.50", actor=ws)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/out")
         body = resp.text
@@ -1145,9 +1056,7 @@ class TestStockOutForm:
         # 0 should appear in the open-value span.
         assert 'data-testid="item-open-value"' in resp.text
 
-    def test_form_recent_movements_empty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_recent_movements_empty(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1166,17 +1075,13 @@ class TestStockOutForm:
         resp = client.get(f"/admin/items/{item.id}/out")
         assert resp.text.count('data-testid="movement-row"') == 1
 
-    def test_unknown_item_form_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_form_is_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/items/999/out")
         assert resp.status_code == 404
 
-    def test_archived_item_form_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_form_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1199,9 +1104,7 @@ class TestStockOutValidation:
         _login_as(client, ws)
         return item
 
-    def test_blank_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         before = db_session.execute(
             select(StockMovement).where(StockMovement.type == MovementType.OUT)
@@ -1216,17 +1119,13 @@ class TestStockOutValidation:
         # No OUT movement / consumption written.
         assert (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.OUT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.OUT)
             ).first()
             is None
         )
         assert db_session.execute(select(CostLayerConsumption)).first() is None
 
-    def test_zero_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/out",
@@ -1236,16 +1135,12 @@ class TestStockOutValidation:
         assert resp.status_code == 400
         assert (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.OUT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.OUT)
             ).first()
             is None
         )
 
-    def test_negative_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/out",
@@ -1255,16 +1150,12 @@ class TestStockOutValidation:
         assert resp.status_code == 400
         assert (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.OUT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.OUT)
             ).first()
             is None
         )
 
-    def test_non_numeric_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/out",
@@ -1273,9 +1164,7 @@ class TestStockOutValidation:
         )
         assert resp.status_code == 400
 
-    def test_unknown_item_post_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_post_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -1285,9 +1174,7 @@ class TestStockOutValidation:
         )
         assert resp.status_code == 404
 
-    def test_archived_item_post_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_post_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1308,9 +1195,7 @@ class TestStockOutValidation:
             data=_payload_out(qty="-1", csrf=_csrf(client)),
             follow_redirects=False,
         )
-        assert (
-            _audit_rows(db_session, action="stock_movement.out") == []
-        )
+        assert _audit_rows(db_session, action="stock_movement.out") == []
 
 
 # ---------------------------------------------------------------------------
@@ -1325,14 +1210,14 @@ class TestStockOutHappyPath:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
-        seed = _seed_layer(
-            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
-        )
+        seed = _seed_layer(db_session, item=item, qty="10", unit_cost="2.50", actor=ws)
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/out",
             data=_payload_out(
-                qty="3", reason="production", note="job 42",
+                qty="3",
+                reason="production",
+                note="job 42",
                 csrf=_csrf(client),
             ),
             follow_redirects=False,
@@ -1358,9 +1243,7 @@ class TestStockOutHappyPath:
         assert c.qty_consumed == Decimal("3")
         assert c.unit_cost_at_consumption == Decimal("2.50")
 
-        layer = db_session.execute(
-            select(CostLayer).where(CostLayer.id == c.layer_id)
-        ).scalar_one()
+        layer = db_session.execute(select(CostLayer).where(CostLayer.id == c.layer_id)).scalar_one()
         assert layer.source_movement_id == seed.id
         assert layer.qty_remaining == Decimal("7")  # 10 - 3
         assert layer.qty_received == Decimal("10")  # immutable
@@ -1379,7 +1262,9 @@ class TestStockOutHappyPath:
         client.post(
             f"/admin/items/{item.id}/out",
             data=_payload_out(
-                qty="1", reason="  use  ", note="  job  ",
+                qty="1",
+                reason="  use  ",
+                note="  job  ",
                 csrf=_csrf(client),
             ),
             follow_redirects=False,
@@ -1400,8 +1285,7 @@ class TestStockOutHappyPath:
         _login_as(client, ws)
         client.post(
             f"/admin/items/{item.id}/out",
-            data=_payload_out(qty="1", reason="", note="   ",
-                              csrf=_csrf(client)),
+            data=_payload_out(qty="1", reason="", note="   ", csrf=_csrf(client)),
             follow_redirects=False,
         )
         out = db_session.execute(
@@ -1410,9 +1294,7 @@ class TestStockOutHappyPath:
         assert out.reason is None
         assert out.note is None
 
-    def test_audit_row_written(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_written(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1421,7 +1303,9 @@ class TestStockOutHappyPath:
         client.post(
             f"/admin/items/{item.id}/out",
             data=_payload_out(
-                qty="4", reason="produced", csrf=_csrf(client),
+                qty="4",
+                reason="produced",
+                csrf=_csrf(client),
             ),
             follow_redirects=False,
         )
@@ -1447,9 +1331,7 @@ class TestStockOutHappyPath:
         assert "unit_cost" not in row.after_json
         assert "source" not in row.after_json
 
-    def test_flash_message_set(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_message_set(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Casting alloy")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1481,7 +1363,9 @@ class TestStockOutInsufficientStock:
         resp = client.post(
             f"/admin/items/{item.id}/out",
             data=_payload_out(
-                qty="10", reason="oops", note="too much",
+                qty="10",
+                reason="oops",
+                note="too much",
                 csrf=_csrf(client),
             ),
             follow_redirects=False,
@@ -1498,9 +1382,7 @@ class TestStockOutInsufficientStock:
         # No OUT movement, no consumption row, layer unchanged.
         assert (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.OUT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.OUT)
             ).first()
             is None
         )
@@ -1510,9 +1392,7 @@ class TestStockOutInsufficientStock:
         db_session.refresh(item)
         assert item.current_qty == Decimal("3")
 
-    def test_no_layers_at_all_returns_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_layers_at_all_returns_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1578,12 +1458,20 @@ class TestStockOutMultiLayerFIFO:
         old = datetime(2026, 1, 1, tzinfo=UTC)
         new = datetime(2026, 2, 1, tzinfo=UTC)
         _seed_layer(
-            db_session, item=item, qty="4", unit_cost="2.00",
-            actor=ws, received_at=old,
+            db_session,
+            item=item,
+            qty="4",
+            unit_cost="2.00",
+            actor=ws,
+            received_at=old,
         )
         _seed_layer(
-            db_session, item=item, qty="6", unit_cost="3.00",
-            actor=ws, received_at=new,
+            db_session,
+            item=item,
+            qty="6",
+            unit_cost="3.00",
+            actor=ws,
+            received_at=new,
         )
         _login_as(client, ws)
         # Consume 7: takes 4 from the old layer, 3 from the new.
@@ -1601,11 +1489,7 @@ class TestStockOutMultiLayerFIFO:
         assert out.total_cost == Decimal("17.00")
 
         cons = list(
-            db_session.execute(
-                select(CostLayerConsumption).order_by(
-                    CostLayerConsumption.id
-                )
-            )
+            db_session.execute(select(CostLayerConsumption).order_by(CostLayerConsumption.id))
             .scalars()
             .all()
         )
@@ -1616,9 +1500,7 @@ class TestStockOutMultiLayerFIFO:
         assert cons[1].unit_cost_at_consumption == Decimal("3.00")
 
         layers = list(
-            db_session.execute(
-                select(CostLayer).order_by(CostLayer.received_at, CostLayer.id)
-            )
+            db_session.execute(select(CostLayer).order_by(CostLayer.received_at, CostLayer.id))
             .scalars()
             .all()
         )
@@ -1636,7 +1518,10 @@ class TestStockOutMultiLayerFIFO:
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _seed_layer(
-            db_session, item=item, qty="5", unit_cost="2",
+            db_session,
+            item=item,
+            qty="5",
+            unit_cost="2",
             actor=ws,
         )
         _login_as(client, ws)
@@ -1813,17 +1698,13 @@ def _payload_adjust(
 
 
 class TestStockAdjustRoleEnforcement:
-    def test_anonymous_get_form_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_form_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert resp.status_code == 401
 
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.post(
@@ -1833,9 +1714,7 @@ class TestStockAdjustRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_user_get_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_form_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -1848,9 +1727,7 @@ class TestStockAdjustRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert resp.status_code == 403
 
-    def test_workshop_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1858,9 +1735,7 @@ class TestStockAdjustRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert resp.status_code == 200
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         """Workshop's adjustment write surface (MISSION §3 grants this)."""
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
@@ -1873,9 +1748,7 @@ class TestStockAdjustRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_office_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -1883,9 +1756,7 @@ class TestStockAdjustRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert resp.status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -1897,9 +1768,7 @@ class TestStockAdjustRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_manager_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -1907,9 +1776,7 @@ class TestStockAdjustRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert resp.status_code == 200
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -1921,9 +1788,7 @@ class TestStockAdjustRoleEnforcement:
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -1942,13 +1807,9 @@ class TestStockAdjustRoleEnforcement:
 
 
 class TestStockAdjustForm:
-    def test_form_includes_inputs_and_csrf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_includes_inputs_and_csrf(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
-        item = _make_item(
-            db_session, leaf=leaf, sku="WIRE-1", name="Silver wire"
-        )
+        item = _make_item(db_session, leaf=leaf, sku="WIRE-1", name="Silver wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/adjust")
@@ -1976,9 +1837,7 @@ class TestStockAdjustForm:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
-        _seed_layer(
-            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
-        )
+        _seed_layer(db_session, item=item, qty="10", unit_cost="2.50", actor=ws)
         _login_as(client, ws)
         resp = client.get(f"/admin/items/{item.id}/adjust")
         body = resp.text
@@ -1987,9 +1846,7 @@ class TestStockAdjustForm:
         # 10 * 2.50 = 25
         assert "25" in body
 
-    def test_form_recent_movements_empty(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_recent_movements_empty(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -1997,17 +1854,13 @@ class TestStockAdjustForm:
         resp = client.get(f"/admin/items/{item.id}/adjust")
         assert "movements-empty" in resp.text
 
-    def test_unknown_item_form_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_form_is_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.get("/admin/items/999/adjust")
         assert resp.status_code == 404
 
-    def test_archived_item_form_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_form_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2030,9 +1883,7 @@ class TestStockAdjustValidation:
         _login_as(client, ws)
         return item
 
-    def test_blank_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2041,9 +1892,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_zero_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2052,9 +1901,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_negative_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2063,9 +1910,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_qty_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_qty_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2074,9 +1919,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_direction_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_direction_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2085,9 +1928,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_invalid_direction_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_invalid_direction_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2096,9 +1937,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_reason_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_reason_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2107,9 +1946,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_whitespace_only_reason_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_whitespace_only_reason_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2118,15 +1955,11 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 400
 
-    def test_blank_unit_cost_on_increase_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_unit_cost_on_increase_400(self, client: TestClient, db_session: Session) -> None:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
-            data=_payload_adjust(
-                direction="increase", unit_cost="", csrf=_csrf(client)
-            ),
+            data=_payload_adjust(direction="increase", unit_cost="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -2137,9 +1970,7 @@ class TestStockAdjustValidation:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
-            data=_payload_adjust(
-                direction="increase", unit_cost="-1", csrf=_csrf(client)
-            ),
+            data=_payload_adjust(direction="increase", unit_cost="-1", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -2150,9 +1981,7 @@ class TestStockAdjustValidation:
         item = self._setup(db_session, client)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
-            data=_payload_adjust(
-                direction="increase", unit_cost="cheap", csrf=_csrf(client)
-            ),
+            data=_payload_adjust(direction="increase", unit_cost="cheap", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -2174,9 +2003,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 303
 
-    def test_unit_cost_ignored_on_decrease(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unit_cost_ignored_on_decrease(self, client: TestClient, db_session: Session) -> None:
         """Garbage unit_cost is fine for decreases — the field is ignored."""
         item = self._setup(db_session, client)
         resp = client.post(
@@ -2192,9 +2019,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 303
 
-    def test_unknown_item_post_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_post_404(self, client: TestClient, db_session: Session) -> None:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _login_as(client, ws)
         resp = client.post(
@@ -2204,9 +2029,7 @@ class TestStockAdjustValidation:
         )
         assert resp.status_code == 404
 
-    def test_archived_item_post_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_post_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2259,9 +2082,7 @@ class TestStockAdjustIncreaseHappyPath:
         assert resp.headers["location"] == f"/admin/items/{item.id}/adjust"
 
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         assert adj.item_id == item.id
         assert adj.type == MovementType.ADJUSTMENT
@@ -2283,9 +2104,7 @@ class TestStockAdjustIncreaseHappyPath:
         db_session.refresh(item)
         assert item.current_qty == Decimal("20")
 
-    def test_audit_row_for_increase(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_for_increase(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2307,9 +2126,7 @@ class TestStockAdjustIncreaseHappyPath:
         assert row.actor_id == ws.id
         assert row.entity_type == "stock_movement"
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         assert row.entity_id == adj.id
         assert row.before_json is None
@@ -2345,16 +2162,12 @@ class TestStockAdjustIncreaseHappyPath:
             follow_redirects=False,
         )
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         assert adj.reason == "trim me"
         assert adj.note == "ditto"
 
-    def test_increase_flash_message(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_increase_flash_message(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Casting alloy")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2388,9 +2201,7 @@ class TestStockAdjustDecreaseHappyPath:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Wire")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
-        seed = _seed_layer(
-            db_session, item=item, qty="10", unit_cost="2.50", actor=ws
-        )
+        seed = _seed_layer(db_session, item=item, qty="10", unit_cost="2.50", actor=ws)
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2407,9 +2218,7 @@ class TestStockAdjustDecreaseHappyPath:
         assert resp.status_code == 303
 
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         assert adj.qty == Decimal("3")
         assert adj.reason == "scrap loss"
@@ -2424,17 +2233,13 @@ class TestStockAdjustDecreaseHappyPath:
         assert c.qty_consumed == Decimal("3")
         assert c.unit_cost_at_consumption == Decimal("2.50")
 
-        layer = db_session.execute(
-            select(CostLayer).where(CostLayer.id == c.layer_id)
-        ).scalar_one()
+        layer = db_session.execute(select(CostLayer).where(CostLayer.id == c.layer_id)).scalar_one()
         assert layer.source_movement_id == seed.id
         assert layer.qty_remaining == Decimal("7")
         db_session.refresh(item)
         assert item.current_qty == Decimal("7")
 
-    def test_audit_row_for_decrease(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_for_decrease(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2485,15 +2290,11 @@ class TestStockAdjustDecreaseHappyPath:
             follow_redirects=False,
         )
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         assert adj.note is None
 
-    def test_decrease_flash_message(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_decrease_flash_message(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, name="Casting alloy")
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2559,9 +2360,7 @@ class TestStockAdjustInsufficientStock:
         # No mutation: no ADJUSTMENT movement / consumption / qty change.
         assert (
             db_session.execute(
-                select(StockMovement).where(
-                    StockMovement.type == MovementType.ADJUSTMENT
-                )
+                select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
             ).first()
             is None
         )
@@ -2571,9 +2370,7 @@ class TestStockAdjustInsufficientStock:
         db_session.refresh(item)
         assert item.current_qty == Decimal("3")
 
-    def test_decrease_no_layers_returns_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_decrease_no_layers_returns_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2627,12 +2424,20 @@ class TestStockAdjustMultiLayerFIFODecrease:
         old = datetime(2026, 1, 1, tzinfo=UTC)
         new = datetime(2026, 2, 1, tzinfo=UTC)
         _seed_layer(
-            db_session, item=item, qty="4", unit_cost="2.00",
-            actor=ws, received_at=old,
+            db_session,
+            item=item,
+            qty="4",
+            unit_cost="2.00",
+            actor=ws,
+            received_at=old,
         )
         _seed_layer(
-            db_session, item=item, qty="6", unit_cost="3.00",
-            actor=ws, received_at=new,
+            db_session,
+            item=item,
+            qty="6",
+            unit_cost="3.00",
+            actor=ws,
+            received_at=new,
         )
         _login_as(client, ws)
         resp = client.post(
@@ -2648,19 +2453,15 @@ class TestStockAdjustMultiLayerFIFODecrease:
         assert resp.status_code == 303
 
         adj = db_session.execute(
-            select(StockMovement).where(
-                StockMovement.type == MovementType.ADJUSTMENT
-            )
+            select(StockMovement).where(StockMovement.type == MovementType.ADJUSTMENT)
         ).scalar_one()
         # 4*2 + 3*3 = 17
         assert adj.total_cost == Decimal("17.00")
 
         cons = list(
-            db_session.execute(
-                select(CostLayerConsumption).order_by(
-                    CostLayerConsumption.id
-                )
-            ).scalars().all()
+            db_session.execute(select(CostLayerConsumption).order_by(CostLayerConsumption.id))
+            .scalars()
+            .all()
         )
         assert len(cons) == 2
         assert cons[0].qty_consumed == Decimal("4")
@@ -2751,9 +2552,7 @@ class TestStockAdjustNextRedirect:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
         _login_as(client, ws)
-        payload = _payload_adjust(
-            qty="3", direction="decrease", csrf=_csrf(client)
-        )
+        payload = _payload_adjust(qty="3", direction="decrease", csrf=_csrf(client))
         payload["next"] = f"/scan/item/{item.id}"
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2788,9 +2587,7 @@ class TestStockAdjustNextRedirect:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _seed_layer(db_session, item=item, qty="2", unit_cost="2", actor=ws)
         _login_as(client, ws)
-        payload = _payload_adjust(
-            qty="5", direction="decrease", csrf=_csrf(client)
-        )
+        payload = _payload_adjust(qty="5", direction="decrease", csrf=_csrf(client))
         payload["next"] = f"/scan/item/{item.id}"
         resp = client.post(
             f"/admin/items/{item.id}/adjust",
@@ -2843,9 +2640,7 @@ def _seed_adjust_increase(
 ) -> StockMovement:
     """Seed a positive-adjustment (creates a layer) via the engine."""
     qty_decimal = qty if isinstance(qty, Decimal) else Decimal(qty)
-    unit_cost_decimal = (
-        unit_cost if isinstance(unit_cost, Decimal) else Decimal(unit_cost)
-    )
+    unit_cost_decimal = unit_cost if isinstance(unit_cost, Decimal) else Decimal(unit_cost)
     movement = StockMovement(
         item_id=item.id,
         type=MovementType.ADJUSTMENT,
@@ -2901,17 +2696,13 @@ def _seed_adjust_decrease(
 
 
 class TestItemDetailRoleEnforcement:
-    def test_anonymous_get_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.status_code == 401
 
-    def test_pending_user_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -2924,9 +2715,7 @@ class TestItemDetailRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.status_code == 403
 
-    def test_workshop_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -2934,9 +2723,7 @@ class TestItemDetailRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.status_code == 200
 
-    def test_office_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -2944,9 +2731,7 @@ class TestItemDetailRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.status_code == 200
 
-    def test_manager_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -2954,9 +2739,7 @@ class TestItemDetailRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.status_code == 200
 
-    def test_admin_get_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_get_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -2966,17 +2749,13 @@ class TestItemDetailRoleEnforcement:
 
 
 class TestItemDetailRendering:
-    def test_unknown_item_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/99999/detail")
         assert resp.status_code == 404
 
-    def test_archived_item_still_renders(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_still_renders(self, client: TestClient, db_session: Session) -> None:
         # Archived items show their history. Action links hide separately.
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, archived=True)
@@ -2990,9 +2769,7 @@ class TestItemDetailRendering:
         assert 'data-testid="stock-out-link"' not in resp.text
         assert 'data-testid="stock-adjust-link"' not in resp.text
 
-    def test_renders_item_header_and_summary(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_item_header_and_summary(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf, sku="DET-1", name="Detail Test")
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3019,9 +2796,7 @@ class TestItemDetailRendering:
         assert 'data-testid="stock-adjust-link"' in resp.text
         assert 'data-testid="edit-item-link"' in resp.text
 
-    def test_workshop_does_not_see_edit_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_does_not_see_edit_link(self, client: TestClient, db_session: Session) -> None:
         # Workshop can see in/out/adjust action links but cannot edit the
         # item; the edit link must hide for them (matches I1b's role table).
         leaf = _make_leaf(db_session)
@@ -3038,9 +2813,7 @@ class TestItemDetailRendering:
 
 
 class TestItemDetailCostLayers:
-    def test_empty_state_when_no_layers(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_state_when_no_layers(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3049,9 +2822,7 @@ class TestItemDetailCostLayers:
         assert 'data-testid="cost-layers-empty"' in resp.text
         assert 'data-testid="cost-layers-table"' not in resp.text
 
-    def test_single_layer_rendered(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_single_layer_rendered(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3065,9 +2836,7 @@ class TestItemDetailCostLayers:
         assert "2.00" in resp.text  # unit_cost
         assert "manual_in" in resp.text
 
-    def test_multi_layer_with_mixed_sources(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_layer_with_mixed_sources(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3079,18 +2848,14 @@ class TestItemDetailCostLayers:
             actor=mgr,
             received_at=datetime(2026, 1, 1, 10, tzinfo=UTC),
         )
-        _seed_adjust_increase(
-            db_session, item=item, qty="3", unit_cost="3.00", actor=mgr
-        )
+        _seed_adjust_increase(db_session, item=item, qty="3", unit_cost="3.00", actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert resp.text.count('data-testid="cost-layer-row"') == 2
         assert "manual_in" in resp.text
         assert "positive_adjustment" in resp.text
 
-    def test_fully_consumed_layer_excluded(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_fully_consumed_layer_excluded(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3112,9 +2877,7 @@ class TestItemDetailCostLayers:
         assert resp.text.count('data-testid="cost-layer-row"') == 1
         assert "4.00" in resp.text
 
-    def test_layers_ordered_fifo(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_layers_ordered_fifo(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3146,9 +2909,7 @@ class TestItemDetailCostLayers:
 
 
 class TestItemDetailMovementsTimeline:
-    def test_empty_state_when_no_movements(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_state_when_no_movements(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3157,9 +2918,7 @@ class TestItemDetailMovementsTimeline:
         assert 'data-testid="movements-timeline-empty"' in resp.text
         assert 'data-testid="movements-timeline"' not in resp.text
 
-    def test_in_row_direction_plus(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_row_direction_plus(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3170,9 +2929,7 @@ class TestItemDetailMovementsTimeline:
         # Total cost = 7 * 2 = 14.00 (set by record_receipt).
         assert "14.00" in resp.text
 
-    def test_out_row_direction_minus(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_out_row_direction_minus(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3190,9 +2947,7 @@ class TestItemDetailMovementsTimeline:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _seed_adjust_increase(
-            db_session, item=item, qty="5", unit_cost="3.00", actor=mgr
-        )
+        _seed_adjust_increase(db_session, item=item, qty="5", unit_cost="3.00", actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         # The adjustment-increase row is the only row, and direction is +.
@@ -3214,18 +2969,12 @@ class TestItemDetailMovementsTimeline:
         assert 'data-direction="+"' in resp.text
         assert 'data-direction="-"' in resp.text
 
-    def test_timeline_ordered_newest_first(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_timeline_ordered_newest_first(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        first = _seed_layer(
-            db_session, item=item, qty="5", unit_cost="1.00", actor=mgr
-        )
-        second = _seed_layer(
-            db_session, item=item, qty="3", unit_cost="2.00", actor=mgr
-        )
+        first = _seed_layer(db_session, item=item, qty="5", unit_cost="1.00", actor=mgr)
+        second = _seed_layer(db_session, item=item, qty="3", unit_cost="2.00", actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         idx_second = resp.text.find(f'data-movement-id="{second.id}"')
@@ -3237,9 +2986,7 @@ class TestItemDetailMovementsTimeline:
 
 
 class TestItemDetailLayerBreakdown:
-    def test_in_row_has_no_breakdown(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_row_has_no_breakdown(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3248,9 +2995,7 @@ class TestItemDetailLayerBreakdown:
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert 'data-testid="layer-breakdown"' not in resp.text
 
-    def test_out_row_has_breakdown(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_out_row_has_breakdown(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3283,16 +3028,12 @@ class TestItemDetailLayerBreakdown:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _seed_adjust_increase(
-            db_session, item=item, qty="3", unit_cost="2.00", actor=mgr
-        )
+        _seed_adjust_increase(db_session, item=item, qty="3", unit_cost="2.00", actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert 'data-testid="layer-breakdown"' not in resp.text
 
-    def test_multi_layer_out_breakdown(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_layer_out_breakdown(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3345,9 +3086,7 @@ class TestItemDetailPagination:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         # 5 movements — well under the page size of 20.
         for _ in range(5):
-            _seed_layer(
-                db_session, item=item, qty="1", unit_cost="1", actor=mgr
-            )
+            _seed_layer(db_session, item=item, qty="1", unit_cost="1", actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail")
         assert 'data-testid="pagination-single-page"' in resp.text
@@ -3355,9 +3094,7 @@ class TestItemDetailPagination:
         assert 'data-testid="pagination-next"' not in resp.text
         assert 'data-testid="pagination-prev"' not in resp.text
 
-    def test_multi_page_with_navigation(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_multi_page_with_navigation(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3369,8 +3106,7 @@ class TestItemDetailPagination:
                 qty="1",
                 unit_cost="1",
                 actor=mgr,
-                received_at=datetime(2026, 1, 1, tzinfo=UTC)
-                + timedelta(minutes=i),
+                received_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=i),
             )
         _login_as(client, mgr)
         # Page 1: should have a Next link, no Prev.
@@ -3394,9 +3130,7 @@ class TestItemDetailPagination:
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         for _ in range(3):
-            _seed_layer(
-                db_session, item=item, qty="1", unit_cost="1", actor=mgr
-            )
+            _seed_layer(db_session, item=item, qty="1", unit_cost="1", actor=mgr)
         _login_as(client, mgr)
         # Asking for page 99 against a 1-page dataset clamps to page 1 of 1.
         resp = client.get(f"/admin/items/{item.id}/detail?page=99")
@@ -3417,9 +3151,7 @@ class TestItemDetailPagination:
 
 
 class TestItemDetailLink:
-    def test_items_list_shows_detail_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_items_list_shows_detail_link(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3428,9 +3160,7 @@ class TestItemDetailLink:
         assert 'data-testid="detail-link"' in resp.text
         assert f"/admin/items/{item.id}/detail" in resp.text
 
-    def test_edit_form_shows_detail_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_edit_form_shows_detail_link(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3468,9 +3198,7 @@ def _make_archived_location(db: Session, name: str) -> Location:
     return loc
 
 
-def _make_item_at(
-    db: Session, *, leaf: TaxonomyNode, location: Location | None
-) -> Item:
+def _make_item_at(db: Session, *, leaf: TaxonomyNode, location: Location | None) -> Item:
     item = Item(
         sku="MV-LOC",
         name="Mobile alloy",
@@ -3503,18 +3231,14 @@ def _payload_transfer(
 
 
 class TestStockTransferRoleEnforcement:
-    def test_anonymous_get_form_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_get_form_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 401
 
-    def test_anonymous_post_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_post_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3525,9 +3249,7 @@ class TestStockTransferRoleEnforcement:
         )
         assert resp.status_code == 401
 
-    def test_pending_user_get_form_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_user_get_form_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3541,9 +3263,7 @@ class TestStockTransferRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 403
 
-    def test_workshop_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3552,9 +3272,7 @@ class TestStockTransferRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 200
 
-    def test_workshop_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "From bench")
         target = _make_location(db_session, "To storage")
@@ -3563,16 +3281,12 @@ class TestStockTransferRoleEnforcement:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_office_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3581,9 +3295,7 @@ class TestStockTransferRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 200
 
-    def test_office_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "From")
         target = _make_location(db_session, "To")
@@ -3592,16 +3304,12 @@ class TestStockTransferRoleEnforcement:
         _login_as(client, office)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_manager_get_form_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_get_form_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3610,9 +3318,7 @@ class TestStockTransferRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/transfer")
         assert resp.status_code == 200
 
-    def test_manager_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "From")
         target = _make_location(db_session, "To")
@@ -3621,16 +3327,12 @@ class TestStockTransferRoleEnforcement:
         _login_as(client, mgr)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
-    def test_admin_post_is_303(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_post_is_303(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "From")
         target = _make_location(db_session, "To")
@@ -3639,18 +3341,14 @@ class TestStockTransferRoleEnforcement:
         _login_as(client, admin)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 303
 
 
 class TestStockTransferFormRendering:
-    def test_form_has_inputs_and_csrf(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_has_inputs_and_csrf(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench A")
         _make_location(db_session, "Bench B")
@@ -3668,9 +3366,7 @@ class TestStockTransferFormRendering:
         assert 'data-testid="stock-transfer-submit"' in body
         assert 'name="csrf_token"' in body
 
-    def test_form_shows_current_location(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_shows_current_location(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench A")
         _make_location(db_session, "Bench B")
@@ -3695,9 +3391,9 @@ class TestStockTransferFormRendering:
         assert f'value="{target.id}"' in resp.text
         # The current location id never appears as a selectable option in the
         # to-select. The from-location label is shown elsewhere on the page.
-        select_block = resp.text.split(
-            'data-testid="stock-transfer-to-location-input"'
-        )[1].split("</select>")[0]
+        select_block = resp.text.split('data-testid="stock-transfer-to-location-input"')[1].split(
+            "</select>"
+        )[0]
         assert f'value="{loc.id}"' not in select_block
 
     def test_form_excludes_archived_locations_from_options(
@@ -3711,9 +3407,9 @@ class TestStockTransferFormRendering:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/transfer")
-        select_block = resp.text.split(
-            'data-testid="stock-transfer-to-location-input"'
-        )[1].split("</select>")[0]
+        select_block = resp.text.split('data-testid="stock-transfer-to-location-input"')[1].split(
+            "</select>"
+        )[0]
         assert f'value="{target.id}"' in select_block
         assert f'value="{archived.id}"' not in select_block
 
@@ -3733,17 +3429,13 @@ class TestStockTransferFormRendering:
         # The qty input value attribute should pre-fill with current_qty.
         assert 'value="42.0000"' in resp.text
 
-    def test_unknown_item_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/999999/transfer")
         assert resp.status_code == 404
 
-    def test_archived_item_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = Item(
@@ -3773,9 +3465,7 @@ class TestStockTransferFormRendering:
         item = _make_item_at(db_session, leaf=leaf, location=None)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
-        resp = client.get(
-            f"/admin/items/{item.id}/transfer", follow_redirects=False
-        )
+        resp = client.get(f"/admin/items/{item.id}/transfer", follow_redirects=False)
         assert resp.status_code == 303
         assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
         # Follow once and check the flash is rendered.
@@ -3783,9 +3473,7 @@ class TestStockTransferFormRendering:
         assert resp2.status_code == 200
         assert "Set a location" in resp2.text
 
-    def test_recent_movements_empty_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_recent_movements_empty_state(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3796,9 +3484,7 @@ class TestStockTransferFormRendering:
 
 
 class TestStockTransferValidation:
-    def test_blank_to_location_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_to_location_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3811,9 +3497,7 @@ class TestStockTransferValidation:
         )
         assert resp.status_code == 400
 
-    def test_non_int_to_location_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_int_to_location_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3826,9 +3510,7 @@ class TestStockTransferValidation:
         )
         assert resp.status_code == 400
 
-    def test_unknown_to_location_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_to_location_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3836,16 +3518,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id="999999", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id="999999", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_archived_to_location_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_to_location_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         archived = _make_archived_location(db_session, "Old shed")
@@ -3854,16 +3532,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(archived.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(archived.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_same_as_current_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_same_as_current_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -3871,16 +3545,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(loc.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(loc.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_blank_qty_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_blank_qty_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -3889,16 +3559,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), qty="", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), qty="", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_zero_qty_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_zero_qty_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -3907,16 +3573,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), qty="0", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), qty="0", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_negative_qty_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_negative_qty_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -3925,16 +3587,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), qty="-1", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), qty="-1", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_non_numeric_qty_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_non_numeric_qty_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -3943,16 +3601,12 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), qty="abc", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), qty="abc", csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
 
-    def test_archived_item_post_is_400(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_archived_item_post_is_400(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -3971,9 +3625,7 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -3988,9 +3640,7 @@ class TestStockTransferValidation:
         _login_as(client, ws)
         resp = client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(target.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(target.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -4023,9 +3673,7 @@ class TestStockTransferValidation:
         # Same-location reject path: the route should not have committed.
         client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id=str(loc.id), csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id=str(loc.id), csrf=_csrf(client)),
             follow_redirects=False,
         )
         db_session.refresh(item)
@@ -4033,18 +3681,14 @@ class TestStockTransferValidation:
         # Plus the bad-target id case.
         client.post(
             f"/admin/items/{item.id}/transfer",
-            data=_payload_transfer(
-                to_location_id="999999", csrf=_csrf(client)
-            ),
+            data=_payload_transfer(to_location_id="999999", csrf=_csrf(client)),
             follow_redirects=False,
         )
         db_session.refresh(item)
         assert item.location_id == loc.id
         # And no movement row written across either failure.
         movements = list(
-            db_session.execute(
-                select(StockMovement).where(StockMovement.item_id == item.id)
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item.id))
             .scalars()
             .all()
         )
@@ -4081,9 +3725,7 @@ class TestStockTransferHappyPath:
         assert item.location_id == target.id
 
         movements = list(
-            db_session.execute(
-                select(StockMovement).where(StockMovement.item_id == item.id)
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item.id))
             .scalars()
             .all()
         )
@@ -4096,9 +3738,7 @@ class TestStockTransferHappyPath:
         assert m.note == "moved by Pat"
         assert m.total_cost is None
 
-    def test_audit_row_carries_from_to(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_audit_row_carries_from_to(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4152,18 +3792,14 @@ class TestStockTransferHappyPath:
             follow_redirects=False,
         )
         movements = list(
-            db_session.execute(
-                select(StockMovement).where(StockMovement.item_id == item.id)
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item.id))
             .scalars()
             .all()
         )
         assert movements[0].reason is None
         assert movements[0].note is None
 
-    def test_whitespace_strip_on_reason(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_whitespace_strip_on_reason(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4181,17 +3817,13 @@ class TestStockTransferHappyPath:
             follow_redirects=False,
         )
         movements = list(
-            db_session.execute(
-                select(StockMovement).where(StockMovement.item_id == item.id)
-            )
+            db_session.execute(select(StockMovement).where(StockMovement.item_id == item.id))
             .scalars()
             .all()
         )
         assert movements[0].reason == "shifted"
 
-    def test_flash_message_after_redirect(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_flash_message_after_redirect(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4219,9 +3851,7 @@ class TestStockTransferHappyPath:
 class TestStockTransferEngineIsolation:
     """Transfer must not touch cost layers, consumptions, or current_qty."""
 
-    def test_no_cost_layer_created(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_cost_layer_created(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4229,9 +3859,7 @@ class TestStockTransferEngineIsolation:
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
         _seed_layer(db_session, item=item, qty="10", unit_cost="2", actor=ws)
         layers_before = list(
-            db_session.execute(
-                select(CostLayer).where(CostLayer.item_id == item.id)
-            )
+            db_session.execute(select(CostLayer).where(CostLayer.item_id == item.id))
             .scalars()
             .all()
         )
@@ -4246,9 +3874,7 @@ class TestStockTransferEngineIsolation:
             follow_redirects=False,
         )
         layers_after = list(
-            db_session.execute(
-                select(CostLayer).where(CostLayer.item_id == item.id)
-            )
+            db_session.execute(select(CostLayer).where(CostLayer.item_id == item.id))
             .scalars()
             .all()
         )
@@ -4257,9 +3883,7 @@ class TestStockTransferEngineIsolation:
         assert layers_after[0].id == layers_before[0].id
         assert layers_after[0].qty_remaining == Decimal("10")
 
-    def test_no_consumption_row_created(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_no_consumption_row_created(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4276,16 +3900,10 @@ class TestStockTransferEngineIsolation:
             ),
             follow_redirects=False,
         )
-        consumptions = list(
-            db_session.execute(select(CostLayerConsumption))
-            .scalars()
-            .all()
-        )
+        consumptions = list(db_session.execute(select(CostLayerConsumption)).scalars().all())
         assert consumptions == []
 
-    def test_current_qty_unchanged(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_current_qty_unchanged(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session, "Bench")
         target = _make_location(db_session, "Storage")
@@ -4395,9 +4013,7 @@ class TestStockTransferOnDetailPage:
 
 
 class TestStockTransferDetailLink:
-    def test_detail_page_shows_transfer_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_detail_page_shows_transfer_link(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         loc = _make_location(db_session)
         item = _make_item_at(db_session, leaf=leaf, location=loc)
@@ -4433,25 +4049,19 @@ class TestStockTransferDetailLink:
 # ---------------------------------------------------------------------------
 
 
-_MOVEMENTS_CSV_HEADER_LINE = (
-    "id,created_at,type,direction,qty,total_cost,actor_email,reason,note"
-)
+_MOVEMENTS_CSV_HEADER_LINE = "id,created_at,type,direction,qty,total_cost,actor_email,reason,note"
 
 
 class TestItemDetailCsvRoleEnforcement:
     """``?format=csv`` inherits the same role gate as the HTML branch."""
 
-    def test_anonymous_csv_is_401(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_anonymous_csv_is_401(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 401
 
-    def test_pending_csv_is_403(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_pending_csv_is_403(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         pending = _make_user(
@@ -4464,9 +4074,7 @@ class TestItemDetailCsvRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 403
 
-    def test_workshop_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_workshop_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         ws = _make_user(db_session, email="w@x.test", role=Role.WORKSHOP)
@@ -4474,9 +4082,7 @@ class TestItemDetailCsvRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 200
 
-    def test_office_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_office_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
@@ -4484,9 +4090,7 @@ class TestItemDetailCsvRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 200
 
-    def test_manager_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_manager_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4494,9 +4098,7 @@ class TestItemDetailCsvRoleEnforcement:
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 200
 
-    def test_admin_csv_is_200(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_admin_csv_is_200(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         admin = _make_user(db_session, email="a@x.test", role=Role.ADMIN)
@@ -4506,9 +4108,7 @@ class TestItemDetailCsvRoleEnforcement:
 
 
 class TestItemDetailCsvHeaders:
-    def test_unknown_item_csv_is_404(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_unknown_item_csv_is_404(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get("/admin/items/99999/detail?format=csv")
@@ -4539,9 +4139,7 @@ class TestItemDetailCsvHeaders:
 
 
 class TestItemDetailCsvBody:
-    def test_header_row_is_first_line(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_header_row_is_first_line(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4550,9 +4148,7 @@ class TestItemDetailCsvBody:
         first_line = resp.text.split("\r\n")[0]
         assert first_line == _MOVEMENTS_CSV_HEADER_LINE
 
-    def test_in_movement_renders_full_row(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_in_movement_renders_full_row(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4567,9 +4163,7 @@ class TestItemDetailCsvBody:
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         body = resp.text
         # Locate the movement row (the only data line).
-        data_rows = [
-            line for line in body.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in body.split("\r\n")[1:] if line.strip()]
         assert len(data_rows) == 1
         cells = data_rows[0].split(",")
         assert cells[0] == str(movement.id)
@@ -4601,9 +4195,7 @@ class TestItemDetailCsvBody:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         body = resp.text
-        data_rows = [
-            line for line in body.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in body.split("\r\n")[1:] if line.strip()]
         # Two rows: the OUT (newest) then the IN.
         assert len(data_rows) == 2
         out_cells = data_rows[0].split(",")
@@ -4627,9 +4219,7 @@ class TestItemDetailCsvBody:
         )
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         cells = data_rows[0].split(",")
         assert cells[2] == "adjustment"
         assert cells[3] == "+"
@@ -4651,14 +4241,10 @@ class TestItemDetailCsvBody:
             unit_cost=Decimal("2"),
             actor=mgr,
         )
-        _seed_adjust_decrease(
-            db_session, item=item, qty=Decimal("2"), actor=mgr
-        )
+        _seed_adjust_decrease(db_session, item=item, qty=Decimal("2"), actor=mgr)
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         # Newest-first: adjust-decrease, then the IN seed.
         cells = data_rows[0].split(",")
         assert cells[2] == "adjustment"
@@ -4685,9 +4271,7 @@ class TestItemDetailCsvBody:
             follow_redirects=False,
         )
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         assert len(data_rows) == 1
         cells = data_rows[0].split(",")
         assert cells[2] == "transfer"
@@ -4696,9 +4280,7 @@ class TestItemDetailCsvBody:
         assert cells[3] == ""
         assert cells[5] == ""
 
-    def test_movements_ordered_newest_first(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_movements_ordered_newest_first(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4719,9 +4301,7 @@ class TestItemDetailCsvBody:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         body = resp.text
-        data_rows = [
-            line for line in body.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in body.split("\r\n")[1:] if line.strip()]
         ids = [int(row.split(",")[0]) for row in data_rows]
         assert ids == [second.id, first.id]
 
@@ -4744,9 +4324,7 @@ class TestItemDetailCsvBody:
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 200
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         assert len(data_rows) == 1
 
     def test_csv_ignores_pagination_returns_all_rows(
@@ -4767,9 +4345,7 @@ class TestItemDetailCsvBody:
             )
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         assert len(data_rows) == 25
 
     def test_orphaned_actor_renders_empty_actor_email(
@@ -4792,9 +4368,7 @@ class TestItemDetailCsvBody:
         db_session.commit()
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
-        data_rows = [
-            line for line in resp.text.split("\r\n")[1:] if line.strip()
-        ]
+        data_rows = [line for line in resp.text.split("\r\n")[1:] if line.strip()]
         cells = data_rows[0].split(",")
         # actor_email cell is empty (not "—").
         assert cells[6] == ""
@@ -4814,9 +4388,7 @@ class TestItemDetailCsvEmptyState:
 
 
 class TestItemDetailCsvHtmlBranch:
-    def test_format_blank_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_blank_renders_html(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4826,9 +4398,7 @@ class TestItemDetailCsvHtmlBranch:
         assert resp.headers["content-type"].startswith("text/html")
         assert 'data-testid="item-detail-heading"' in resp.text
 
-    def test_format_unknown_renders_html(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_format_unknown_renders_html(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4839,9 +4409,7 @@ class TestItemDetailCsvHtmlBranch:
 
 
 class TestItemDetailCsvReadOnly:
-    def test_csv_writes_no_audit(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_writes_no_audit(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4853,25 +4421,19 @@ class TestItemDetailCsvReadOnly:
             actor=mgr,
         )
         before_count = len(
-            db_session.execute(
-                select(AuditLog).order_by(AuditLog.id)
-            ).scalars().all()
+            db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
         )
         _login_as(client, mgr)
         resp = client.get(f"/admin/items/{item.id}/detail?format=csv")
         assert resp.status_code == 200
         after_count = len(
-            db_session.execute(
-                select(AuditLog).order_by(AuditLog.id)
-            ).scalars().all()
+            db_session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
         )
         assert after_count == before_count
 
 
 class TestItemDetailCsvLink:
-    def test_html_renders_csv_link(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_html_renders_csv_link(self, client: TestClient, db_session: Session) -> None:
         leaf = _make_leaf(db_session)
         item = _make_item(db_session, leaf=leaf)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -4886,11 +4448,9 @@ class TestItemDetailCsvLink:
         resp = client.get(f"/admin/items/{item.id}/detail")
         body = resp.text
         assert 'data-testid="movements-csv-link"' in body
-        assert f'/admin/items/{item.id}/detail?format=csv' in body
+        assert f"/admin/items/{item.id}/detail?format=csv" in body
 
-    def test_csv_link_visible_on_empty_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_csv_link_visible_on_empty_state(self, client: TestClient, db_session: Session) -> None:
         """A user inspecting an item with no movements can still pull
         a header-only CSV — same posture as every prior R5* surface."""
         leaf = _make_leaf(db_session)

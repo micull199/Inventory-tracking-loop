@@ -28,6 +28,7 @@ from sqlalchemy import select
 from app.cost_engine import consume_fifo, record_receipt
 from app.db import SessionLocal
 from app.models import (
+    Archetype,
     CostLayerSource,
     FieldType,
     Item,
@@ -65,6 +66,28 @@ TAXONOMY: dict[str, list[str]] = {
     "Findings": ["Clasps", "Earring Hooks", "Chains"],
     "Tools": [],
     "Consumables": [],
+}
+
+# Explicit SKU prefixes per top-level + per child path. Kept in line with
+# the migration 0016 backfill rule (uppercase, 1-8 alnum). Hand-picked here
+# so the demo SKUs read cleanly (e.g. ``PM-GO-0001``) instead of the
+# auto-derived ``PRE-GOL-0001``.
+TOP_PREFIXES: dict[str, str] = {
+    "Precious Metals": "PM",
+    "Gemstones": "GEM",
+    "Findings": "FIND",
+    "Tools": "TOOL",
+    "Consumables": "CONS",
+}
+CHILD_PREFIXES: dict[str, str] = {
+    "Precious Metals/Gold": "GO",
+    "Precious Metals/Silver": "SI",
+    "Precious Metals/Platinum": "PT",
+    "Gemstones/Diamonds": "DIA",
+    "Gemstones/Coloured Stones": "COL",
+    "Findings/Clasps": "CLA",
+    "Findings/Earring Hooks": "EAR",
+    "Findings/Chains": "CHA",
 }
 
 # Field defs keyed by leaf path ("Parent/Child" or "Standalone").
@@ -378,6 +401,10 @@ def seed() -> dict[str, int]:
             counts["locations"] += 1
 
         # Taxonomy: top-level + children. Reuse existing nodes by (parent_id, name).
+        # Every top-level gets archetype=BULK + an explicit sku_prefix (taxonomy
+        # refinement contract; see ``docs/taxonomy-refinement-plan.md``). Children
+        # inherit the archetype implicitly (NULL on the row, resolved at read
+        # time) but need an explicit sku_prefix too.
         nodes_by_path: dict[str, TaxonomyNode] = {}
         for parent_name, children in TAXONOMY.items():
             parent = db.execute(
@@ -387,7 +414,13 @@ def seed() -> dict[str, int]:
                 )
             ).scalar_one_or_none()
             if parent is None:
-                parent = TaxonomyNode(name=parent_name, parent_id=None, sort_order=0)
+                parent = TaxonomyNode(
+                    name=parent_name,
+                    parent_id=None,
+                    sort_order=0,
+                    archetype=Archetype.BULK,
+                    sku_prefix=TOP_PREFIXES[parent_name],
+                )
                 db.add(parent)
                 db.flush()
                 counts["nodes"] += 1
@@ -401,7 +434,12 @@ def seed() -> dict[str, int]:
                 ).scalar_one_or_none()
                 if child is None:
                     child = TaxonomyNode(
-                        name=child_name, parent_id=parent.id, sort_order=idx
+                        name=child_name,
+                        parent_id=parent.id,
+                        sort_order=idx,
+                        sku_prefix=CHILD_PREFIXES[
+                            f"{parent_name}/{child_name}"
+                        ],
                     )
                     db.add(child)
                     db.flush()

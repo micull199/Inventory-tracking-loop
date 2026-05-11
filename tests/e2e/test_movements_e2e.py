@@ -43,9 +43,7 @@ from __future__ import annotations
 from playwright.sync_api import BrowserContext, Page, expect
 
 
-def _dev_login(
-    page: Page, base_url: str, email: str, sub: str, name: str = "Test User"
-) -> None:
+def _dev_login(page: Page, base_url: str, email: str, sub: str, name: str = "Test User") -> None:
     page.set_content(
         f"""<form id="f" method="post" action="{base_url}/auth/_dev-login">
               <input name="email" value="{email}">
@@ -57,9 +55,7 @@ def _dev_login(
     page.wait_for_url(f"{base_url}/")
 
 
-def test_workshop_records_a_manual_stock_in(
-    context: BrowserContext, app_server: str
-) -> None:
+def test_workshop_records_a_manual_stock_in(context: BrowserContext, app_server: str) -> None:
     # Step 1: Future workshop user signs up (lands pending).
     pending_page = context.new_page()
     _dev_login(
@@ -86,16 +82,12 @@ def test_workshop_records_a_manual_stock_in(
 
     # Step 3: Admin promotes the pending user → workshop + active.
     admin_page.goto(f"{app_server}/admin/users")
-    pending_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="movements-ws@uc.test"
-    )
+    pending_row = admin_page.locator('[data-testid="user-row"]', has_text="movements-ws@uc.test")
     pending_row.locator('[data-testid="role-select"]').select_option("workshop")
     pending_row.locator('[data-testid="role-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
 
-    promoted_row = admin_page.locator(
-        '[data-testid="user-row"]', has_text="movements-ws@uc.test"
-    )
+    promoted_row = admin_page.locator('[data-testid="user-row"]', has_text="movements-ws@uc.test")
     promoted_row.locator('[data-testid="status-select"]').select_option("active")
     promoted_row.locator('[data-testid="status-submit"]').click()
     admin_page.wait_for_url(f"{app_server}/admin/users")
@@ -117,9 +109,7 @@ def test_workshop_records_a_manual_stock_in(
     expect(pending_mgr_page.get_by_test_id("pending-heading")).to_be_visible()
     pending_mgr_page.close()
 
-    admin_again_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    admin_again_context = context.browser.new_context() if context.browser else context
     admin_again = admin_again_context.new_page()
     _dev_login(
         admin_again,
@@ -129,15 +119,11 @@ def test_workshop_records_a_manual_stock_in(
         name="Seed Admin",
     )
     admin_again.goto(f"{app_server}/admin/users")
-    mgr_pending = admin_again.locator(
-        '[data-testid="user-row"]', has_text="movements-mgr@uc.test"
-    )
+    mgr_pending = admin_again.locator('[data-testid="user-row"]', has_text="movements-mgr@uc.test")
     mgr_pending.locator('[data-testid="role-select"]').select_option("manager")
     mgr_pending.locator('[data-testid="role-submit"]').click()
     admin_again.wait_for_url(f"{app_server}/admin/users")
-    mgr_promoted = admin_again.locator(
-        '[data-testid="user-row"]', has_text="movements-mgr@uc.test"
-    )
+    mgr_promoted = admin_again.locator('[data-testid="user-row"]', has_text="movements-mgr@uc.test")
     mgr_promoted.locator('[data-testid="status-select"]').select_option("active")
     mgr_promoted.locator('[data-testid="status-submit"]').click()
     admin_again.wait_for_url(f"{app_server}/admin/users")
@@ -175,28 +161,21 @@ def test_workshop_records_a_manual_stock_in(
     mgr_page.goto(f"{app_server}/admin/items/new")
     mgr_page.get_by_test_id("item-sku-input").fill("MV-E2E-001")
     mgr_page.get_by_test_id("item-name-input").fill("Casting alloy")
-    mgr_page.get_by_test_id("item-category-input").select_option(
-        label="Movements E2E Cat"
-    )
+    mgr_page.get_by_test_id("item-category-input").select_option(label="Movements E2E Cat")
     mgr_page.get_by_test_id("item-unit-input").fill("g")
-    mgr_page.get_by_test_id("item-location-input").select_option(
-        label="Movements From Bench"
-    )
+    mgr_page.get_by_test_id("item-location-input").select_option(label="Movements From Bench")
     mgr_page.get_by_test_id("item-submit").click()
     mgr_page.wait_for_url(f"{app_server}/admin/items")
 
     # Capture the item id from the row so we can deep-link the workshop user.
-    item_row = mgr_page.locator(
-        '[data-testid="item-row"]', has_text="MV-E2E-001"
-    )
+    item_row = mgr_page.locator('[data-testid="item-row"]', has_text="MV-E2E-001")
     item_id = item_row.get_attribute("data-item-id")
     assert item_id is not None
 
     # Sanity: manager can also see the new "Stock in →" link on the edit form.
     item_row.get_by_test_id("edit-item").click()
     mgr_page.wait_for_url(
-        lambda u: u.startswith(f"{app_server}/admin/items/")
-        and u.endswith("/edit")
+        lambda u: u.startswith(f"{app_server}/admin/items/") and u.endswith("/edit")
     )
     expect(mgr_page.get_by_test_id("stock-in-link")).to_be_visible()
     mgr_page.close()
@@ -227,16 +206,13 @@ def test_workshop_records_a_manual_stock_in(
     ws_page.get_by_test_id("nav-items").click()
     ws_page.wait_for_url(f"{app_server}/admin/items")
     expect(ws_page.get_by_test_id("new-item")).not_to_be_visible()
-    item_row_ws = ws_page.locator(
-        '[data-testid="item-row"]', has_text="MV-E2E-001"
-    )
+    item_row_ws = ws_page.locator('[data-testid="item-row"]', has_text="MV-E2E-001")
     expect(item_row_ws).to_be_visible()
     expect(item_row_ws.get_by_test_id("view-item")).to_be_visible()
     expect(item_row_ws.get_by_test_id("archive-item")).not_to_be_visible()
     item_row_ws.get_by_test_id("view-item").click()
     ws_page.wait_for_url(
-        lambda u: u.startswith(f"{app_server}/admin/items/")
-        and u.endswith("/edit")
+        lambda u: u.startswith(f"{app_server}/admin/items/") and u.endswith("/edit")
     )
     expect(ws_page.get_by_test_id("item-form-readonly-note")).to_be_visible()
     expect(ws_page.get_by_test_id("item-submit")).not_to_be_visible()
@@ -291,14 +267,10 @@ def test_workshop_records_a_manual_stock_in(
     ws_page.get_by_test_id("stock-out-submit").click()
     # Stays on the same URL (no 303 redirect because the response is a 400
     # with the form re-rendered).
-    expect(ws_page.get_by_test_id("stock-out-error")).to_contain_text(
-        "Not enough stock"
-    )
+    expect(ws_page.get_by_test_id("stock-out-error")).to_contain_text("Not enough stock")
     # Inputs preserved.
     expect(ws_page.get_by_test_id("stock-out-qty-input")).to_have_value("1000")
-    expect(ws_page.get_by_test_id("stock-out-reason-input")).to_have_value(
-        "Way too much"
-    )
+    expect(ws_page.get_by_test_id("stock-out-reason-input")).to_have_value("Way too much")
     # current_qty unchanged (still 70).
     expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
 
@@ -309,9 +281,7 @@ def test_workshop_records_a_manual_stock_in(
     expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("70.0000")
 
     # Leg 1: increase by 20 at unit_cost 3.00 → current_qty 90, total_cost 60.
-    ws_page.get_by_test_id("stock-adjust-direction-input").select_option(
-        "increase"
-    )
+    ws_page.get_by_test_id("stock-adjust-direction-input").select_option("increase")
     ws_page.get_by_test_id("stock-adjust-qty-input").fill("20")
     ws_page.get_by_test_id("stock-adjust-unit-cost-input").fill("3.00")
     ws_page.get_by_test_id("stock-adjust-reason-input").fill("found extra")
@@ -329,9 +299,7 @@ def test_workshop_records_a_manual_stock_in(
     # Leg 2: decrease by 15 → current_qty 75. FIFO consumes from the oldest
     # layer (the original 100 @ 2.50, which had 70 left after the OUT step), so
     # total_cost = 15 * 2.50 = 37.50.
-    ws_page.get_by_test_id("stock-adjust-direction-input").select_option(
-        "decrease"
-    )
+    ws_page.get_by_test_id("stock-adjust-direction-input").select_option("decrease")
     ws_page.get_by_test_id("stock-adjust-qty-input").fill("15")
     ws_page.get_by_test_id("stock-adjust-unit-cost-input").fill("")
     ws_page.get_by_test_id("stock-adjust-reason-input").fill("damaged batch")
@@ -349,31 +317,21 @@ def test_workshop_records_a_manual_stock_in(
     # consolidated read view: open layers + paginated full timeline + per-row
     # layer breakdown for the OUT and the negative-adjustment.
     ws_page.goto(f"{app_server}/admin/items/{item_id}/detail")
-    expect(ws_page.get_by_test_id("item-detail-heading")).to_contain_text(
-        "Casting alloy"
-    )
+    expect(ws_page.get_by_test_id("item-detail-heading")).to_contain_text("Casting alloy")
     expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
     # Two open layers remain: the original IN @ 2.50 (with 55 left after OUT
     # consumed 30 + adjust-decrease consumed 15) + the adjust-increase @ 3.00
     # (with all 20 still open). open_value = 55*2.5 + 20*3 = 197.50.
     expect(ws_page.get_by_test_id("item-open-value")).to_contain_text("197.5")
-    expect(
-        ws_page.locator('[data-testid="cost-layer-row"]')
-    ).to_have_count(2)
+    expect(ws_page.locator('[data-testid="cost-layer-row"]')).to_have_count(2)
     # The timeline shows all four movements (newest first).
-    expect(
-        ws_page.locator('[data-testid="timeline-row"]')
-    ).to_have_count(4)
+    expect(ws_page.locator('[data-testid="timeline-row"]')).to_have_count(4)
     # The OUT and the adjust-decrease both produce layer-breakdown rows; the
     # IN and the adjust-increase do not (each "row" wraps a <ul>, so we
     # expect 2 breakdown blocks total).
-    expect(
-        ws_page.locator('[data-testid="layer-breakdown"]')
-    ).to_have_count(2)
+    expect(ws_page.locator('[data-testid="layer-breakdown"]')).to_have_count(2)
     # Single page footer (well under 20 movements).
-    expect(
-        ws_page.get_by_test_id("pagination-single-page")
-    ).to_be_visible()
+    expect(ws_page.get_by_test_id("pagination-single-page")).to_be_visible()
     # Workshop sees the in/out/adjust action links but not the edit link.
     expect(ws_page.get_by_test_id("stock-in-link")).to_be_visible()
     expect(ws_page.get_by_test_id("edit-item-link")).to_have_count(0)
@@ -414,12 +372,8 @@ def test_workshop_records_a_manual_stock_in(
     # (TRANSFER doesn't add one). current_qty unchanged at 75.
     ws_page.goto(f"{app_server}/admin/items/{item_id}/detail")
     expect(ws_page.get_by_test_id("item-current-qty")).to_have_text("75.0000")
-    expect(
-        ws_page.locator('[data-testid="timeline-row"]')
-    ).to_have_count(5)
-    expect(
-        ws_page.locator('[data-testid="layer-breakdown"]')
-    ).to_have_count(2)
+    expect(ws_page.locator('[data-testid="timeline-row"]')).to_have_count(5)
+    expect(ws_page.locator('[data-testid="layer-breakdown"]')).to_have_count(2)
 
     ws_page.close()
     if ws_context is not context:
@@ -427,9 +381,7 @@ def test_workshop_records_a_manual_stock_in(
 
     # Step 7: Cleanup — manager archives the item + the category so downstream
     # walks start with empty active lists. Same posture as the items walk.
-    cleanup_context = (
-        context.browser.new_context() if context.browser else context
-    )
+    cleanup_context = context.browser.new_context() if context.browser else context
     cleanup_page = cleanup_context.new_page()
     _dev_login(
         cleanup_page,
@@ -439,24 +391,18 @@ def test_workshop_records_a_manual_stock_in(
         name="Movements Manager",
     )
     cleanup_page.goto(f"{app_server}/admin/items")
-    item_row_to_archive = cleanup_page.locator(
-        '[data-testid="item-row"]', has_text="MV-E2E-001"
-    )
+    item_row_to_archive = cleanup_page.locator('[data-testid="item-row"]', has_text="MV-E2E-001")
     item_row_to_archive.get_by_test_id("archive-item").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/items")
 
     cleanup_page.goto(f"{app_server}/admin/taxonomy")
-    cat_row = cleanup_page.locator(
-        '[data-testid="taxonomy-row"]', has_text="Movements E2E Cat"
-    )
+    cat_row = cleanup_page.locator('[data-testid="taxonomy-row"]', has_text="Movements E2E Cat")
     cat_row.get_by_test_id("archive-taxonomy").click()
     cleanup_page.wait_for_url(f"{app_server}/admin/taxonomy")
 
     for loc_name in ("Movements From Bench", "Movements To Storage"):
         cleanup_page.goto(f"{app_server}/admin/locations")
-        loc_row = cleanup_page.locator(
-            '[data-testid="location-row"]', has_text=loc_name
-        )
+        loc_row = cleanup_page.locator('[data-testid="location-row"]', has_text=loc_name)
         loc_row.get_by_test_id("archive-location").click()
         cleanup_page.wait_for_url(f"{app_server}/admin/locations")
 

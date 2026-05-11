@@ -43,10 +43,8 @@ class TestExtractSubmittedToken:
         assert _extract_submitted_token(headers, body) is None
 
     def test_returns_none_for_multipart_body(self) -> None:
-        headers = {
-            b"content-type": b"multipart/form-data; boundary=---abc"
-        }
-        body = b"---abc\r\nContent-Disposition: form-data; name=\"csrf_token\"\r\n\r\ntok\r\n---abc--"
+        headers = {b"content-type": b"multipart/form-data; boundary=---abc"}
+        body = b'---abc\r\nContent-Disposition: form-data; name="csrf_token"\r\n\r\ntok\r\n---abc--'
         # Multipart bodies aren't inspected; callers send the header.
         assert _extract_submitted_token(headers, body) is None
 
