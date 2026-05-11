@@ -11,10 +11,11 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy application code and migration scripts.
+# Copy application code, migration scripts, and entrypoint helpers.
 COPY app/ ./app/
 COPY migrations/ ./migrations/
 COPY alembic.ini ./
+COPY scripts/ ./scripts/
 
 # Install the project itself into the same venv.
 RUN uv sync --frozen --no-dev
@@ -28,8 +29,9 @@ WORKDIR /app
 COPY --from=builder /app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
-ENV APP_ENV=prod
+
+RUN chmod +x scripts/fly-entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["scripts/fly-entrypoint.sh"]

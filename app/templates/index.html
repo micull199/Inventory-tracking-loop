@@ -9,6 +9,17 @@
             <p>
                 <a class="uc-btn uc-btn--primary" href="/auth/google/login" data-testid="sign-in">Sign in with Google</a>
             </p>
+            {% if dev_login_enabled %}
+                <hr>
+                <form method="post" action="/auth/_dev-login">
+                    <label>
+                        Dev sign-in email
+                        <input type="email" name="email" value="{{ dev_login_email }}" required>
+                    </label>
+                    <input type="hidden" name="name" value="Dev User">
+                    <button class="uc-btn" type="submit" data-testid="dev-sign-in">Dev sign-in</button>
+                </form>
+            {% endif %}
         {% endcall %}
     {% elif current_user.status.value == "pending" %}
         {% include "pending.html" %}
