@@ -48,6 +48,8 @@
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office", "workshop") %}
                     <li><a href="/admin/items" data-testid="nav-items"
                        {% if request.url.path.startswith("/admin/items") %}aria-current="page"{% endif %}>Items</a></li>
+                    <li><a href="/admin/transfers" data-testid="nav-transfers"
+                       {% if request.url.path.startswith("/admin/transfers") %}aria-current="page"{% endif %}>Transfers</a></li>
                 {% endif %}
                 {% if current_user.role and current_user.role.value in ("admin", "manager", "office") %}
                     <li><a href="/admin/reorder" data-testid="nav-reorder"

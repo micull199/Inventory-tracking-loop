@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Transfer #{{ transfer.id }} — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/transfers" data-testid="transfer-detail-back">&larr; Back to transfers</a></p>
+
+    {% call c.page_header(
+        "Transfer #" ~ transfer.id,
+        subtitle="Internal location transfer with separate ship and receive events.",
+        heading_testid="transfer-detail-heading"
+    ) %}
+        {{ c.pill(transfer.status.value) }}
+    {% endcall %}
+
+    {% call c.card("Summary") %}
+        <div class="uc-grid-2">
+            <div>
+                <div class="uc-label">From</div>
+                <div class="uc-strong" data-testid="transfer-detail-source">{{ source.name if source else "—" }}</div>
+            </div>
+            <div>
+                <div class="uc-label">To</div>
+                <div class="uc-strong" data-testid="transfer-detail-destination">{{ destination.name if destination else "—" }}</div>
+            </div>
+            <div>
+                <div class="uc-label">Status</div>
+                <div class="uc-strong" data-testid="transfer-detail-status">{{ transfer.status.value }}</div>
+            </div>
+            <div>
+                <div class="uc-label">Expected arrival</div>
+                <div class="uc-strong">{% if transfer.expected_arrival %}{{ transfer.expected_arrival.isoformat() }}{% else %}—{% endif %}</div>
+            </div>
+            <div>
+                <div class="uc-label">Shipped at</div>
+                <div class="uc-strong" data-testid="transfer-detail-shipped-at">{% if transfer.shipped_at %}{{ transfer.shipped_at.strftime("%Y-%m-%d %H:%M %Z") }}{% else %}—{% endif %}</div>
+            </div>
+            <div>
+                <div class="uc-label">Received at</div>
+                <div class="uc-strong" data-testid="transfer-detail-received-at">{% if transfer.received_at %}{{ transfer.received_at.strftime("%Y-%m-%d %H:%M %Z") }}{% else %}—{% endif %}</div>
+            </div>
+            <div>
+                <div class="uc-label">Carrier</div>
+                <div class="uc-strong">{{ transfer.carrier or "—" }}</div>
+            </div>
+            <div>
+                <div class="uc-label">Tracking</div>
+                <div class="uc-strong">{{ transfer.tracking_number or "—" }}</div>
+            </div>
+        </div>
+        {% if transfer.notes %}
+            <div class="uc-field">
+                <div class="uc-label">Notes</div>
+                <div>{{ transfer.notes }}</div>
+            </div>
+        {% endif %}
+    {% endcall %}
+
+    {% call c.card("Lines") %}
+        {% if lines %}
+            <div class="uc-table-wrap">
+                <table class="uc-table" data-testid="transfer-lines-table">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>SKU</th>
+                            <th class="uc-right">Qty</th>
+                            <th>Current location</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for line in lines %}
+                            {% set item = items.get(line.item_id) %}
+                            <tr data-testid="transfer-line-row" data-line-id="{{ line.id }}">
+                                <td>{{ item.name if item else "—" }}</td>
+                                <td class="uc-num">{{ item.sku if item else "—" }}</td>
+                                <td class="uc-num uc-right">{{ line.qty }}</td>
+                                <td data-testid="transfer-line-current-location">
+                                    {% if item and item.location_id %}
+                                        located
+                                    {% elif item %}
+                                        in transit
+                                    {% else %}—{% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="uc-muted">No lines on this transfer order.</p>
+        {% endif %}
+    {% endcall %}
+
+    <div class="uc-actions">
+        {% if can_ship %}
+            <form method="post" action="/admin/transfers/{{ transfer.id }}/ship" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="uc-btn uc-btn--primary" data-testid="transfer-ship">
+                    Mark as shipped
+                </button>
+            </form>
+        {% endif %}
+        {% if can_receive %}
+            <form method="post" action="/admin/transfers/{{ transfer.id }}/receive" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="uc-btn uc-btn--primary" data-testid="transfer-receive">
+                    Mark as received
+                </button>
+            </form>
+        {% endif %}
+        {% if can_cancel %}
+            <form method="post" action="/admin/transfers/{{ transfer.id }}/cancel" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" data-testid="transfer-cancel">Cancel transfer</button>
+            </form>
+        {% endif %}
+    </div>
+{% endblock %}

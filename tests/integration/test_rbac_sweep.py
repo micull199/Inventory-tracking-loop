@@ -229,6 +229,16 @@ ROUTES: list[tuple[str, str, str]] = [
     # Manager on the taxonomy admin block above.
     ("GET", "/admin/items/99999/stage", WORKSHOP),
     ("POST", "/admin/items/99999/stage", WORKSHOP),
+    # Internal transfer orders (Slice 2 of the in-transit scope addition).
+    # Workshop reads list + detail; Office + Manager create / ship / receive /
+    # cancel. Cost engine is never invoked on these movements.
+    ("GET", "/admin/transfers", WORKSHOP),
+    ("GET", "/admin/transfers/99999", WORKSHOP),
+    ("GET", "/admin/transfers/new", OFFICE),
+    ("POST", "/admin/transfers", OFFICE),
+    ("POST", "/admin/transfers/99999/ship", OFFICE),
+    ("POST", "/admin/transfers/99999/receive", OFFICE),
+    ("POST", "/admin/transfers/99999/cancel", OFFICE),
     # --- Workshop+: checkouts (item-level) ---
     ("GET", "/admin/items/99999/checkout", WORKSHOP),
     ("POST", "/admin/items/99999/checkout", WORKSHOP),

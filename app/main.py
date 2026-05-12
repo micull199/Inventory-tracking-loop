@@ -27,6 +27,7 @@ from app import scan as scan_module
 from app import stock_takes as stock_takes_module
 from app import suppliers as suppliers_module
 from app import taxonomy as taxonomy_module
+from app import transfers as transfers_module
 from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
@@ -87,6 +88,7 @@ app.include_router(stock_takes_module.router)
 app.include_router(reports_module.router)
 app.include_router(scan_module.router)
 app.include_router(audit_routes_module.router)
+app.include_router(transfers_module.router)
 
 if settings.oauth_stub_mode:
     from app import oauth_test_stub as oauth_test_stub_module

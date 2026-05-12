@@ -43,6 +43,14 @@
             empty_text="No overdue checkouts.",
             testid="dashboard-overdue-checkouts"
         ) }}
+        {{ c.stat_card(
+            "In-transit items",
+            in_transit.lines,
+            foot_label="View transfers",
+            foot_url="/admin/transfers?show=shipped",
+            empty_text="No transfers in transit.",
+            testid="dashboard-in-transit"
+        ) }}
     </div>
 
     {# ---- Top consumed ---- #}

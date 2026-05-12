@@ -911,6 +911,15 @@ class StockMovement(Base):
         ForeignKey("stock_takes.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    # Set on the two TRANSFER movements (ship + receive) emitted by a
+    # Transfer Order document under ``/admin/transfers/...``. Distinguishes
+    # them from instant-flip transfers written by the legacy
+    # ``/admin/items/{id}/transfer`` route, which leave this NULL.
+    transfer_order_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("transfer_orders.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     # ``STAGE_CHANGE`` movements populate both stage FKs (``from_stage_id``
     # may be NULL on the very first transition for an item with no prior
     # stage). Every other movement type leaves both NULL.
@@ -1383,6 +1392,160 @@ class StockTakeLine(Base):
             f"<StockTakeLine id={self.id} stock_take_id={self.stock_take_id} "
             f"item_id={self.item_id} system_qty={self.system_qty} "
             f"counted_qty={self.counted_qty} committed={self.committed}>"
+        )
+
+
+class TransferOrderStatus(enum.StrEnum):
+    """Lifecycle of an internal Transfer Order (Slice 2 of the scope addition).
+
+    ``draft``    — created with source/destination + lines; editable.
+    ``shipped``  — items have left source; each line's item has
+                   ``location_id = NULL`` (in transit); not yet received.
+    ``received`` — items arrived; each line's item has
+                   ``location_id = destination_location_id``.
+    ``cancelled`` — abandoned while still ``draft`` (no movements ever written).
+
+    Full-receipt-only model in v1: shipped goods are received in full when the
+    courier delivers. Discrepancies after the fact go through the existing
+    adjustment movement path.
+    """
+
+    DRAFT = "draft"
+    SHIPPED = "shipped"
+    RECEIVED = "received"
+    CANCELLED = "cancelled"
+
+
+class TransferOrder(Base):
+    """A document describing stock moving between two UC locations.
+
+    Two-event flow: ship at source decrements visibility (``item.location_id``
+    becomes NULL while in transit), receive at destination sets
+    ``item.location_id = destination_location_id``. Cost engine is not invoked
+    — transfers don't change ownership or cost basis, only physical location.
+
+    The existing instant-flip ``TRANSFER`` movement under ``/admin/items/{id}
+    /transfer`` is preserved as a "quick relocate" path. Use the TO flow when
+    in-transit visibility matters (e.g. courier shipments between sites).
+    """
+
+    __tablename__ = "transfer_orders"
+    __table_args__ = (
+        Index("ix_transfer_orders_source_location_id", "source_location_id"),
+        Index(
+            "ix_transfer_orders_destination_location_id", "destination_location_id"
+        ),
+        Index("ix_transfer_orders_status", "status"),
+        Index("ix_transfer_orders_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_location_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("locations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    destination_location_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("locations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[TransferOrderStatus] = mapped_column(
+        SAEnum(
+            TransferOrderStatus,
+            name="transfer_order_status",
+            native_enum=False,
+            length=16,
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        nullable=False,
+        default=TransferOrderStatus.DRAFT,
+    )
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expected_arrival: Mapped[date | None] = mapped_column(Date, nullable=True)
+    carrier: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tracking_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    shipped_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    received_by: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<TransferOrder id={self.id} status={self.status} "
+            f"src={self.source_location_id} dst={self.destination_location_id}>"
+        )
+
+
+class TransferOrderLine(Base):
+    """One item being transferred under a Transfer Order.
+
+    ``qty`` is informational (transfers are whole-item location flips in v1;
+    a future per-location-qty refactor would make this load-bearing).
+    ``ship_movement_id`` and ``receive_movement_id`` are populated when the
+    parent transitions to ``shipped`` and ``received`` respectively.
+    """
+
+    __tablename__ = "transfer_order_lines"
+    __table_args__ = (
+        Index(
+            "uq_transfer_order_line_item",
+            "transfer_order_id",
+            "item_id",
+            unique=True,
+        ),
+        Index("ix_transfer_order_lines_item_id", "item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    transfer_order_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("transfer_orders.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("items.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    qty: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    ship_movement_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("stock_movements.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    receive_movement_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("stock_movements.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<TransferOrderLine id={self.id} to_id={self.transfer_order_id} "
+            f"item_id={self.item_id} qty={self.qty}>"
         )
 
 

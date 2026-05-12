@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/transfers" data-testid="transfer-form-back">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="transfer-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section" data-testid="transfer-form-locations">
+                <h3 class="uc-section-title">Locations</h3>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="source_location_id">From <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-input" id="source_location_id" name="source_location_id" required
+                            data-testid="transfer-source-input">
+                        <option value="">— pick a location —</option>
+                        {% for loc in location_options %}
+                            <option value="{{ loc.id }}"
+                                {% if form.source_location_id == loc.id|string %}selected{% endif %}>
+                                {{ loc.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="destination_location_id">To <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-input" id="destination_location_id" name="destination_location_id" required
+                            data-testid="transfer-destination-input">
+                        <option value="">— pick a location —</option>
+                        {% for loc in location_options %}
+                            <option value="{{ loc.id }}"
+                                {% if form.destination_location_id == loc.id|string %}selected{% endif %}>
+                                {{ loc.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </section>
+
+            <section class="uc-section" data-testid="transfer-form-meta">
+                <h3 class="uc-section-title">Shipment details</h3>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="expected_arrival">Expected arrival</label>
+                    <input class="uc-input" type="date" id="expected_arrival" name="expected_arrival"
+                           value="{{ form.expected_arrival }}"
+                           data-testid="transfer-expected-arrival-input">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="carrier">Carrier</label>
+                    <input class="uc-input" type="text" id="carrier" name="carrier"
+                           value="{{ form.carrier }}"
+                           data-testid="transfer-carrier-input"
+                           maxlength="128">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="tracking_number">Tracking number</label>
+                    <input class="uc-input" type="text" id="tracking_number" name="tracking_number"
+                           value="{{ form.tracking_number }}"
+                           data-testid="transfer-tracking-input"
+                           maxlength="128">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-input" id="notes" name="notes" rows="3"
+                              data-testid="transfer-notes-input"
+                              maxlength="2000">{{ form.notes }}</textarea>
+                </div>
+            </section>
+
+            <section class="uc-section" data-testid="transfer-form-lines">
+                <h3 class="uc-section-title">Lines</h3>
+                <p class="uc-helper uc-mb-4">Add one row per item to ship. Quantity is recorded for audit; the item moves whole between locations.</p>
+
+                <div id="lines-container">
+                    {% for idx in range(5) %}
+                        <div class="uc-field uc-grid-2" data-testid="transfer-line-row">
+                            <div>
+                                <label class="uc-label" for="item_id_{{ idx }}">Item</label>
+                                <select class="uc-input" id="item_id_{{ idx }}" name="item_id_{{ idx }}"
+                                        data-testid="transfer-line-item-input">
+                                    <option value="">— none —</option>
+                                    {% for it in item_options %}
+                                        <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="uc-label" for="qty_{{ idx }}">Qty</label>
+                                <input class="uc-input" type="text" inputmode="decimal"
+                                       id="qty_{{ idx }}" name="qty_{{ idx }}"
+                                       data-testid="transfer-line-qty-input"
+                                       placeholder="0">
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <div class="uc-actions">
+                {{ c.button("Create draft", type="submit", testid="transfer-save") }}
+                <a class="uc-btn uc-btn--ghost" href="/admin/transfers" data-testid="transfer-cancel">Cancel</a>
+            </div>
+        </form>
+    {% endcall %}
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Transfers — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Transfer orders",
+        subtitle="Move stock between UC locations with separate ship and receive events.",
+        heading_testid="transfers-heading"
+    ) %}
+        {% if can_create %}
+            {{ c.button("+ New transfer", href="/admin/transfers/new", testid="new-transfer") }}
+        {% endif %}
+        <a class="uc-btn uc-btn--ghost"
+           href="/admin/transfers?format=csv&show={{ show }}"
+           data-testid="transfers-csv-link">Download CSV</a>
+    {% endcall %}
+
+    <nav class="uc-tabs" data-testid="transfers-tabs">
+        <a href="/admin/transfers?show=all"
+           class="{% if show == 'all' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-all">All</a>
+        <a href="/admin/transfers?show=open"
+           class="{% if show == 'open' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-open">Open</a>
+        <a href="/admin/transfers?show=draft"
+           class="{% if show == 'draft' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-draft">Draft</a>
+        <a href="/admin/transfers?show=shipped"
+           class="{% if show == 'shipped' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-shipped">Shipped</a>
+        <a href="/admin/transfers?show=received"
+           class="{% if show == 'received' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-received">Received</a>
+        <a href="/admin/transfers?show=cancelled"
+           class="{% if show == 'cancelled' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="transfers-tab-cancelled">Cancelled</a>
+    </nav>
+
+    {% if transfers %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="transfers-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Source</th>
+                        <th>Destination</th>
+                        <th>Status</th>
+                        <th>Shipped</th>
+                        <th>Received</th>
+                        <th>Lines</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in transfers %}
+                        <tr data-testid="transfer-row" data-transfer-id="{{ t.id }}">
+                            <td class="uc-num">#{{ t.id }}</td>
+                            <td>{{ locations.get(t.source_location_id).name if locations.get(t.source_location_id) else "—" }}</td>
+                            <td>{{ locations.get(t.destination_location_id).name if locations.get(t.destination_location_id) else "—" }}</td>
+                            <td data-testid="transfer-status">{{ c.pill(t.status.value) }}</td>
+                            <td>{% if t.shipped_at %}{{ t.shipped_at.strftime("%Y-%m-%d") }}{% else %}—{% endif %}</td>
+                            <td>{% if t.received_at %}{{ t.received_at.strftime("%Y-%m-%d") }}{% else %}—{% endif %}</td>
+                            <td class="uc-num">{{ line_counts.get(t.id, 0) }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/transfers/{{ t.id }}" data-testid="open-transfer">Detail</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p data-testid="transfers-empty" class="uc-muted">No transfer orders for this filter.</p>
+    {% endif %}
+{% endblock %}
