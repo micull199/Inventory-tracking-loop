@@ -939,6 +939,79 @@ def send_purchase_order(
 
 
 # ---------------------------------------------------------------------------
+# Slice 3 — Mark a sent PO as shipped by the supplier (in-transit visibility)
+# ---------------------------------------------------------------------------
+
+
+@list_router.post("/{po_id}/mark-shipped")
+def mark_purchase_order_shipped(
+    request: Request,
+    po_id: int,
+    expected_date: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Flip a ``SENT`` PO to ``IN_TRANSIT`` once the supplier confirms dispatch.
+
+    Optional ``expected_date`` form field overrides the existing
+    ``po.expected_date`` so the dashboard widget can show an accurate ETA.
+
+    Receive remains available from either ``SENT`` or ``IN_TRANSIT`` — marking
+    as shipped is purely a visibility improvement, never a gate.
+    """
+    po = db.get(PurchaseOrder, po_id)
+    if po is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="PO not found")
+    if po.status != POStatus.SENT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"only SENT POs can be marked shipped (current: {po.status.value})",
+        )
+
+    raw_expected = (expected_date or "").strip()
+    new_expected: date | None
+    if raw_expected:
+        try:
+            new_expected = date.fromisoformat(raw_expected)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="expected_date must be an ISO date (YYYY-MM-DD)",
+            ) from exc
+    else:
+        new_expected = po.expected_date
+
+    shipped_at = datetime.now(UTC)
+    before_expected = po.expected_date
+    po.status = POStatus.IN_TRANSIT
+    po.shipped_at = shipped_at
+    po.expected_date = new_expected
+
+    after: dict[str, Any] = {
+        "status": POStatus.IN_TRANSIT.value,
+        "shipped_at": shipped_at.isoformat(),
+    }
+    if new_expected != before_expected:
+        after["expected_date"] = new_expected
+    record_audit(
+        db,
+        actor=user,
+        action="purchase_order.shipped",
+        entity_type="purchase_order",
+        entity_id=po.id,
+        before={"status": POStatus.SENT.value, "expected_date": before_expected},
+        after=after,
+    )
+    db.commit()
+
+    _flash(request, f"PO #{po.id} marked as shipped.")
+    return RedirectResponse(
+        url=f"/admin/purchase-orders/{po.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
 # PO5 — Receive against a PO (sent / partially_received → partially_received
 # / received)
 # ---------------------------------------------------------------------------
@@ -1003,6 +1076,7 @@ def _parse_optional_non_negative_decimal_or_zero(raw: str, *, field_name: str) -
 
 _RECEIVABLE_STATUSES: tuple[POStatus, ...] = (
     POStatus.SENT,
+    POStatus.IN_TRANSIT,
     POStatus.PARTIALLY_RECEIVED,
 )
 
@@ -1013,8 +1087,8 @@ def _require_receivable(po: PurchaseOrder) -> None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"PO is {po.status.value}; only sent or partially-received "
-                "POs can be received against"
+                f"PO is {po.status.value}; only sent, in_transit, or "
+                "partially-received POs can be received against"
             ),
         )
 

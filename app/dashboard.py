@@ -55,7 +55,6 @@ from sqlalchemy.orm import Session
 from app.auth import require_role
 from app.checkouts_admin import overdue_count as _overdue_count
 from app.db import get_session
-from app.transfers import open_in_transit_summary as _open_in_transit_summary
 from app.models import (
     CostLayer,
     CostLayerConsumption,
@@ -68,6 +67,7 @@ from app.models import (
     User,
 )
 from app.template_env import templates
+from app.transfers import open_in_transit_summary as _open_in_transit_summary
 
 router = APIRouter(prefix="/admin/dashboard", tags=["dashboard"])
 
@@ -84,6 +84,7 @@ _DEFAULT_COGS_DAYS = 30
 _OPEN_PO_STATUSES = (
     POStatus.DRAFT,
     POStatus.SENT,
+    POStatus.IN_TRANSIT,
     POStatus.PARTIALLY_RECEIVED,
 )
 
@@ -169,9 +170,30 @@ def _low_stock_count(db: Session) -> int:
 
 
 def _open_pos_count(db: Session) -> int:
-    """Count POs with status in (draft, sent, partially_received)."""
+    """Count POs with status in (draft, sent, in_transit, partially_received)."""
     stmt = select(func.count(PurchaseOrder.id)).where(PurchaseOrder.status.in_(_OPEN_PO_STATUSES))
     return int(db.execute(stmt).scalar_one())
+
+
+def _in_transit_pos(db: Session) -> dict[str, Any]:
+    """Stats for the in-transit PO dashboard widget.
+
+    Returns ``{count, earliest_expected}``. ``earliest_expected`` is the
+    soonest ``expected_date`` across IN_TRANSIT POs (None if no expected
+    dates are set, or no PO is in transit).
+    """
+    count = (
+        db.execute(
+            select(func.count(PurchaseOrder.id))
+            .where(PurchaseOrder.status == POStatus.IN_TRANSIT)
+        ).scalar()
+        or 0
+    )
+    earliest = db.execute(
+        select(func.min(PurchaseOrder.expected_date))
+        .where(PurchaseOrder.status == POStatus.IN_TRANSIT)
+    ).scalar()
+    return {"count": int(count), "earliest_expected": earliest}
 
 
 def _top_consumed(db: Session, *, days: int) -> list[dict[str, Any]]:
@@ -261,6 +283,7 @@ def dashboard(
             "open_pos_count": _open_pos_count(db),
             "overdue_checkouts": _overdue_count(db),
             "in_transit": _open_in_transit_summary(db),
+            "in_transit_pos": _in_transit_pos(db),
             "top_consumed": _top_consumed(db, days=top_days),
             "top_days": top_days,
             "cogs_amount": _cogs(db, start=cogs_start, end=cogs_end),

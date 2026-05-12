@@ -179,6 +179,33 @@
                 This PO is {{ po.status.value.replace("_", " ") }}; it cannot be edited.
             </div>
 
+            {% if po.status.value == "sent" %}
+                <div data-testid="po-mark-shipped-block" class="uc-mb-4">
+                    <form method="post"
+                          action="/admin/purchase-orders/{{ po.id }}/mark-shipped"
+                          data-testid="po-mark-shipped-form"
+                          style="display:inline;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="date" name="expected_date"
+                               value="{% if po.expected_date %}{{ po.expected_date.isoformat() }}{% endif %}"
+                               data-testid="po-mark-shipped-expected-date-input">
+                        <button class="uc-btn uc-btn--secondary" type="submit"
+                                data-testid="po-mark-shipped-submit">
+                            Mark as shipped
+                        </button>
+                    </form>
+                    <small class="uc-helper">
+                        Records supplier dispatch so the dashboard shows what's in transit.
+                    </small>
+                </div>
+            {% endif %}
+
+            {% if po.shipped_at %}
+                <p class="uc-muted" data-testid="po-shipped-at">
+                    Supplier marked shipped on {{ po.shipped_at.strftime("%Y-%m-%d %H:%M %Z") }}.
+                </p>
+            {% endif %}
+
             {% if is_receivable %}
                 <div data-testid="po-receive-link-block">
                     <a class="uc-btn uc-btn--primary"

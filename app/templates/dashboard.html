@@ -51,7 +51,20 @@
             empty_text="No transfers in transit.",
             testid="dashboard-in-transit"
         ) }}
+        {{ c.stat_card(
+            "In-transit POs",
+            in_transit_pos.count,
+            foot_label="View POs",
+            foot_url="/admin/purchase-orders?status=in_transit",
+            empty_text="No POs in transit.",
+            testid="dashboard-in-transit-pos"
+        ) }}
     </div>
+    {% if in_transit_pos.count and in_transit_pos.earliest_expected %}
+        <p class="uc-muted" data-testid="dashboard-in-transit-pos-eta">
+            Earliest expected arrival: {{ in_transit_pos.earliest_expected.isoformat() }}.
+        </p>
+    {% endif %}
 
     {# ---- Top consumed ---- #}
     <section class="uc-card uc-mb-6" aria-labelledby="top-consumed-heading">

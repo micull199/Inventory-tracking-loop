@@ -1145,6 +1145,11 @@ class POStatus(enum.StrEnum):
 
     ``draft``              — created from the reorder dashboard; editable.
     ``sent``               — emailed to the supplier (PO4); locked from edits.
+    ``in_transit``         — supplier confirmed dispatch (Slice 3 of the
+                             in-transit scope addition). Manager marks this
+                             after the supplier confirms shipment. The receive
+                             route accepts both ``sent`` and ``in_transit`` so
+                             marking-as-shipped is optional.
     ``partially_received`` — at least one line received but more is expected.
     ``received``           — every line fully received.
     ``cancelled``          — abandoned without receiving.
@@ -1155,6 +1160,7 @@ class POStatus(enum.StrEnum):
 
     DRAFT = "draft"
     SENT = "sent"
+    IN_TRANSIT = "in_transit"
     PARTIALLY_RECEIVED = "partially_received"
     RECEIVED = "received"
     CANCELLED = "cancelled"
@@ -1204,6 +1210,9 @@ class PurchaseOrder(Base):
     )
     expected_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the supplier confirms dispatch (Slice 3 of in-transit scope
+    # addition). Optional — receive can fire from ``sent`` or ``in_transit``.
+    shipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         Integer,

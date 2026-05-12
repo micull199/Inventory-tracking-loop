@@ -201,6 +201,7 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/purchase-orders/99999/cancel", OFFICE),
     ("GET", "/admin/purchase-orders/99999/pdf", OFFICE),
     ("POST", "/admin/purchase-orders/99999/send", OFFICE),
+    ("POST", "/admin/purchase-orders/99999/mark-shipped", OFFICE),
     ("GET", "/admin/purchase-orders/99999/receive", OFFICE),
     ("POST", "/admin/purchase-orders/99999/receive", OFFICE),
     # --- Manager + Office: stock takes ---
