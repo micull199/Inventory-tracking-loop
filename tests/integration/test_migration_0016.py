@@ -276,8 +276,10 @@ class TestSeededUpgrade:
 class TestDowngrade:
     def test_downgrade_removes_new_columns(self, db_path: Path) -> None:
         cfg = _make_alembic_config(db_path)
-        command.upgrade(cfg, "head")
-        # Downgrade one revision.
+        # Upgrade only to 0016 so a downgrade-by-one returns to 0015.
+        # ``head`` now includes 0017 (field_visibility_json) and downgrading
+        # that revision would leave 0016's columns intact.
+        command.upgrade(cfg, "0016_taxonomy_archetype_and_prefix")
         command.downgrade(cfg, "-1")
 
         engine = sa.create_engine(f"sqlite:///{db_path}")

@@ -660,10 +660,9 @@ def list_taxonomy(
     ) is not None:
         return resp
 
-    # A top-level node is a leaf (and therefore eligible to own field defs) iff
-    # it has no active children. The template uses this to decide whether the
-    # per-row "Fields" link renders or a "manage on sub-cats instead" hint
-    # appears. Computed here so the template stays logic-light.
+    # A top-level node is a leaf (and therefore eligible to own field defs)
+    # iff it has no active children. Computed here so the template can show a
+    # per-row "Fields" link only on leaves.
     leaf_ids: set[int] = set()
     if rows:
         active_parent_ids = set(
@@ -676,6 +675,7 @@ def list_taxonomy(
             .all()
         )
         leaf_ids = {n.id for n in rows if n.id not in active_parent_ids}
+
     return templates.TemplateResponse(
         request,
         "taxonomy_list.html",
@@ -1078,6 +1078,21 @@ def list_sub_categories(
     ) is not None:
         return resp
 
+    # A depth-1 sub-category is a leaf if it has no active grandchildren.
+    # Used by the template to show a per-row "Fields" link only on leaves.
+    leaf_ids: set[int] = set()
+    if rows:
+        active_grandparent_ids = set(
+            db.execute(
+                select(TaxonomyNode.parent_id)
+                .where(TaxonomyNode.parent_id.in_([n.id for n in rows]))
+                .where(TaxonomyNode.archived_at.is_(None))
+            )
+            .scalars()
+            .all()
+        )
+        leaf_ids = {n.id for n in rows if n.id not in active_grandparent_ids}
+
     return templates.TemplateResponse(
         request,
         "taxonomy_children_list.html",
@@ -1086,9 +1101,8 @@ def list_sub_categories(
             "parent": parent,
             "nodes": rows,
             "show": show,
-            "inherited_archetype": (
-                ea.value if (ea := effective_archetype(db, parent)) else None
-            ),
+            "leaf_ids": leaf_ids,
+            "inherited_archetype": (ea.value if (ea := effective_archetype(db, parent)) else None),
         },
     )
 

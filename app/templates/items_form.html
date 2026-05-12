@@ -21,71 +21,31 @@
         <form method="post" action="{{ action }}" data-testid="item-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            {# ---- Identity: SKU, Name, Category ---- #}
+            {# ---- Category picker (top, gates the rest of the form) ----
+
+               On create the user must pick a category before the other field
+               sections render. Picking a category fires the HTMX trigger on
+               ``#taxonomy_node_id`` which fetches the post-category fragment
+               (``items_form_fields.html``) and swaps it into
+               ``#item-fields-after-category``. The picker JS in
+               ``app/static/js/category-picker.js`` drives the visible combobox
+               and dispatches ``change`` on the hidden input when a result is
+               picked so the HTMX request fires.
+
+               On edit the category is already known; the fragment renders
+               server-side immediately below. #}
             <section class="uc-section">
-                <h2 class="uc-section-title">Identity</h2>
-
-                {% if item %}
-                    {# SKU is immutable post-create. Humans + audit trails key on it,
-                       so don't let it drift. Show as read-only on edit; submit a
-                       hidden field so the POST handler sees the same value. #}
-                    <div class="uc-field">
-                        <span class="uc-label">SKU</span>
-                        <div class="uc-num uc-strong" data-testid="item-sku-readonly">{{ form.sku }}</div>
-                    </div>
-                    <input type="hidden" name="sku" value="{{ form.sku }}">
-                {% else %}
-                    {# Create: SKU is optional. Blank → server auto-generates from the
-                       leaf's name prefix (e.g. "Wax Injection Moulds" → WAX-0001).
-                       Visible input lets a power-user override with their own scheme. #}
-                    <div class="uc-field">
-                        <label class="uc-label" for="sku">SKU</label>
-                        <input class="uc-input" type="text" id="sku" name="sku"
-                               value="{{ form.sku }}"
-                               data-testid="item-sku-input"
-                               maxlength="64"
-                               placeholder="Leave blank to auto-generate">
-                        <small class="uc-helper">Optional. Leave blank to auto-generate from the category prefix.</small>
-                    </div>
-                {% endif %}
-
-                <div class="uc-field">
-                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
-                    <input class="uc-input" type="text" id="name" name="name" required
-                           value="{{ form.name }}"
-                           data-testid="item-name-input"
-                           maxlength="255"
-                           {% if ro %}disabled{% endif %}>
-                </div>
-
-                {# Searchable, leaf-only category picker (taxonomy refinement, Agent 4).
-
-                   The hidden ``#taxonomy_node_id`` carries the actual id submitted with
-                   the form. The visible ``#taxonomy_node_search`` is a vanilla combobox
-                   driven by ``app/static/js/category-picker.js`` plus an HTMX-fed
-                   ``#taxonomy_node_results`` list. Selecting an option sets the hidden
-                   field's value and dispatches ``change``, which kicks off the existing
-                   ``_custom-fields`` HTMX chain (custom field schema + OOB-swap of
-                   per-leaf core defaults on create).
-
-                   ``data-current-breadcrumb`` is initialised from
-                   ``form_taxonomy_breadcrumb`` (route-side helper that resolves the
-                   currently-selected node's breadcrumb on edit / re-render) so the
-                   visible input shows the chosen breadcrumb on initial render. #}
+                <h2 class="uc-section-title">Category</h2>
                 <div class="uc-field" data-testid="item-category-picker">
                     <label class="uc-label" for="taxonomy_node_search">Category <span class="uc-required" aria-hidden="true">*</span></label>
                     <input type="hidden" name="taxonomy_node_id" id="taxonomy_node_id"
                            value="{{ form.taxonomy_node_id }}"
                            data-testid="item-category-hidden"
                            data-current-breadcrumb="{{ form_taxonomy_breadcrumb|default('') }}"
-                           {# Use the existing _custom-fields fragment endpoint as the
-                              picker's "on change" trigger so picking a category swaps
-                              custom-field inputs AND (on create) returns an OOB swap of
-                              core defaults + a ``#sku-preview`` next-SKU caption. #}
                            hx-get="/admin/items/_custom-fields"
                            hx-trigger="change"
-                           hx-target="#cf-container"
-                           hx-swap="innerHTML"
+                           hx-target="#item-fields-after-category"
+                           hx-swap="outerHTML"
                            {% if not item %}hx-vals='{"include_defaults": "1"}'{% endif %}>
                     <input type="text" id="taxonomy_node_search"
                            class="uc-input uc-picker-input"
@@ -98,10 +58,6 @@
                            aria-controls="taxonomy_node_results"
                            value="{{ form_taxonomy_breadcrumb|default('') }}"
                            data-testid="item-category-input"
-                           {# HTMX wires the search input directly to the partial route.
-                              The picker JS layers on click / keyboard nav / hide-on-pick
-                              behaviour around this; the search itself is HTMX-only so
-                              there's no debounced fetch logic to maintain in JS. #}
                            hx-get="/admin/items/_category-search"
                            hx-trigger="input changed delay:120ms, focus"
                            hx-target="#taxonomy_node_results"
@@ -116,138 +72,11 @@
                 </div>
             </section>
 
-            {# ---- Stock behaviour: Unit, Tracking mode, Requires checkout ---- #}
-            <section class="uc-section">
-                <h2 class="uc-section-title">Stock behaviour</h2>
-
-                <div class="uc-field">
-                    <label class="uc-label" for="unit">Unit <span class="uc-required" aria-hidden="true">*</span></label>
-                    <input class="uc-input" type="text" id="unit" name="unit" required
-                           value="{{ form.unit }}"
-                           data-testid="item-unit-input"
-                           maxlength="32"
-                           placeholder="e.g. g, ml, ea"
-                           {% if ro %}disabled{% endif %}>
-                </div>
-
-                <div class="uc-field">
-                    <label class="uc-label" for="tracking_mode">Tracking mode</label>
-                    <select class="uc-select" id="tracking_mode" name="tracking_mode"
-                            data-testid="item-tracking-mode-input"
-                            {% if ro %}disabled{% endif %}>
-                        {% for m in tracking_modes %}
-                            <option value="{{ m }}"
-                                    {% if form.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="uc-field">
-                    <label class="uc-check">
-                        <input type="checkbox" id="requires_checkout" name="requires_checkout" value="true"
-                               data-testid="item-requires-checkout-input"
-                               {% if form.requires_checkout %}checked{% endif %}
-                               {% if ro %}disabled{% endif %}>
-                        Requires check-out (tools, moulds)
-                    </label>
-                    <small class="uc-helper" data-testid="item-requires-checkout-help">
-                        Track who has the item out and when it's due back.
-                    </small>
-                </div>
-            </section>
-
-            {# ---- Reorder: threshold + qty ---- #}
-            <section class="uc-section">
-                <h2 class="uc-section-title">Reorder</h2>
-
-                {% if can_edit_thresholds %}
-                    <div class="uc-grid-2">
-                        <div class="uc-field">
-                            <label class="uc-label" for="reorder_threshold">Reorder threshold</label>
-                            <input class="uc-input" type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
-                                   value="{{ form.reorder_threshold }}"
-                                   data-testid="item-reorder-threshold-input"
-                                   {% if ro %}disabled{% endif %}>
-                        </div>
-
-                        <div class="uc-field">
-                            <label class="uc-label" for="reorder_qty">Reorder quantity</label>
-                            <input class="uc-input" type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
-                                   value="{{ form.reorder_qty }}"
-                                   data-testid="item-reorder-qty-input"
-                                   {% if ro %}disabled{% endif %}>
-                        </div>
-                    </div>
-                {% else %}
-                    <div class="uc-grid-2">
-                        <div class="uc-field">
-                            <span class="uc-label">Reorder threshold</span>
-                            <div class="uc-num">
-                                <span data-testid="item-reorder-threshold-readonly">{{ form.reorder_threshold }}</span>
-                                <small class="uc-helper">Manager-only</small>
-                            </div>
-                        </div>
-                        <div class="uc-field">
-                            <span class="uc-label">Reorder quantity</span>
-                            <div class="uc-num">
-                                <span data-testid="item-reorder-qty-readonly">{{ form.reorder_qty }}</span>
-                                <small class="uc-helper">Manager-only</small>
-                            </div>
-                        </div>
-                    </div>
-                {% endif %}
-            </section>
-
-            {# ---- References: Supplier, Location, QR code ---- #}
-            <section class="uc-section">
-                <h2 class="uc-section-title">References</h2>
-
-                <div class="uc-grid-2">
-                    <div class="uc-field">
-                        <label class="uc-label" for="supplier_id">Supplier</label>
-                        <select class="uc-select" id="supplier_id" name="supplier_id" data-testid="item-supplier-input"
-                                {% if ro %}disabled{% endif %}>
-                            <option value="">— none —</option>
-                            {% for s in supplier_options %}
-                                <option value="{{ s.id }}"
-                                        {% if form.supplier_id == (s.id | string) %}selected{% endif %}>
-                                    {{ s.label }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-
-                    <div class="uc-field">
-                        <label class="uc-label" for="location_id">Location</label>
-                        <select class="uc-select" id="location_id" name="location_id" data-testid="item-location-input"
-                                {% if ro %}disabled{% endif %}>
-                            <option value="">— none —</option>
-                            {% for l in location_options %}
-                                <option value="{{ l.id }}"
-                                        {% if form.location_id == (l.id | string) %}selected{% endif %}>
-                                    {{ l.label }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                </div>
-
-                <div class="uc-field">
-                    <label class="uc-label" for="qr_code">QR code</label>
-                    <input class="uc-input" type="text" id="qr_code" name="qr_code"
-                           value="{{ form.qr_code }}"
-                           data-testid="item-qr-input"
-                           maxlength="128"
-                           {% if ro %}disabled{% endif %}>
-                </div>
-            </section>
-
-            {# Custom-field block. The wrapper div is always present so HTMX can
-               target #cf-container on subsequent category changes; the partial
-               renders empty when there are no field defs for the picked leaf. #}
-            <div id="cf-container">
-                {% include "items_form_custom_fields.html" %}
-            </div>
+            {# Post-category content. Always wrapped in
+               ``#item-fields-after-category`` (the HTMX swap target). Empty
+               on create with no category; populated on edit / pre-selected
+               create. #}
+            {% include "items_form_fields.html" %}
 
             {% if item %}
                 <section class="uc-section">

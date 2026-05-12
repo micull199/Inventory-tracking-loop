@@ -28,6 +28,57 @@
         </p>
     {% endif %}
 
+    {% if is_leaf and not node.archived_at and built_in_fields %}
+        {% call c.card() %}
+            <h3 class="uc-section-title" data-testid="built-in-fields-heading">Built-in fields</h3>
+            <p class="uc-helper uc-mb-4">
+                Choose which of the standard item fields appear on the Add Item form for this category.
+                Hidden fields are auto-filled on submit (name → SKU; unit → default).
+            </p>
+            <form method="post"
+                  action="/admin/taxonomy/{{ node.id }}/fields/visibility"
+                  data-testid="built-in-fields-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="uc-table-wrap">
+                    <table class="uc-table" data-testid="built-in-fields-table">
+                        <thead>
+                            <tr>
+                                <th>Field</th>
+                                <th>Visibility</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for f in built_in_fields %}
+                                <tr data-testid="built-in-field-row" data-field="{{ f }}">
+                                    <td data-testid="built-in-field-name">{{ f.replace("_", " ").capitalize() }}</td>
+                                    <td>
+                                        <select class="uc-select"
+                                                name="visibility_{{ f }}"
+                                                data-testid="visibility-{{ f }}">
+                                            {% for s in visibility_states %}
+                                                <option value="{{ s }}"
+                                                        {% if field_visibility[f] == s %}selected{% endif %}>
+                                                    {{ s.capitalize() }}
+                                                </option>
+                                            {% endfor %}
+                                        </select>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% call c.form_actions() %}
+                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="built-in-fields-submit">
+                        Save visibility
+                    </button>
+                {% endcall %}
+            </form>
+        {% endcall %}
+    {% endif %}
+
+    <h3 class="uc-section-title">Custom fields</h3>
+
     <nav class="uc-tabs" aria-label="Filter fields" data-testid="field-defs-tabs">
         <a href="/admin/taxonomy/{{ node.id }}/fields?show=active"
            data-testid="field-defs-tab-active"

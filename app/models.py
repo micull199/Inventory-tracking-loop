@@ -314,6 +314,14 @@ class TaxonomyNode(Base):
     # mean "no default" — the form input renders blank. See
     # ``app.taxonomy._coerce_defaults`` for the write-time validator.
     defaults_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Per-leaf visibility for built-in item-form fields. Validated dict (or
+    # None). Keys mirror the items form's field names (``name``, ``unit``,
+    # ``tracking_mode``, ``requires_checkout``, ``reorder_threshold``,
+    # ``reorder_qty``, ``supplier_id``, ``location_id``, ``qr_code``). Values
+    # are one of ``"required" | "optional" | "hidden"``. Absent / null
+    # column means "use defaults" — see
+    # ``app.taxonomy.effective_field_visibility``.
+    field_visibility_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

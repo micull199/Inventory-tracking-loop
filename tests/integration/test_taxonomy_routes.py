@@ -2872,9 +2872,7 @@ class TestGrandchildrenListTemplate:
 
     def test_renders_for_bulk_tree(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        top = TaxonomyNode(
-            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
-        )
+        top = TaxonomyNode(name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)
@@ -2899,9 +2897,7 @@ class TestGrandchildrenListTemplate:
         # Back link to the children list.
         assert f"/admin/taxonomy/{top.id}/children" in resp.text
 
-    def test_renders_add_button_for_bulk(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_renders_add_button_for_bulk(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         top = TaxonomyNode(name="Raw", archetype=Archetype.BULK, sku_prefix="RAW")
         db_session.add(top)
@@ -2922,9 +2918,7 @@ class TestGrandchildrenListTemplate:
         item creation; manual creates are blocked. The template shows a
         note instead of the "Add" button."""
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        top = TaxonomyNode(
-            name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS"
-        )
+        top = TaxonomyNode(name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)
@@ -2958,13 +2952,9 @@ class TestGrandchildrenFormTemplate:
     re-uses ``taxonomy_form.html`` with depth=2.
     """
 
-    def test_form_shows_archetype_inherited(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_form_shows_archetype_inherited(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        top = TaxonomyNode(
-            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
-        )
+        top = TaxonomyNode(name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)
@@ -2973,9 +2963,7 @@ class TestGrandchildrenFormTemplate:
         db_session.commit()
         db_session.refresh(sub)
         _login_as(client, mgr)
-        resp = client.get(
-            f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren/new"
-        )
+        resp = client.get(f"/admin/taxonomy/{top.id}/sub/{sub.id}/grandchildren/new")
         assert resp.status_code == 200
         # The shared template renders the inherited archetype block at
         # depth > 0 instead of the archetype <select>.
@@ -3038,9 +3026,7 @@ class TestTaxonomyFormDepthRendering:
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        top = TaxonomyNode(
-            name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS"
-        )
+        top = TaxonomyNode(name="RTS Rings", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)
@@ -3089,9 +3075,7 @@ class TestSubCategoryListColumns:
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        top = TaxonomyNode(
-            name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW"
-        )
+        top = TaxonomyNode(name="Raw Materials", archetype=Archetype.BULK, sku_prefix="RAW")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)

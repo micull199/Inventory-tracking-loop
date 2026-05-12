@@ -45,9 +45,7 @@ def pick_item_category(page: object, label: str) -> None:
     search = page.get_by_test_id("item-category-input")
     search.click()
     search.fill(label)
-    option = page.locator(
-        f'[data-testid="item-category-option"][data-breadcrumb="{label}"]'
-    ).first
+    option = page.locator(f'[data-testid="item-category-option"][data-breadcrumb="{label}"]').first
     expect(option).to_be_visible()
     option.click()
 

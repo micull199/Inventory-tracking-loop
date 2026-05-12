@@ -547,12 +547,17 @@ class TestItemList:
 class TestItemCreate:
     def test_get_new_form_renders(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _make_leaf(db_session, "Raw Materials")
+        leaf = _make_leaf(db_session, "Raw Materials")
         _login_as(client, mgr)
+        # With no category picked, only the picker shows + a prompt to pick.
         resp = client.get("/admin/items/new")
         assert resp.status_code == 200
-        # SKU input is present on create but optional — form auto-generates
-        # when blank, power users can override with their own scheme.
+        assert 'data-testid="item-category-picker"' in resp.text
+        assert 'data-testid="item-pick-category-prompt"' in resp.text
+        assert 'data-testid="item-sku-input"' not in resp.text
+        # Pre-selecting a category via ?node_id= renders the full form.
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
         assert 'data-testid="item-sku-input"' in resp.text
         assert "auto-generate" in resp.text
         # Notes was removed entirely.
@@ -2983,9 +2988,12 @@ class TestRequiresCheckoutFlag:
 
     def test_form_renders_help_note(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _make_leaf(db_session)
+        leaf = _make_leaf(db_session)
         _login_as(client, mgr)
-        resp = client.get("/admin/items/new")
+        # Built-in fields render after a category is picked; pre-select via
+        # ``?node_id=`` so the requires-checkout help note is part of the
+        # initial server render.
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
         assert resp.status_code == 200
         assert 'data-testid="item-requires-checkout-help"' in resp.text
 
@@ -3517,9 +3525,10 @@ class TestItemFormHtmxWiring:
         assert resp.status_code == 200
         assert 'hx-get="/admin/items/_custom-fields"' in resp.text
         assert 'hx-trigger="change"' in resp.text
-        assert 'hx-target="#cf-container"' in resp.text
-        # Wrapper div is always present, even when there are no fields.
-        assert 'id="cf-container"' in resp.text
+        # HTMX target is the wrapper for the post-category fragment.
+        assert 'hx-target="#item-fields-after-category"' in resp.text
+        # Wrapper div is always present, even before a category is picked.
+        assert 'id="item-fields-after-category"' in resp.text
 
     def test_edit_form_category_select_has_htmx_get(
         self, client: TestClient, db_session: Session
@@ -3531,7 +3540,8 @@ class TestItemFormHtmxWiring:
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert resp.status_code == 200
         assert 'hx-get="/admin/items/_custom-fields"' in resp.text
-        assert 'id="cf-container"' in resp.text
+        # Edit form's HTMX target is also the post-category fragment wrapper.
+        assert 'id="item-fields-after-category"' in resp.text
 
 
 class TestSkuAutoGeneration:
@@ -3683,11 +3693,19 @@ class TestItemsFragmentDefaults:
             f"/admin/items/_custom-fields?taxonomy_node_id={leaf.id}&include_defaults=1"
         )
         assert resp.status_code == 200
-        # ``unit`` does swap, ``tracking_mode`` doesn't (would erase user input).
+        # Under the post-category-fragment design, all default-visible fields
+        # render in the response. The configured ``unit`` default is baked
+        # into the input value; unset keys (tracking_mode, supplier, etc.)
+        # render with the form's blank initial state — not erased mid-typing
+        # via an OOB swap.
         assert 'id="unit"' in resp.text
-        assert 'id="tracking_mode"' not in resp.text
-        assert 'id="reorder_threshold"' not in resp.text
-        assert 'id="supplier_id"' not in resp.text
+        assert 'value="g"' in resp.text
+        # tracking_mode + supplier + location all render (default-visible),
+        # but with no leaf default applied. The fragment no longer uses
+        # OOB-swap markup for built-in fields.
+        assert 'id="tracking_mode"' in resp.text
+        assert 'id="supplier_id"' in resp.text
+        assert "hx-swap-oob" in resp.text  # only for sku-preview now
 
     def test_fragment_without_include_defaults_emits_no_oob(
         self, client: TestClient, db_session: Session
@@ -4136,9 +4154,7 @@ class TestCategorySearchFragment:
         assert f'data-id="{leaf.id}"' in resp.text
         assert 'data-breadcrumb="Raw Materials"' in resp.text
 
-    def test_filters_by_breadcrumb_substring(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_filters_by_breadcrumb_substring(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         # Two top-level bulk leaves with very different breadcrumbs so a
         # substring match is unambiguous.
@@ -4173,9 +4189,7 @@ class TestCategorySearchFragment:
         count = resp.text.count('data-testid="item-category-option"')
         assert count == 20
 
-    def test_empty_match_renders_empty_state(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_empty_match_renders_empty_state(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _make_leaf(db_session, "Raw Materials")
         _login_as(client, mgr)
@@ -4233,9 +4247,7 @@ class TestSkuPreviewOnCustomFieldsFragment:
         assert 'hx-swap-oob="true"' in resp.text
         assert "Next SKU: TOOL-0008" in resp.text
 
-    def test_preview_for_unique_archetype(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_preview_for_unique_archetype(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = TaxonomyNode(
             name="Commissioned",
@@ -4253,17 +4265,13 @@ class TestSkuPreviewOnCustomFieldsFragment:
         assert resp.status_code == 200
         assert "Next SKU: COMM-0003" in resp.text
 
-    def test_preview_for_unique_variant(
-        self, client: TestClient, db_session: Session
-    ) -> None:
+    def test_preview_for_unique_variant(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         top = TaxonomyNode(name="RTS", archetype=Archetype.UNIQUE_VARIANT, sku_prefix="RTS")
         db_session.add(top)
         db_session.commit()
         db_session.refresh(top)
-        sub = TaxonomyNode(
-            name="Emma", parent_id=top.id, sku_prefix="EM", next_sequence=7
-        )
+        sub = TaxonomyNode(name="Emma", parent_id=top.id, sku_prefix="EM", next_sequence=7)
         db_session.add(sub)
         db_session.commit()
         db_session.refresh(sub)
@@ -4314,3 +4322,298 @@ class TestSkuPreviewOnCustomFieldsFragment:
         # OOB element still present (so a prior caption clears) but empty.
         assert 'id="sku-preview"' in resp.text
         assert "Next SKU:" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Built-in field visibility (per leaf)
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltInFieldVisibility:
+    """A Manager can mark built-in item-form fields as required, optional, or
+    hidden on a taxonomy leaf via the Fields admin page. Hidden fields are
+    auto-filled on submit (name → SKU; unit → leaf default or "ea"); optional
+    fields skip the required-string validation; required is the default and
+    preserves current behaviour."""
+
+    def test_hidden_name_falls_back_to_sku_on_create(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        leaf.field_visibility_json = {"name": "hidden"}
+        leaf.defaults_json = {"unit": "ea"}
+        db_session.add(leaf)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                name="ignored on hidden",
+                taxonomy_node_id=leaf.id,
+                unit="g",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, resp.text
+        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
+        # ``name`` got auto-filled with the allocated SKU; the user-typed
+        # value was ignored because the field is hidden.
+        assert item.name == item.sku
+        assert item.name != "ignored on hidden"
+
+    def test_hidden_unit_falls_back_to_leaf_default(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        leaf.field_visibility_json = {"unit": "hidden"}
+        leaf.defaults_json = {"unit": "ea"}
+        db_session.add(leaf)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                name="Ruby band",
+                taxonomy_node_id=leaf.id,
+                unit="g",  # ignored, hidden
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, resp.text
+        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
+        assert item.unit == "ea"
+
+    def test_hidden_unit_with_no_default_falls_back_to_ea(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        leaf.field_visibility_json = {"unit": "hidden"}
+        # No defaults_json — server uses the "ea" fallback.
+        db_session.add(leaf)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                name="Plain band",
+                taxonomy_node_id=leaf.id,
+                unit="",  # hidden, blank
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, resp.text
+        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
+        assert item.unit == "ea"
+
+    def test_optional_name_blank_falls_back_to_sku(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        leaf.field_visibility_json = {"name": "optional"}
+        db_session.add(leaf)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                name="",  # blank, optional → falls back to SKU
+                taxonomy_node_id=leaf.id,
+                unit="g",
+                csrf=_csrf(client),
+            ),
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, resp.text
+        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
+        assert item.name == item.sku
+
+    def test_required_name_blank_still_400s(self, client: TestClient, db_session: Session) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        # No visibility column → defaults apply (name=required).
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            "/admin/items",
+            data=_create_payload(
+                name="",
+                taxonomy_node_id=leaf.id,
+                unit="g",
+                csrf=_csrf(client),
+            ),
+        )
+        assert resp.status_code == 400, resp.text
+        assert "name is required" in resp.text
+
+    def test_visibility_save_route_persists_dict(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/taxonomy/{leaf.id}/fields/visibility",
+            data={
+                "csrf_token": _csrf(client),
+                "visibility_name": "hidden",
+                "visibility_unit": "optional",
+                "visibility_supplier_id": "hidden",
+                # Other fields omitted → fall back to defaults.
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db_session.refresh(leaf)
+        stored = leaf.field_visibility_json or {}
+        assert stored["name"] == "hidden"
+        assert stored["unit"] == "optional"
+        assert stored["supplier_id"] == "hidden"
+        # An omitted entry collapses to the default.
+        assert stored["tracking_mode"] == "optional"
+        assert stored["reorder_threshold"] == "optional"
+
+    def test_form_render_hides_section_when_all_fields_hidden(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session, name="Rings")
+        leaf.field_visibility_json = {
+            "reorder_threshold": "hidden",
+            "reorder_qty": "hidden",
+            "supplier_id": "hidden",
+            "location_id": "hidden",
+            "qr_code": "hidden",
+        }
+        db_session.add(leaf)
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        # Whole Reorder + References sections are gone.
+        assert "Reorder threshold" not in resp.text
+        assert "QR code" not in resp.text
+        # Stock behaviour still present (default).
+        assert "Stock behaviour" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Items list — category + per-leaf custom-field filter
+# ---------------------------------------------------------------------------
+
+
+class TestItemsListCategoryFilter:
+    """The items list exposes a category dropdown; once a leaf with field
+    defs is picked, per-field sub-filter inputs render and ``cf_<key>``
+    query params filter the result set via ``ItemFieldValue`` joins."""
+
+    def _seed(
+        self, db_session: Session
+    ) -> tuple[TaxonomyNode, TaxonomyFieldDef, Item, Item]:
+        leaf = _make_leaf(db_session, name="Rings")
+        karat = TaxonomyFieldDef(
+            node_id=leaf.id,
+            key="karat",
+            name="Karat",
+            type=FieldType.SELECT,
+            options_json=["9", "14", "18"],
+            required=False,
+            sort_order=10,
+        )
+        db_session.add(karat)
+        db_session.commit()
+        db_session.refresh(karat)
+
+        a = Item(
+            sku="RIN-0001",
+            name="Ring A",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+            reorder_threshold=Decimal("0"),
+            reorder_qty=Decimal("0"),
+            current_qty=Decimal("0"),
+            assigned_sequence=1,
+        )
+        b = Item(
+            sku="RIN-0002",
+            name="Ring B",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.QTY,
+            reorder_threshold=Decimal("0"),
+            reorder_qty=Decimal("0"),
+            current_qty=Decimal("0"),
+            assigned_sequence=2,
+        )
+        db_session.add_all([a, b])
+        db_session.commit()
+        db_session.refresh(a)
+        db_session.refresh(b)
+        db_session.add_all(
+            [
+                ItemFieldValue(item_id=a.id, field_def_id=karat.id, value_text="14"),
+                ItemFieldValue(item_id=b.id, field_def_id=karat.id, value_text="18"),
+            ]
+        )
+        db_session.commit()
+        return leaf, karat, a, b
+
+    def test_filter_inputs_render_only_when_category_picked(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf, _karat, _a, _b = self._seed(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+
+        # No category → dropdown is shown but no per-field sub-filters.
+        resp = client.get("/admin/items")
+        assert resp.status_code == 200
+        assert 'data-testid="filter-category"' in resp.text
+        assert 'data-testid="filter-cf-karat"' not in resp.text
+
+        # Category picked → per-field sub-filter for ``karat`` appears.
+        resp = client.get(f"/admin/items?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="filter-cf-karat"' in resp.text
+
+    def test_cf_filter_narrows_items_to_matching_field_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf, _karat, _a, _b = self._seed(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+
+        # No filter → both items.
+        resp = client.get(f"/admin/items?node_id={leaf.id}")
+        assert "RIN-0001" in resp.text
+        assert "RIN-0002" in resp.text
+
+        # cf_karat=14 → only Ring A.
+        resp = client.get(f"/admin/items?node_id={leaf.id}&cf_karat=14")
+        assert resp.status_code == 200
+        assert "RIN-0001" in resp.text
+        assert "RIN-0002" not in resp.text
+
+        # cf_karat=18 → only Ring B.
+        resp = client.get(f"/admin/items?node_id={leaf.id}&cf_karat=18")
+        assert "RIN-0002" in resp.text
+        assert "RIN-0001" not in resp.text
+
+    def test_cf_filter_ignored_when_no_category(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        _leaf, _karat, _a, _b = self._seed(db_session)
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        # ``cf_karat`` without a ``node_id`` does not filter — the route only
+        # applies field-def filters when it can resolve the schema. Both items
+        # should still appear.
+        resp = client.get("/admin/items?cf_karat=14")
+        assert "RIN-0001" in resp.text
+        assert "RIN-0002" in resp.text

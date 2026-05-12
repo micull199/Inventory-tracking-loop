@@ -13,31 +13,104 @@
     {% endcall %}
 
     <nav class="uc-tabs" aria-label="Filter items" data-testid="items-tabs">
-        <a href="/admin/items?show=active"
+        <a href="/admin/items?show=active{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
            data-testid="tab-active"
            {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
-        <a href="/admin/items?show=archived"
+        <a href="/admin/items?show=archived{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
            data-testid="tab-archived"
            {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
     </nav>
 
+    {# Category + per-leaf custom-field filter form. Submits as GET so the
+       URL captures the current filter state (shareable, back-button safe).
+       ``show`` and ``requires_checkout`` ride along as hidden inputs so the
+       tabs / requires-checkout filter links above stay coherent. The
+       category select auto-submits on change; once a category is picked
+       and it carries field defs, the sub-filter inputs render and the user
+       hits "Apply" to filter further. #}
+    <form method="get" action="/admin/items" class="uc-toolbar" data-testid="items-filter-form">
+        <input type="hidden" name="show" value="{{ show }}">
+        {% if requires_checkout_filter %}
+            <input type="hidden" name="requires_checkout" value="yes">
+        {% endif %}
+
+        <label class="uc-label" for="filter-node-id" style="margin: 0;">Category</label>
+        <select id="filter-node-id" name="node_id"
+                class="uc-select uc-select--sm"
+                onchange="this.form.submit()"
+                data-testid="filter-category">
+            <option value="">— any —</option>
+            {% for opt in category_options %}
+                <option value="{{ opt.id }}"
+                        {% if node_id == opt.id %}selected{% endif %}>
+                    {{ opt.label }}
+                </option>
+            {% endfor %}
+        </select>
+
+        {% if filter_field_defs %}
+            {% for fd in filter_field_defs %}
+                {% set raw = cf_filter_values.get("cf_" ~ fd.key, "") %}
+                <label class="uc-label" for="filter-cf-{{ fd.key }}" style="margin: 0;">{{ fd.name }}</label>
+                {% if fd.type.value == "select" or fd.type.value == "multiselect" %}
+                    <select id="filter-cf-{{ fd.key }}"
+                            name="cf_{{ fd.key }}"
+                            class="uc-select uc-select--sm"
+                            data-testid="filter-cf-{{ fd.key }}">
+                        <option value="">— any —</option>
+                        {% for opt in fd.options_json or [] %}
+                            <option value="{{ opt }}" {% if raw == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                {% elif fd.type.value == "boolean" %}
+                    <select id="filter-cf-{{ fd.key }}"
+                            name="cf_{{ fd.key }}"
+                            class="uc-select uc-select--sm"
+                            data-testid="filter-cf-{{ fd.key }}">
+                        <option value="">— any —</option>
+                        <option value="yes" {% if raw == "yes" %}selected{% endif %}>Yes</option>
+                        <option value="no" {% if raw == "no" %}selected{% endif %}>No</option>
+                    </select>
+                {% elif fd.type.value == "date" %}
+                    <input id="filter-cf-{{ fd.key }}"
+                           name="cf_{{ fd.key }}"
+                           type="date"
+                           class="uc-input uc-input--sm"
+                           value="{{ raw }}"
+                           data-testid="filter-cf-{{ fd.key }}">
+                {% else %}
+                    <input id="filter-cf-{{ fd.key }}"
+                           name="cf_{{ fd.key }}"
+                           type="text"
+                           class="uc-input uc-input--sm"
+                           value="{{ raw }}"
+                           placeholder="search"
+                           data-testid="filter-cf-{{ fd.key }}">
+                {% endif %}
+            {% endfor %}
+            <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm" data-testid="items-filter-apply">Apply</button>
+        {% endif %}
+
+        <span class="uc-toolbar-spacer"></span>
+        {% if can_csv %}
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
+               data-testid="items-list-csv-link">Download CSV</a>
+        {% endif %}
+    </form>
+
     <div class="uc-toolbar">
         <nav class="uc-row-2" aria-label="Filter by checkout flag" data-testid="items-checkout-filter">
             <a class="uc-btn uc-btn--ghost uc-btn--sm"
-               href="/admin/items?show={{ show }}"
+               href="/admin/items?show={{ show }}{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
                data-testid="filter-all"
                {% if not requires_checkout_filter %}aria-current="page"{% endif %}>All items</a>
             <a class="uc-btn uc-btn--ghost uc-btn--sm"
-               href="/admin/items?show={{ show }}&amp;requires_checkout=yes"
+               href="/admin/items?show={{ show }}&amp;requires_checkout=yes{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
                data-testid="filter-requires-checkout"
                {% if requires_checkout_filter %}aria-current="page"{% endif %}>Requires checkout</a>
         </nav>
         <span class="uc-toolbar-spacer"></span>
-        {% if can_csv %}
-            <a class="uc-btn uc-btn--ghost uc-btn--sm"
-               href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}"
-               data-testid="items-list-csv-link">Download CSV</a>
-        {% endif %}
     </div>
 
     {% if rows %}

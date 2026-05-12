@@ -142,6 +142,7 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/taxonomy/99999/fields", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields/new", MANAGER),
     ("POST", "/admin/taxonomy/99999/fields", MANAGER),
+    ("POST", "/admin/taxonomy/99999/fields/visibility", MANAGER),
     # HTMX fragment: options-textarea visibility per type — Manager-only,
     # same gate as the form that drives it.
     ("GET", "/admin/taxonomy/fields/_options-partial", MANAGER),

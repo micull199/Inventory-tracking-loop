@@ -38,6 +38,12 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
+from app.field_visibility import (
+    BUILT_IN_FIELDS,
+    VISIBILITY_STATES,
+    effective_field_visibility,
+    validate_visibility_submission,
+)
 from app.models import FieldType, Role, TaxonomyFieldDef, TaxonomyNode, User
 from app.template_env import templates
 
@@ -332,6 +338,9 @@ def list_field_defs(
             "show": show,
             "is_leaf": _is_leaf(db, node),
             "back_url": _children_back_url(node),
+            "built_in_fields": BUILT_IN_FIELDS,
+            "visibility_states": VISIBILITY_STATES,
+            "field_visibility": effective_field_visibility(node),
         },
     )
 
@@ -598,6 +607,49 @@ def update_field_def(
 
     return RedirectResponse(
         url=f"/admin/taxonomy/{field.node_id}/fields",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Built-in field visibility (per leaf)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{node_id}/fields/visibility")
+async def save_field_visibility(
+    request: Request,
+    node_id: int,
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Persist the built-in field visibility map for ``node_id``.
+
+    Accepts ``visibility_<field>`` form values, one per built-in field. The
+    submission is fully replaced — any field omitted from the post collapses
+    to the default state. Archived / non-leaf nodes still allow editing so a
+    Manager can pre-stage a leaf before items exist.
+    """
+    node = _get_node(db, node_id)
+    form = await request.form()
+    raw = {k: v for k, v in form.items() if isinstance(v, str)}
+    new_visibility = validate_visibility_submission(raw)
+
+    before = dict(node.field_visibility_json) if node.field_visibility_json else None
+    node.field_visibility_json = new_visibility
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_node.field_visibility_updated",
+        entity_type="taxonomy_node",
+        entity_id=node.id,
+        before={"field_visibility_json": before},
+        after={"field_visibility_json": new_visibility},
+    )
+    db.commit()
+    _flash(request, f"Built-in field visibility for “{node.name}” updated.")
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/fields",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 

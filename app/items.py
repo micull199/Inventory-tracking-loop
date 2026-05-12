@@ -50,16 +50,18 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.datastructures import FormData
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
 from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
+from app.field_visibility import effective_field_visibility
 from app.models import (
     Archetype,
     FieldType,
@@ -358,6 +360,8 @@ def _normalise(
     current_node_id: int | None = None,
     current_supplier_id: int | None = None,
     current_location_id: int | None = None,
+    visibility: dict[str, str] | None = None,
+    leaf_defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Strip / parse / validate every form field. Returns the value-shape stored on the row.
 
@@ -368,30 +372,58 @@ def _normalise(
     The ``current_*`` ids are the existing item's FK values on edit (all
     ``None`` on create). Used by the FK resolvers to keep an unchanged
     archived FK assignment without 400ing.
+
+    ``visibility`` is the per-leaf built-in field visibility map (see
+    ``app.field_visibility``). Hidden fields ignore the submitted value
+    (treated as empty). Required-state ``name`` / ``unit`` still 400 on
+    blanks. Non-required ``name`` left blank returns ``""`` here — callers
+    fill it post-SKU-allocation (create) or from the existing row (update).
+    Non-required ``unit`` left blank falls back to ``leaf_defaults["unit"]``
+    or ``"ea"``.
     """
+    vis = visibility or {}
+
+    def _is(field: str, state: str) -> bool:
+        return vis.get(field) == state
+
+    def _input(field: str, raw: str) -> str:
+        return "" if _is(field, "hidden") else raw
+
     clean_sku = (sku or "").strip()
     if not clean_sku:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required")
-    clean_name = (name or "").strip()
-    if not clean_name:
+
+    clean_name = _input("name", name).strip()
+    if not clean_name and _is("name", "required"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
-    clean_unit = (unit or "").strip()
+
+    clean_unit = _input("unit", unit).strip()
     if not clean_unit:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="unit is required",
-        )
+        if _is("unit", "required"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="unit is required",
+            )
+        fallback_unit = (leaf_defaults or {}).get("unit") or ""
+        clean_unit = str(fallback_unit).strip() or "ea"
 
     node = _resolve_leaf_node(db, taxonomy_node_id, current_id=current_node_id)
-    mode = _coerce_tracking_mode(tracking_mode)
+    mode_raw = _input("tracking_mode", tracking_mode)
+    mode = _coerce_tracking_mode(mode_raw) if mode_raw else _coerce_tracking_mode(tracking_mode)
 
-    threshold = _parse_decimal(reorder_threshold, field_name="reorder threshold")
-    qty = _parse_decimal(reorder_qty, field_name="reorder quantity")
+    threshold = _parse_decimal(
+        _input("reorder_threshold", reorder_threshold), field_name="reorder threshold"
+    )
+    qty = _parse_decimal(_input("reorder_qty", reorder_qty), field_name="reorder quantity")
 
-    sup_id = _resolve_optional_supplier(db, supplier_id, current_id=current_supplier_id)
-    loc_id = _resolve_optional_location(db, location_id, current_id=current_location_id)
+    sup_id = _resolve_optional_supplier(
+        db, _input("supplier_id", supplier_id), current_id=current_supplier_id
+    )
+    loc_id = _resolve_optional_location(
+        db, _input("location_id", location_id), current_id=current_location_id
+    )
 
-    clean_qr = (qr_code or "").strip() or None
+    clean_qr = (_input("qr_code", qr_code) or "").strip() or None
     clean_notes = (notes or "").strip() or None
 
     return {
@@ -400,7 +432,9 @@ def _normalise(
         "taxonomy_node_id": node.id,
         "unit": clean_unit,
         "tracking_mode": mode,
-        "requires_checkout": bool(requires_checkout),
+        "requires_checkout": False
+        if _is("requires_checkout", "hidden")
+        else bool(requires_checkout),
         "reorder_threshold": threshold,
         "reorder_qty": qty,
         "supplier_id": sup_id,
@@ -866,6 +900,117 @@ def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
     return list(db.execute(stmt).scalars().all())
 
 
+def _filter_category_options(db: Session) -> list[dict[str, Any]]:
+    """Return all non-archived taxonomy nodes as filter dropdown options.
+
+    Each entry is ``{id, label}`` where ``label`` is the breadcrumb path
+    (``"Parent / Child / Grandchild"``). Used by the items list filter so the
+    user can scope to a top-level branch (any node), not just leaves —
+    ``_collect_descendant_node_ids`` resolves a non-leaf pick to the full set
+    of underlying leaves at query time.
+    """
+    rows = list(
+        db.execute(
+            select(TaxonomyNode)
+            .where(TaxonomyNode.archived_at.is_(None))
+            .order_by(TaxonomyNode.sort_order, TaxonomyNode.name)
+        )
+        .scalars()
+        .all()
+    )
+    options = [{"id": n.id, "label": _node_breadcrumb(db, n)} for n in rows]
+    # Sort by breadcrumb so ancestors group with their descendants and the
+    # dropdown reads top-down (e.g. "Raw Materials" before "Raw Materials /
+    # Silver"). Stable Python sort.
+    options.sort(key=lambda o: str(o["label"]).casefold())
+    return options
+
+
+def _apply_field_def_filters(
+    stmt: Any,
+    db: Session,
+    field_defs: list[TaxonomyFieldDef],
+    raw: dict[str, str],
+) -> tuple[Any, dict[str, str]]:
+    """Filter ``stmt`` by per-field-def search criteria pulled from ``raw``.
+
+    ``raw`` is the request query string (``cf_<key>=<value>``). For each
+    field def with a non-empty value present, join ``ItemFieldValue`` and
+    add a WHERE clause keyed by the def's storage column:
+
+    - ``text``, ``select``  → substring match on ``value_text`` (case-insensitive).
+    - ``multiselect``       → LIKE on the JSON dump of ``value_json``
+      (good-enough cross-DB without per-dialect JSON ops).
+    - ``boolean``           → equality on ``value_bool`` (input ``"yes"`` /
+      ``"no"`` coerced).
+    - ``number``            → exact match on ``value_number``.
+    - ``decimal``           → exact match on ``value_decimal``.
+    - ``date``              → exact match on ``value_date`` (ISO string).
+
+    Invalid / unparseable values are silently ignored (the filter just
+    doesn't apply) so a hand-typed URL never 500s. Returns the patched
+    ``stmt`` plus the dict of applied ``{cf_<key>: <raw>}`` echoed back so
+    the template can reflect the active filters in the inputs.
+    """
+    from sqlalchemy.orm import aliased
+
+    applied: dict[str, str] = {}
+    for fd in field_defs:
+        key = f"cf_{fd.key}"
+        value = (raw.get(key) or "").strip()
+        if not value:
+            continue
+        applied[key] = value
+        ifv = aliased(ItemFieldValue)
+        stmt = stmt.join(
+            ifv,
+            (ifv.item_id == Item.id) & (ifv.field_def_id == fd.id),
+        )
+        type_value = fd.type.value
+        if type_value in ("text", "select"):
+            stmt = stmt.where(ifv.value_text.ilike(f"%{value}%"))
+        elif type_value == "multiselect":
+            # ``value_json`` is a list of chosen options. SQLite's JSON1
+            # ``json_each`` would be ideal but Postgres needs jsonb_array_elements
+            # — for v1, the cheap cross-DB option is a substring match on the
+            # JSON-encoded string, which is correct for the comma-separated
+            # default option syntax used everywhere in the admin UI.
+            stmt = stmt.where(func.cast(ifv.value_json, sa.String).ilike(f"%{value}%"))
+        elif type_value == "boolean":
+            normalised = value.strip().lower()
+            if normalised in ("yes", "true", "1"):
+                stmt = stmt.where(ifv.value_bool.is_(True))
+            elif normalised in ("no", "false", "0"):
+                stmt = stmt.where(ifv.value_bool.is_(False))
+            else:
+                # Unknown literal — skip the filter rather than refuse the page.
+                applied.pop(key, None)
+        elif type_value == "number":
+            try:
+                parsed_int = int(value)
+            except ValueError:
+                applied.pop(key, None)
+                continue
+            stmt = stmt.where(ifv.value_number == parsed_int)
+        elif type_value == "decimal":
+            try:
+                parsed_dec = Decimal(value)
+            except InvalidOperation:
+                applied.pop(key, None)
+                continue
+            stmt = stmt.where(ifv.value_decimal == parsed_dec)
+        elif type_value == "date":
+            try:
+                parsed_date = datetime.fromisoformat(value).date()
+            except ValueError:
+                applied.pop(key, None)
+                continue
+            stmt = stmt.where(ifv.value_date == parsed_date)
+        else:
+            applied.pop(key, None)
+    return stmt, applied
+
+
 def _parse_custom_field(field_def: TaxonomyFieldDef, raw: str | list[str] | None) -> Any:
     """Coerce a raw form value (or list, for multiselect) into the right Python type.
 
@@ -1252,6 +1397,23 @@ def list_items(
         stmt = stmt.where(Item.taxonomy_node_id.in_(descendant_ids))
     if requires_checkout_filter:
         stmt = stmt.where(Item.requires_checkout.is_(True))
+
+    # Per-leaf custom-field filters. Only applied when ``node_id`` points at
+    # an active leaf with field defs — the filter inputs that produced the
+    # ``cf_<key>`` query params are only rendered then, so this is the
+    # contract the template enforces.
+    filter_field_defs: list[TaxonomyFieldDef] = []
+    cf_filter_values: dict[str, str] = {}
+    if node_id is not None:
+        filter_field_defs = _get_active_field_defs(db, node_id)
+        if filter_field_defs:
+            stmt, cf_filter_values = _apply_field_def_filters(
+                stmt,
+                db,
+                filter_field_defs,
+                {k: v for k, v in request.query_params.items() if isinstance(v, str)},
+            )
+
     stmt = stmt.order_by(_LIST_ORDER, Item.sku)
 
     items = list(db.execute(stmt).scalars().all())
@@ -1282,6 +1444,9 @@ def list_items(
             "show": show,
             "node_id": node_id,
             "requires_checkout_filter": requires_checkout_filter,
+            "category_options": _filter_category_options(db),
+            "filter_field_defs": filter_field_defs,
+            "cf_filter_values": cf_filter_values,
             "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_edit_item": _can_save_item(_user),
@@ -1333,6 +1498,7 @@ def new_item_form(
             "can_edit_thresholds": True,
             "can_save": True,
             "field_defs": field_defs,
+            "field_visibility": effective_field_visibility(leaf),
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form["taxonomy_node_id"]),
             "form_sku_preview": _sku_preview_for_form(db, form["taxonomy_node_id"]),
         },
@@ -1347,30 +1513,30 @@ def custom_fields_fragment(
     _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
-    """HTMX fragment: custom-field inputs for the leaf identified by the picked
-    category, plus optional out-of-band swap of per-leaf core defaults.
+    """HTMX fragment: the full post-category content of the items form.
 
-    Wired to the items form's ``<select name="taxonomy_node_id">`` via
-    ``hx-get`` / ``hx-trigger="change"``. HTMX automatically includes the
-    triggering element's ``name=value`` in the request query string, so this
-    route accepts ``taxonomy_node_id`` (matching the form field).
+    Wired to the form's hidden ``#taxonomy_node_id`` via ``hx-get`` /
+    ``hx-trigger="change"``. On change the response replaces the
+    ``#item-fields-after-category`` container with the field sections
+    rendered for the newly-picked leaf (built-in fields with the leaf's
+    visibility map applied + custom fields). A ``#sku-preview`` OOB swap
+    rides along so the SKU preview caption (outside the container) stays
+    in sync with the picked leaf's next SKU.
 
     ``include_defaults=1`` (set via ``hx-vals`` on the create form, omitted
-    on edit) tells the route to also emit ``hx-swap-oob`` elements for the
-    7 core item fields (unit / tracking_mode / requires_checkout /
-    reorder_threshold / reorder_qty / supplier_id / location_id) populated
-    from the leaf's ``defaults_json``. The edit form omits the flag so a
-    Manager re-classifying an item doesn't silently lose the existing
-    item's typed values.
+    on edit) tells the route to populate the form with the leaf's
+    ``defaults_json`` values so a fresh pick brings the manager-configured
+    defaults along. The edit form omits the flag so a Manager re-classifying
+    an item doesn't silently lose the existing item's typed values — they
+    re-render in place with whatever was previously stored.
 
-    Empty / unparseable / archived / non-leaf ids render the cf-container
-    empty and emit no defaults — the user sees no inputs (nothing to fill
-    in for an unselected category). The POST handler re-validates on
-    submit, so a hostile id here can't sneak past.
+    Empty / unparseable / archived / non-leaf ids render the container with
+    a "pick a category" prompt and emit no preview. The POST handler
+    re-validates on submit, so a hostile id here can't sneak past.
 
     Same role gating as the edit form (Manager + Office + Workshop). Office
     and Workshop see the form read-only, but ``hx-trigger="change"`` won't
-    fire on a disabled select anyway; the permissive gate is just so a
+    fire on a disabled input anyway; the permissive gate is just so a
     future widening of the edit form's writable surface doesn't silently
     403 on the fragment.
     """
@@ -1384,23 +1550,14 @@ def custom_fields_fragment(
         field_defs = _get_active_field_defs(db, parsed_id)
         leaf = db.get(TaxonomyNode, parsed_id)
     form = _form_for_item(None)
-    # Compute the set of keys to OOB-swap. Only emit a swap for keys the
-    # leaf actually sets a default for — otherwise an empty default would
-    # wipe out a value the user already typed (HTMX swap fires async, after
-    # the form is partially filled, so non-defaults must be left alone).
-    oob_keys: set[str] = set()
+    # The picked node id is what the partial conditional renders on. If the
+    # leaf is invalid / archived / non-leaf the parsed_id was 0; show the
+    # "pick a category" prompt rather than half-rendered fields.
+    if leaf is not None:
+        form["taxonomy_node_id"] = str(leaf.id)
     if include_defaults == "1":
         _apply_leaf_defaults(form, leaf)
-        if leaf is not None and leaf.defaults_json:
-            oob_keys = {k for k in _DEFAULT_KEYS_TO_FORM if k in leaf.defaults_json}
-            if leaf.defaults_json.get("requires_checkout") is True:
-                oob_keys.add("requires_checkout")
     form["custom"] = _form_for_custom_fields(field_defs, {})
-    # SKU preview OOB swap: when the create form posts a category change, also
-    # update the ``#sku-preview`` caption alongside the custom-fields swap so
-    # the user sees the server-allocated SKU shape for the picked leaf. On
-    # edit (``include_defaults`` omitted) the SKU is already fixed, so no
-    # preview is emitted; the form's static empty ``<output>`` stays empty.
     sku_preview_caption = ""
     if include_defaults == "1" and leaf is not None:
         composed = _compose_sku_preview(db, leaf)
@@ -1408,12 +1565,14 @@ def custom_fields_fragment(
             sku_preview_caption = f"Next SKU: {composed}"
     return templates.TemplateResponse(
         request,
-        "items_form_custom_fields.html",
+        "items_form_fields.html",
         {
             "field_defs": field_defs,
             "form": form,
             "ro": False,
-            "oob_keys": oob_keys,
+            "item": None,
+            "can_edit_thresholds": True,
+            "field_visibility": effective_field_visibility(leaf),
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -1512,6 +1671,7 @@ async def create_item(
             "notes": (notes or "").strip(),
             "custom": _custom_form_view_from_post(raw_form, view_field_defs),
         }
+        leaf_for_view = db.get(TaxonomyNode, leaf_id_for_view) if leaf_id_for_view > 0 else None
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -1529,6 +1689,7 @@ async def create_item(
                 "can_edit_thresholds": True,
                 "can_save": True,
                 "field_defs": view_field_defs,
+                "field_visibility": effective_field_visibility(leaf_for_view),
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": _sku_preview_for_form(db, form_view["taxonomy_node_id"]),
@@ -1551,6 +1712,14 @@ async def create_item(
             )
         derived_tracking_mode = _tracking_mode_for(archetype)
 
+        # Per-leaf visibility for built-in fields. Hidden fields ignore any
+        # submitted value (server auto-fills); optional fields skip required
+        # validation. ``name`` left blank after _normalise is filled with
+        # the allocated SKU below; ``unit`` fallback is handled inside
+        # _normalise itself.
+        visibility = effective_field_visibility(picked)
+        leaf_defaults = picked.defaults_json or {}
+
         # Normalise the remaining fields against the *picked* leaf id
         # (which has already passed ``_resolve_leaf_node``). We feed a
         # placeholder ``sku`` so ``_normalise`` doesn't 400 on the
@@ -1570,6 +1739,8 @@ async def create_item(
             location_id=location_id,
             qr_code=qr_code,
             notes=notes,
+            visibility=visibility,
+            leaf_defaults=leaf_defaults,
         )
         _check_qr_unique(db, fields["qr_code"])
 
@@ -1581,6 +1752,11 @@ async def create_item(
         allocated_sku, allocated_seq, dest_leaf = _allocate_sku(db, picked)
         fields["sku"] = allocated_sku
         fields["taxonomy_node_id"] = dest_leaf.id
+        # If name was hidden or optional and left blank, fall back to the
+        # SKU so the NOT-NULL ``name`` column always has a value. Items
+        # surfaced in lists/search still get a stable identifier.
+        if not fields["name"]:
+            fields["name"] = allocated_sku
         _check_sku_unique(db, fields["sku"])
 
         # Custom fields parse against the picked node's schema. For
@@ -1658,6 +1834,7 @@ def edit_item_form(
     form = _form_for_item(item)
     form["custom"] = _form_for_custom_fields(field_defs, existing_rows)
     can_save = _can_save_item(_user)
+    leaf_node = db.get(TaxonomyNode, item.taxonomy_node_id)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -1675,6 +1852,7 @@ def edit_item_form(
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
             "field_defs": field_defs,
+            "field_visibility": effective_field_visibility(leaf_node),
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, item.taxonomy_node_id),
             # Edit form does not preview a "next SKU" — SKU is already
             # allocated and immutable.
@@ -1741,6 +1919,7 @@ async def update_item(
             "custom": _custom_form_view_from_post(raw_form, view_field_defs),
         }
         can_save = _can_save_item(user)
+        leaf_for_view = db.get(TaxonomyNode, leaf_id_for_view)
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -1758,6 +1937,7 @@ async def update_item(
                 "can_edit_thresholds": _can_edit_thresholds(user),
                 "can_save": can_save,
                 "field_defs": view_field_defs,
+                "field_visibility": effective_field_visibility(leaf_for_view),
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": "",
@@ -1766,6 +1946,14 @@ async def update_item(
         )
 
     try:
+        # Resolve the (potentially-changed) leaf so we can fetch its
+        # visibility map before normalising. ``_resolve_leaf_node`` runs
+        # again inside ``_normalise``; the redundant lookup is cheap and
+        # keeps the helper interface unchanged.
+        edit_leaf = _resolve_leaf_node(db, taxonomy_node_id, current_id=item.taxonomy_node_id)
+        visibility = effective_field_visibility(edit_leaf)
+        leaf_defaults = edit_leaf.defaults_json or {}
+
         fields = _normalise(
             db,
             sku=sku,
@@ -1783,7 +1971,14 @@ async def update_item(
             current_node_id=item.taxonomy_node_id,
             current_supplier_id=item.supplier_id,
             current_location_id=item.location_id,
+            visibility=visibility,
+            leaf_defaults=leaf_defaults,
         )
+        # On edit, a blank-after-normalise ``name`` (visibility hidden /
+        # optional, no input) means "keep the existing value" rather than
+        # overwrite with the SKU.
+        if not fields["name"]:
+            fields["name"] = item.name
         _check_sku_unique(db, fields["sku"], exclude_id=item.id)
         _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)
 

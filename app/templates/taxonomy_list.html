@@ -35,7 +35,6 @@
                         <th>SKU prefix</th>
                         <th>Name</th>
                         <th>Archetype</th>
-                        <th>Sub-categories</th>
                         <th class="uc-right">Actions</th>
                     </tr>
                 </thead>
@@ -57,13 +56,11 @@
                                     <span class="uc-muted">—</span>
                                 {% endif %}
                             </td>
-                            <td>
-                                <a href="/admin/taxonomy/{{ n.id }}/children" data-testid="open-children">Manage</a>
+                            <td class="uc-actions">
+                                <a href="/admin/taxonomy/{{ n.id }}/children" data-testid="open-children">Sub-categories</a>
                                 {% if n.id in leaf_ids %}
                                     <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-fields">Fields</a>
                                 {% endif %}
-                            </td>
-                            <td class="uc-actions">
                                 <a href="/admin/taxonomy/{{ n.id }}/edit" data-testid="edit-taxonomy">Edit</a>
                                 {% if n.archived_at is none %}
                                     <form method="post" action="/admin/taxonomy/{{ n.id }}/archive" style="display:inline">
