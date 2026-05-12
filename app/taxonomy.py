@@ -58,6 +58,7 @@ from app.models import (
     Role,
     Supplier,
     TaxonomyNode,
+    TaxonomyStage,
     TrackingMode,
     User,
 )
@@ -1741,5 +1742,401 @@ def create_grandchild(
     _flash(request, f"Sub-sub-category “{node.name}” created.")
     return RedirectResponse(
         url=f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle stages (per top-level node)
+# ---------------------------------------------------------------------------
+#
+# Each top-level taxonomy node owns an ordered list of stages. Items inside
+# that category default to the ``is_initial`` stage on create; transitions are
+# recorded as ``STAGE_CHANGE`` movements in ``app/movements.py``. See the
+# `Plan: Lifecycle stages` design for the full semantics.
+
+_STAGE_LIST_ORDER = case((TaxonomyStage.archived_at.is_(None), 0), else_=1)
+
+
+def _get_top_level_node(db: Session, node_id: int) -> TaxonomyNode:
+    """Load a top-level taxonomy node or 404 / 400.
+
+    Stages are scoped to depth-0 nodes only; rejecting a sub-category here
+    keeps the URL surface unambiguous and matches the field-defs admin posture
+    (fields live on leaves, stages live on the top of the tree).
+    """
+    node = db.get(TaxonomyNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="category not found")
+    if node.parent_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stages are owned by the top-level category",
+        )
+    return node
+
+
+def _validate_stage_name(name: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+    if len(cleaned) > 64:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stage name must be 64 characters or fewer",
+        )
+    return cleaned
+
+
+def _parse_sort_order(raw: str, *, default: int) -> int:
+    text_val = (raw or "").strip()
+    if text_val == "":
+        return default
+    try:
+        return int(text_val)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="sort_order must be a whole number",
+        ) from exc
+
+
+def _check_stage_name_unique(
+    db: Session,
+    *,
+    top_level_node_id: int,
+    name: str,
+    exclude_id: int | None = None,
+) -> None:
+    stmt = (
+        select(TaxonomyStage.id)
+        .where(TaxonomyStage.top_level_node_id == top_level_node_id)
+        .where(TaxonomyStage.name == name)
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TaxonomyStage.id != exclude_id)
+    if db.execute(stmt).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="a stage with that name already exists for this category",
+        )
+
+
+def _next_stage_sort_order(db: Session, top_level_node_id: int) -> int:
+    stmt = select(func.max(TaxonomyStage.sort_order)).where(
+        TaxonomyStage.top_level_node_id == top_level_node_id
+    )
+    current_max = db.execute(stmt).scalar()
+    if current_max is None:
+        return 0
+    return int(current_max) + _SORT_ORDER_STEP
+
+
+def _clear_other_initial(
+    db: Session, *, top_level_node_id: int, exclude_id: int | None
+) -> None:
+    """Unset ``is_initial`` on any other active stage under the same top-level node.
+
+    The partial unique index ``uq_taxonomy_stage_initial_active`` enforces the
+    invariant at the DB layer; this helper makes the route-side write
+    succeed-instead-of-IntegrityError when the user reassigns initial without
+    first un-checking it elsewhere.
+    """
+    stmt = select(TaxonomyStage).where(
+        TaxonomyStage.top_level_node_id == top_level_node_id,
+        TaxonomyStage.is_initial.is_(True),
+        TaxonomyStage.archived_at.is_(None),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TaxonomyStage.id != exclude_id)
+    for row in db.execute(stmt).scalars().all():
+        row.is_initial = False
+
+
+def _get_stage(db: Session, stage_id: int) -> TaxonomyStage:
+    stage = db.get(TaxonomyStage, stage_id)
+    if stage is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="stage not found")
+    return stage
+
+
+@router.get("/{node_id}/stages", response_class=HTMLResponse)
+def list_stages(
+    request: Request,
+    node_id: int,
+    show: str = "active",
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    node = _get_top_level_node(db, node_id)
+    if show not in {"active", "archived"}:
+        show = "active"
+
+    stmt = select(TaxonomyStage).where(TaxonomyStage.top_level_node_id == node.id)
+    if show == "active":
+        stmt = stmt.where(TaxonomyStage.archived_at.is_(None))
+    else:
+        stmt = stmt.where(TaxonomyStage.archived_at.is_not(None))
+    stmt = stmt.order_by(_STAGE_LIST_ORDER, TaxonomyStage.sort_order, TaxonomyStage.name)
+
+    rows = list(db.execute(stmt).scalars().all())
+
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_stages_list.html",
+        {
+            "current_user": _user,
+            "node": node,
+            "stages": rows,
+            "show": show,
+        },
+    )
+
+
+@router.get("/{node_id}/stages/new", response_class=HTMLResponse)
+def new_stage_form(
+    request: Request,
+    node_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    node = _get_top_level_node(db, node_id)
+    has_initial = (
+        db.execute(
+            select(TaxonomyStage.id)
+            .where(TaxonomyStage.top_level_node_id == node.id)
+            .where(TaxonomyStage.is_initial.is_(True))
+            .where(TaxonomyStage.archived_at.is_(None))
+        ).first()
+        is not None
+    )
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_stages_form.html",
+        {
+            "current_user": _user,
+            "node": node,
+            "stage": None,
+            "form": {
+                "name": "",
+                "sort_order": "",
+                "is_initial": not has_initial,
+            },
+            "title": "New stage",
+            "action": f"/admin/taxonomy/{node.id}/stages",
+        },
+    )
+
+
+@router.post("/{node_id}/stages")
+def create_stage(
+    request: Request,
+    node_id: int,
+    name: str = Form(""),
+    sort_order: str = Form(""),
+    is_initial: bool = Form(False),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    node = _get_top_level_node(db, node_id)
+    clean_name = _validate_stage_name(name)
+    _check_stage_name_unique(db, top_level_node_id=node.id, name=clean_name)
+    sort_value = _parse_sort_order(sort_order, default=_next_stage_sort_order(db, node.id))
+
+    if is_initial:
+        _clear_other_initial(db, top_level_node_id=node.id, exclude_id=None)
+
+    stage = TaxonomyStage(
+        top_level_node_id=node.id,
+        name=clean_name,
+        sort_order=sort_value,
+        is_initial=is_initial,
+    )
+    db.add(stage)
+    db.flush()
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_stage.created",
+        entity_type="taxonomy_stage",
+        entity_id=stage.id,
+        before=None,
+        after={
+            "top_level_node_id": node.id,
+            "name": stage.name,
+            "sort_order": stage.sort_order,
+            "is_initial": stage.is_initial,
+        },
+    )
+    db.commit()
+    _flash(request, f"Stage “{stage.name}” created.")
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/stages",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/stages/{stage_id}/edit", response_class=HTMLResponse)
+def edit_stage_form(
+    request: Request,
+    stage_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    stage = _get_stage(db, stage_id)
+    node = _get_top_level_node(db, stage.top_level_node_id)
+    return templates.TemplateResponse(
+        request,
+        "taxonomy_stages_form.html",
+        {
+            "current_user": _user,
+            "node": node,
+            "stage": stage,
+            "form": {
+                "name": stage.name,
+                "sort_order": str(stage.sort_order),
+                "is_initial": stage.is_initial,
+            },
+            "title": f"Edit stage — {stage.name}",
+            "action": f"/admin/taxonomy/stages/{stage.id}",
+        },
+    )
+
+
+@router.post("/stages/{stage_id}")
+def update_stage(
+    request: Request,
+    stage_id: int,
+    name: str = Form(""),
+    sort_order: str = Form(""),
+    is_initial: bool = Form(False),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    stage = _get_stage(db, stage_id)
+    node = _get_top_level_node(db, stage.top_level_node_id)
+
+    clean_name = _validate_stage_name(name)
+    _check_stage_name_unique(
+        db, top_level_node_id=node.id, name=clean_name, exclude_id=stage.id
+    )
+    sort_value = _parse_sort_order(sort_order, default=stage.sort_order)
+
+    before = {
+        "name": stage.name,
+        "sort_order": stage.sort_order,
+        "is_initial": stage.is_initial,
+    }
+    after = {
+        "name": clean_name,
+        "sort_order": sort_value,
+        "is_initial": is_initial,
+    }
+    if before == after:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/admin/taxonomy/{node.id}/stages",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    if is_initial and not stage.is_initial:
+        _clear_other_initial(db, top_level_node_id=node.id, exclude_id=stage.id)
+    stage.name = clean_name
+    stage.sort_order = sort_value
+    stage.is_initial = is_initial
+
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_stage.updated",
+        entity_type="taxonomy_stage",
+        entity_id=stage.id,
+        before=before,
+        after=after,
+    )
+    db.commit()
+    _flash(request, f"Stage “{stage.name}” updated.")
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/stages",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/stages/{stage_id}/archive")
+def archive_stage(
+    request: Request,
+    stage_id: int,
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    stage = _get_stage(db, stage_id)
+    node = _get_top_level_node(db, stage.top_level_node_id)
+
+    if stage.archived_at is None:
+        stage.archived_at = datetime.now(UTC)
+        record_audit(
+            db,
+            actor=user,
+            action="taxonomy_stage.archived",
+            entity_type="taxonomy_stage",
+            entity_id=stage.id,
+            before={"archived_at": None},
+            after={"archived_at": stage.archived_at},
+        )
+        db.commit()
+        _flash(request, f"Stage “{stage.name}” archived.")
+    else:
+        db.rollback()
+
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/stages",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/stages/{stage_id}/unarchive")
+def unarchive_stage(
+    request: Request,
+    stage_id: int,
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    stage = _get_stage(db, stage_id)
+    node = _get_top_level_node(db, stage.top_level_node_id)
+
+    if stage.archived_at is not None:
+        previous = stage.archived_at
+        stage.archived_at = None
+        # If another active stage is already initial for this category, leave
+        # ``is_initial`` on this row alone — the partial unique index would
+        # 500 the unarchive. The manager toggles initial back on via edit.
+        has_other_initial = (
+            db.execute(
+                select(TaxonomyStage.id)
+                .where(TaxonomyStage.top_level_node_id == node.id)
+                .where(TaxonomyStage.id != stage.id)
+                .where(TaxonomyStage.is_initial.is_(True))
+                .where(TaxonomyStage.archived_at.is_(None))
+            ).first()
+            is not None
+        )
+        if stage.is_initial and has_other_initial:
+            stage.is_initial = False
+        record_audit(
+            db,
+            actor=user,
+            action="taxonomy_stage.unarchived",
+            entity_type="taxonomy_stage",
+            entity_id=stage.id,
+            before={"archived_at": previous},
+            after={"archived_at": None, "is_initial": stage.is_initial},
+        )
+        db.commit()
+        _flash(request, f"Stage “{stage.name}” restored.")
+    else:
+        db.rollback()
+
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/stages",
         status_code=status.HTTP_303_SEE_OTHER,
     )

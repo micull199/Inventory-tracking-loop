@@ -121,6 +121,7 @@
                         <th>SKU</th>
                         <th>Name</th>
                         <th>Category</th>
+                        <th>Stage</th>
                         <th>Unit</th>
                         <th>Tracking</th>
                         <th class="uc-right">Qty</th>
@@ -141,6 +142,9 @@
                                 {% endif %}
                             </td>
                             <td data-testid="item-category">{{ r.category_label }}</td>
+                            <td data-testid="item-stage">
+                                {% if r.stage_label %}{{ r.stage_label }}{% else %}—{% endif %}
+                            </td>
                             <td>{{ i.unit }}</td>
                             <td>{{ i.tracking_mode.value }}</td>
                             <td class="uc-num uc-right">{{ i.current_qty }}</td>

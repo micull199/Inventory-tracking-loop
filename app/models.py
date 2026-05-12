@@ -460,6 +460,76 @@ class TaxonomyFieldDef(Base):
         )
 
 
+class TaxonomyStage(Base):
+    """An ordered lifecycle stage owned by a top-level taxonomy node.
+
+    Each top-level category defines its own stage list (e.g. RINGS:
+    ``raw → polishing → QC → ready-to-ship → shipped``; RAW MATERIALS:
+    ``on-hand → issued``). Items in that category carry a
+    ``current_stage_id`` and transitions are recorded as ``STAGE_CHANGE``
+    movements on ``stock_movements``.
+
+    ``top_level_node_id`` must reference a row whose ``parent_id IS NULL``.
+    The constraint is enforced in the route layer rather than the DB so the
+    error surface stays unified with the rest of the taxonomy validation.
+
+    Uniqueness: ``(top_level_node_id, name)`` is unique across active *and*
+    archived rows (matches the ``TaxonomyNode`` convention — archiving must
+    not free the name). At most one row per top-level node may have
+    ``is_initial = TRUE`` while not archived (partial unique index).
+    """
+
+    __tablename__ = "taxonomy_stages"
+    __table_args__ = (
+        Index(
+            "uq_taxonomy_stage_name",
+            "top_level_node_id",
+            "name",
+            unique=True,
+        ),
+        Index(
+            "uq_taxonomy_stage_initial_active",
+            "top_level_node_id",
+            unique=True,
+            sqlite_where=text("is_initial = 1 AND archived_at IS NULL"),
+            postgresql_where=text("is_initial AND archived_at IS NULL"),
+        ),
+        Index("ix_taxonomy_stages_top_level_node_id", "top_level_node_id"),
+        Index("ix_taxonomy_stages_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    top_level_node_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    is_initial: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"<TaxonomyStage id={self.id} top_level_node_id={self.top_level_node_id} "
+            f"name={self.name!r} sort_order={self.sort_order} "
+            f"is_initial={self.is_initial} archived={self.archived_at is not None}>"
+        )
+
+
 class TrackingMode(enum.StrEnum):
     """How an item's stock is counted.
 
@@ -508,6 +578,7 @@ class Item(Base):
         Index("ix_items_taxonomy_node_id", "taxonomy_node_id"),
         Index("ix_items_supplier_id", "supplier_id"),
         Index("ix_items_location_id", "location_id"),
+        Index("ix_items_current_stage_id", "current_stage_id"),
         Index("ix_items_archived_at", "archived_at"),
     )
 
@@ -555,6 +626,15 @@ class Item(Base):
     )
     qr_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Lifecycle stage owned by the item's top-level taxonomy category. NULL
+    # is legitimate for items whose category has no stages defined. Stage
+    # transitions are recorded as ``STAGE_CHANGE`` movements; the column
+    # itself reflects only the *current* stage.
+    current_stage_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_stages.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     # Integer rendered as the final segment of this item's SKU at create
     # time (e.g. SKU ``RAW-SIL-0008`` stores ``assigned_sequence=8``). Set
     # on every item create going forward; NULL on rows that pre-date the
@@ -752,12 +832,18 @@ class MovementType(enum.StrEnum):
     ``transfer``   — between locations. No cost change in v1; the route layer
                      records two movements (or a single movement plus a
                      location flip) without touching cost layers.
+    ``stage_change`` — lifecycle-stage transition for the item (e.g. ring goes
+                     from ``raw`` to ``ready-to-ship``). ``qty`` is written as
+                     ``0`` because no quantity moves; the row exists to keep
+                     the audit-visible history aligned with every other stock
+                     event. Cost engine is never invoked.
     """
 
     IN = "in"
     OUT = "out"
     ADJUSTMENT = "adjustment"
     TRANSFER = "transfer"
+    STAGE_CHANGE = "stage_change"
 
 
 class StockMovement(Base):
@@ -823,6 +909,19 @@ class StockMovement(Base):
     stock_take_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("stock_takes.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    # ``STAGE_CHANGE`` movements populate both stage FKs (``from_stage_id``
+    # may be NULL on the very first transition for an item with no prior
+    # stage). Every other movement type leaves both NULL.
+    from_stage_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_stages.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    to_stage_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("taxonomy_stages.id", ondelete="RESTRICT"),
         nullable=True,
     )
     total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)

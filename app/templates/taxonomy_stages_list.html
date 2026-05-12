@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ node.name }} — Stages — UC Inventory{% endblock %}
+{% block content %}
+    <p><a href="/admin/taxonomy" data-testid="stages-back">&larr; Back to categories</a></p>
+
+    {% call c.page_header(
+        "Stages on " ~ node.name,
+        subtitle="Ordered lifecycle stages for items in this category. Transitions are append-only and recorded on each item's movement history.",
+        heading_testid="stages-heading"
+    ) %}
+        {% if not node.archived_at %}
+            {{ c.button("+ New stage", href="/admin/taxonomy/" ~ node.id ~ "/stages/new", testid="new-stage") }}
+        {% endif %}
+    {% endcall %}
+
+    {% if node.archived_at %}
+        <p data-testid="node-archived-note" class="uc-muted">
+            <em>This category is archived. Existing stages stay visible for history; no new stages can be added.</em>
+        </p>
+    {% endif %}
+
+    <nav class="uc-tabs" data-testid="stages-tabs">
+        <a href="/admin/taxonomy/{{ node.id }}/stages?show=active"
+           class="{% if show == 'active' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="stages-tab-active">Active</a>
+        <a href="/admin/taxonomy/{{ node.id }}/stages?show=archived"
+           class="{% if show == 'archived' %}uc-tab uc-tab--active{% else %}uc-tab{% endif %}"
+           data-testid="stages-tab-archived">Archived</a>
+    </nav>
+
+    {% if stages %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stages-table">
+                <thead>
+                    <tr>
+                        <th>Order</th>
+                        <th>Name</th>
+                        <th>Initial?</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in stages %}
+                        <tr data-testid="stage-row" data-stage-id="{{ s.id }}">
+                            <td class="uc-num">{{ s.sort_order }}</td>
+                            <td data-testid="stage-name">
+                                {{ s.name }}
+                                {% if s.archived_at is not none %}{{ c.pill("archived") }}{% endif %}
+                            </td>
+                            <td data-testid="stage-initial">
+                                {% if s.is_initial and s.archived_at is none %}Yes{% else %}—{% endif %}
+                            </td>
+                            <td class="uc-actions">
+                                <a href="/admin/taxonomy/stages/{{ s.id }}/edit" data-testid="edit-stage">Edit</a>
+                                {% if s.archived_at is none %}
+                                    <form method="post" action="/admin/taxonomy/stages/{{ s.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-stage">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/taxonomy/stages/{{ s.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-stage">Restore</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p data-testid="stages-empty" class="uc-muted">
+            {% if show == "archived" %}
+                No archived stages.
+            {% else %}
+                No stages yet. Add one to start tracking item lifecycle for this category.
+            {% endif %}
+        </p>
+    {% endif %}
+{% endblock %}

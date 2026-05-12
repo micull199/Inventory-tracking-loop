@@ -72,6 +72,7 @@ from app.models import (
     Supplier,
     TaxonomyFieldDef,
     TaxonomyNode,
+    TaxonomyStage,
     TrackingMode,
     User,
 )
@@ -1304,6 +1305,35 @@ def _category_label(item: Item, db: Session) -> str:
     return f"{parent.name} / {node.name}"
 
 
+def _initial_stage_id_for_leaf(db: Session, leaf: TaxonomyNode) -> int | None:
+    """Return the id of the ``is_initial`` active stage on the leaf's top-level node.
+
+    Returns ``None`` if the top-level category has no stages, no stage is
+    marked initial, or only archived stages match. Items in those cases keep
+    ``current_stage_id = NULL`` — the column's legitimate default state for a
+    category that doesn't model lifecycle.
+    """
+    chain = ancestor_chain(db, leaf)
+    if not chain:
+        return None
+    top_level = chain[0]
+    row_id = db.execute(
+        select(TaxonomyStage.id)
+        .where(TaxonomyStage.top_level_node_id == top_level.id)
+        .where(TaxonomyStage.is_initial.is_(True))
+        .where(TaxonomyStage.archived_at.is_(None))
+    ).scalar()
+    return int(row_id) if row_id is not None else None
+
+
+def _stage_label(item: Item, db: Session) -> str:
+    """Display label for an item's current lifecycle stage; ``""`` if unset."""
+    if item.current_stage_id is None:
+        return ""
+    stage = db.get(TaxonomyStage, item.current_stage_id)
+    return stage.name if stage is not None else ""
+
+
 # ---------------------------------------------------------------------------
 # List view
 # ---------------------------------------------------------------------------
@@ -1319,6 +1349,7 @@ _ITEMS_CSV_HEADERS: list[str] = [
     "sku",
     "name",
     "category",
+    "stage",
     "unit",
     "tracking_mode",
     "current_qty",
@@ -1342,6 +1373,7 @@ def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
             r["item"].sku,
             r["item"].name,
             r["category_label"],
+            r.get("stage_label", ""),
             r["item"].unit,
             r["item"].tracking_mode.value,
             r["item"].current_qty,
@@ -1421,6 +1453,7 @@ def list_items(
         {
             "item": item,
             "category_label": _category_label(item, db),
+            "stage_label": _stage_label(item, db),
         }
         for item in items
     ]
@@ -1772,6 +1805,8 @@ async def create_item(
             raise
         return _re_render(str(exc.detail))
 
+    initial_stage_id = _initial_stage_id_for_leaf(db, dest_leaf)
+
     item = Item(
         sku=fields["sku"],
         name=fields["name"],
@@ -1787,6 +1822,7 @@ async def create_item(
         notes=fields["notes"],
         current_qty=Decimal("0"),
         assigned_sequence=allocated_seq,
+        current_stage_id=initial_stage_id,
     )
     db.add(item)
     db.flush()

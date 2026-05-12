@@ -24,6 +24,8 @@
                data-testid="stock-adjust-link">Adjust</a>
             <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/transfer"
                data-testid="stock-transfer-link">Transfer</a>
+            <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/stage"
+               data-testid="stage-change-link">Change stage</a>
             {% if item.requires_checkout %}
                 <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/checkout"
                    data-testid="checkout-link">Check out</a>
@@ -60,6 +62,12 @@
             <div>
                 <span class="uc-stat-label">Reorder threshold</span>
                 <span class="uc-strong uc-num" data-testid="item-detail-threshold">{{ item.reorder_threshold }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Stage</span>
+                <span class="uc-strong" data-testid="item-detail-stage">
+                    {% if current_stage %}{{ current_stage.name }}{% else %}—{% endif %}
+                </span>
             </div>
         </div>
     {% endcall %}

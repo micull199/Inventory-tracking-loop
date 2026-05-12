@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Change stage — {{ item.name }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Change stage: " ~ item.name,
+        subtitle="Record a lifecycle stage transition. Stage history is append-only.",
+        heading_testid="stage-change-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost"
+           href="/admin/items/{{ item.id }}/detail"
+           data-testid="stage-change-back">&larr; Back to item</a>
+    {% endcall %}
+
+    <div class="uc-stack-4 uc-mb-6">
+        {% call c.card("Item") %}
+            <div class="uc-grid-2">
+                <div>
+                    <div class="uc-label">SKU</div>
+                    <div class="uc-strong uc-num">{{ item.sku }}</div>
+                </div>
+                <div>
+                    <div class="uc-label">Category</div>
+                    <div class="uc-strong">{{ top_level.name }}</div>
+                </div>
+                <div>
+                    <div class="uc-label">Current stage</div>
+                    <div class="uc-strong" data-testid="current-stage">
+                        {% if current_stage %}{{ current_stage.name }}{% else %}—{% endif %}
+                    </div>
+                </div>
+            </div>
+        {% endcall %}
+
+        {% if next_stages %}
+            {% call c.card("Transition") %}
+                <form method="post" action="/admin/items/{{ item.id }}/stage" data-testid="stage-change-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                    <div class="uc-field">
+                        <label class="uc-label" for="to_stage_id">Move to <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-input" id="to_stage_id" name="to_stage_id" required
+                                data-testid="stage-change-to-input">
+                            <option value="">— pick a stage —</option>
+                            {% for s in next_stages %}
+                                <option value="{{ s.id }}">{{ s.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="uc-field">
+                        <label class="uc-label" for="reason">Reason <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" id="reason" name="reason" required
+                               value="{{ form.reason }}"
+                               data-testid="stage-change-reason-input"
+                               maxlength="255"
+                               placeholder="e.g. Polished, QC passed">
+                    </div>
+
+                    <div class="uc-field">
+                        <label class="uc-label" for="note">Note</label>
+                        <textarea class="uc-input" id="note" name="note" rows="3"
+                                  data-testid="stage-change-note-input"
+                                  maxlength="2000">{{ form.note }}</textarea>
+                    </div>
+
+                    <div class="uc-actions">
+                        {{ c.button("Record stage change", type="submit", testid="stage-change-submit") }}
+                        <a class="uc-btn uc-btn--ghost"
+                           href="/admin/items/{{ item.id }}/detail"
+                           data-testid="stage-change-cancel">Cancel</a>
+                    </div>
+                </form>
+            {% endcall %}
+        {% else %}
+            <p class="uc-muted" data-testid="stage-change-no-targets">
+                No other active stages defined on this category.
+                {% if current_user.role.value == "manager" or current_user.role.value == "admin" %}
+                    <a href="/admin/taxonomy/{{ top_level.id }}/stages">Manage stages</a>.
+                {% endif %}
+            </p>
+        {% endif %}
+    </div>
+{% endblock %}

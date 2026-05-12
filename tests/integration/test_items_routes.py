@@ -3092,7 +3092,7 @@ class TestItemsListCsvBody:
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 200
         assert resp.text == (
-            "id,sku,name,category,unit,tracking_mode,current_qty,"
+            "id,sku,name,category,stage,unit,tracking_mode,current_qty,"
             "reorder_threshold,reorder_qty,requires_checkout\r\n"
         )
 
@@ -3123,14 +3123,15 @@ class TestItemsListCsvBody:
         assert cells[1] == "MAT-A"
         assert cells[2] == "Silver wire"
         assert cells[3] == "Raw Materials"
-        assert cells[4] == "g"
-        assert cells[5] == "qty"
+        assert cells[4] == ""  # stage — no stages configured for this category
+        assert cells[5] == "g"
+        assert cells[6] == "qty"
         # current_qty / reorder_threshold / reorder_qty round-trip via the
         # column at scale 4 — Decimal("10.0000") str()s to "10.0000".
-        assert Decimal(cells[6]) == Decimal("10")
-        assert Decimal(cells[7]) == Decimal("5")
-        assert Decimal(cells[8]) == Decimal("20")
-        assert cells[9] == "no"
+        assert Decimal(cells[7]) == Decimal("10")
+        assert Decimal(cells[8]) == Decimal("5")
+        assert Decimal(cells[9]) == Decimal("20")
+        assert cells[10] == "no"
 
     def test_flagged_item_renders_yes(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3151,7 +3152,8 @@ class TestItemsListCsvBody:
         # The requires_checkout cell carries the literal string "yes" (not
         # "True"). Two-cell match avoids accidental hit on a substring "yes"
         # elsewhere — preceded by tracking_mode=unique and zero qty/threshold/
-        # reorder; ends with a CRLF.
+        # reorder; ends with a CRLF. (Stage cell — empty here — sits between
+        # ``category`` and ``unit`` in the row layout.)
         assert ",unique,0.0000,0.0000,0.0000,yes\r\n" in resp.text
 
     def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:

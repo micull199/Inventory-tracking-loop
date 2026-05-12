@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost"
+           href="/admin/taxonomy/{{ node.id }}/stages"
+           data-testid="stage-form-back">&larr; Back</a>
+    {% endcall %}
+
+    <p data-testid="stage-form-parent-context" class="uc-muted uc-mb-4">
+        Category: <strong>{{ node.name }}</strong>
+    </p>
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="stage-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <div class="uc-field">
+                <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                <input class="uc-input" type="text" id="name" name="name" required
+                       value="{{ form.name }}"
+                       data-testid="stage-name-input"
+                       maxlength="64">
+                <small class="uc-helper">e.g. Raw, Polishing, Ready-to-ship.</small>
+            </div>
+
+            <div class="uc-field">
+                <label class="uc-label" for="sort_order">Sort order</label>
+                <input class="uc-input" type="number" id="sort_order" name="sort_order"
+                       value="{{ form.sort_order }}"
+                       data-testid="stage-sort-order-input"
+                       step="1">
+                <small class="uc-helper">Lower numbers appear first. Leave blank to append.</small>
+            </div>
+
+            <div class="uc-field">
+                <label class="uc-checkbox-label">
+                    <input type="checkbox" name="is_initial" value="true"
+                           data-testid="stage-is-initial-input"
+                           {% if form.is_initial %}checked{% endif %}>
+                    Initial stage
+                </label>
+                <small class="uc-helper">New items in this category start here. At most one initial stage per category.</small>
+            </div>
+
+            <div class="uc-actions">
+                {{ c.button("Save", type="submit", testid="stage-save") }}
+                <a class="uc-btn uc-btn--ghost"
+                   href="/admin/taxonomy/{{ node.id }}/stages"
+                   data-testid="stage-cancel">Cancel</a>
+            </div>
+        </form>
+    {% endcall %}
+{% endblock %}

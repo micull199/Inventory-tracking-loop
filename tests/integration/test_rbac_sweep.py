@@ -150,6 +150,16 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/taxonomy/fields/99999", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/archive", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/unarchive", MANAGER),
+    # Lifecycle stages CRUD — Manager-only. Stages are owned by a top-level
+    # taxonomy node; per-item transitions live under /admin/items further
+    # down with the workshop+ surface.
+    ("GET", "/admin/taxonomy/99999/stages", MANAGER),
+    ("GET", "/admin/taxonomy/99999/stages/new", MANAGER),
+    ("POST", "/admin/taxonomy/99999/stages", MANAGER),
+    ("GET", "/admin/taxonomy/stages/99999/edit", MANAGER),
+    ("POST", "/admin/taxonomy/stages/99999", MANAGER),
+    ("POST", "/admin/taxonomy/stages/99999/archive", MANAGER),
+    ("POST", "/admin/taxonomy/stages/99999/unarchive", MANAGER),
     # --- Manager-only: audit log read view ---
     ("GET", "/admin/audit", MANAGER),
     # --- Manager-only: items create / archive / unarchive ---
@@ -214,6 +224,11 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/items/99999/transfer", WORKSHOP),
     ("POST", "/admin/items/99999/transfer", WORKSHOP),
     ("GET", "/admin/items/99999/detail", WORKSHOP),
+    # Lifecycle stage transition on an item — Workshop+ (same writer surface
+    # as the stock movements above). The owning stages are configured by
+    # Manager on the taxonomy admin block above.
+    ("GET", "/admin/items/99999/stage", WORKSHOP),
+    ("POST", "/admin/items/99999/stage", WORKSHOP),
     # --- Workshop+: checkouts (item-level) ---
     ("GET", "/admin/items/99999/checkout", WORKSHOP),
     ("POST", "/admin/items/99999/checkout", WORKSHOP),

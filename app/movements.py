@@ -111,8 +111,11 @@ from app.models import (
     MovementType,
     Role,
     StockMovement,
+    TaxonomyNode,
+    TaxonomyStage,
     User,
 )
+from app.sku import ancestor_chain
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/items", tags=["movements"])
@@ -1215,5 +1218,180 @@ def item_detail(
             "movements": movements,
             "pagination": pagination,
             "can_edit_item": _can_edit_item(user),
+            "current_stage": _resolve_stage(db, item.current_stage_id),
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle stage transition
+# ---------------------------------------------------------------------------
+#
+# A ``STAGE_CHANGE`` movement is the append-only record of an item moving
+# between two stages owned by its top-level category. ``qty`` is always
+# ``Decimal("0")`` — no quantity moves, the row exists only to keep the
+# movement timeline coherent. Cost engine is never invoked.
+
+
+def _item_top_level_node(db: Session, item: Item) -> TaxonomyNode | None:
+    """Return the depth-0 ancestor of the item's taxonomy node, or None.
+
+    Walks ``parent_id`` via the existing ``app.sku.ancestor_chain`` helper.
+    Returns ``None`` only if the item somehow has no node (defensive — the
+    FK is NOT NULL).
+    """
+    node = db.get(TaxonomyNode, item.taxonomy_node_id)
+    if node is None:
+        return None
+    chain = ancestor_chain(db, node)
+    return chain[0] if chain else None
+
+
+def _resolve_stage(db: Session, stage_id: int | None) -> TaxonomyStage | None:
+    if stage_id is None:
+        return None
+    return db.get(TaxonomyStage, stage_id)
+
+
+def _available_next_stages(
+    db: Session, *, top_level_node_id: int, exclude_stage_id: int | None
+) -> list[TaxonomyStage]:
+    """Active stages on the item's top-level category, minus the current one."""
+    stmt = (
+        select(TaxonomyStage)
+        .where(TaxonomyStage.top_level_node_id == top_level_node_id)
+        .where(TaxonomyStage.archived_at.is_(None))
+    )
+    if exclude_stage_id is not None:
+        stmt = stmt.where(TaxonomyStage.id != exclude_stage_id)
+    stmt = stmt.order_by(TaxonomyStage.sort_order, TaxonomyStage.id)
+    return list(db.execute(stmt).scalars().all())
+
+
+@router.get("/{item_id}/stage", response_class=HTMLResponse)
+def stage_change_form(
+    request: Request,
+    item_id: int,
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+    top_level = _item_top_level_node(db, item)
+    if top_level is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="item has no taxonomy node",
+        )
+
+    next_stages = _available_next_stages(
+        db,
+        top_level_node_id=top_level.id,
+        exclude_stage_id=item.current_stage_id,
+    )
+    return templates.TemplateResponse(
+        request,
+        "item_stage_form.html",
+        {
+            "current_user": user,
+            "item": item,
+            "top_level": top_level,
+            "current_stage": _resolve_stage(db, item.current_stage_id),
+            "next_stages": next_stages,
+            "recent_movements": _recent_movements(db, item.id),
+            "form": {
+                "to_stage_id": "",
+                "reason": "",
+                "note": "",
+            },
+        },
+    )
+
+
+@router.post("/{item_id}/stage")
+def record_stage_change(
+    request: Request,
+    item_id: int,
+    to_stage_id: str = Form(""),
+    reason: str = Form(""),
+    note: str = Form(""),
+    user: User = Depends(require_role(Role.WORKSHOP, Role.OFFICE, Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    item = _get_item_or_404(db, item_id)
+    _reject_archived(item)
+
+    top_level = _item_top_level_node(db, item)
+    if top_level is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="item has no taxonomy node",
+        )
+
+    target_id = _parse_int_id(to_stage_id, field_name="target stage")
+    target = db.get(TaxonomyStage, target_id)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target stage not found",
+        )
+    if target.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot transition to an archived stage",
+        )
+    if target.top_level_node_id != top_level.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target stage does not belong to this item's category",
+        )
+    if item.current_stage_id is not None and item.current_stage_id == target.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="item is already at that stage",
+        )
+
+    clean_reason = _parse_required_reason(reason)
+    clean_note = (note or "").strip() or None
+    from_stage = _resolve_stage(db, item.current_stage_id)
+
+    movement = StockMovement(
+        item_id=item.id,
+        type=MovementType.STAGE_CHANGE,
+        qty=Decimal("0"),
+        user_id=user.id,
+        reason=clean_reason,
+        note=clean_note,
+        from_stage_id=item.current_stage_id,
+        to_stage_id=target.id,
+    )
+    db.add(movement)
+    db.flush()
+
+    before_stage_id = item.current_stage_id
+    item.current_stage_id = target.id
+
+    record_audit(
+        db,
+        actor=user,
+        action="stock_movement.stage_change",
+        entity_type="stock_movement",
+        entity_id=movement.id,
+        before={
+            "current_stage_id": before_stage_id,
+            "current_stage_name": from_stage.name if from_stage is not None else None,
+        },
+        after={
+            "item_id": item.id,
+            "current_stage_id": target.id,
+            "current_stage_name": target.name,
+            "reason": clean_reason,
+            "note": clean_note,
+        },
+    )
+    db.commit()
+    _flash(request, f"{item.name} → stage “{target.name}”.")
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/detail",
+        status_code=status.HTTP_303_SEE_OTHER,
     )

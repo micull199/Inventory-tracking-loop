@@ -61,6 +61,7 @@
                                 {% if n.id in leaf_ids %}
                                     <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-fields">Fields</a>
                                 {% endif %}
+                                <a href="/admin/taxonomy/{{ n.id }}/stages" data-testid="open-stages">Stages</a>
                                 <a href="/admin/taxonomy/{{ n.id }}/edit" data-testid="edit-taxonomy">Edit</a>
                                 {% if n.archived_at is none %}
                                     <form method="post" action="/admin/taxonomy/{{ n.id }}/archive" style="display:inline">
