@@ -1,20 +1,24 @@
-"""Manager-owned custom-field-def CRUD on a taxonomy *leaf* node (S5).
+"""Manager-owned custom-field-def CRUD on any taxonomy node (S5).
 
-Items will inherit the field schema of their leaf node (I1+I2). For v1 (per
-MISSION §3) a "leaf" is either a top-level node with no active sub-categories,
-or any sub-category. Field defs only attach to leaves; the routes here enforce
-that invariant on create and on unarchive.
+Items inherit field defs from their leaf node *and every ancestor* — defining
+a field on a top-level category propagates to every sub-category under it.
+This module owns the per-node CRUD; the inheritance walk lives in
+``app.items._get_active_field_defs``.
+
+Field keys must be unique across a node and all its ancestors / descendants.
+Sibling-level collisions (two different sub-categories under the same parent
+both defining ``"colour"``) are allowed — those keys are independently scoped.
 
 URL shape (matches S4 sub-cat conventions: parent-scoped for list/create,
 flat-by-id for the rest):
 
 - ``/admin/taxonomy/{node_id}/fields[?show=…]``       — list (active/archived).
-- ``/admin/taxonomy/{node_id}/fields/new``             — form (only if leaf).
+- ``/admin/taxonomy/{node_id}/fields/new``             — form.
 - ``POST /admin/taxonomy/{node_id}/fields``            — create.
 - ``/admin/taxonomy/fields/{field_id}/edit``           — edit form.
 - ``POST /admin/taxonomy/fields/{field_id}``           — update.
 - ``POST /admin/taxonomy/fields/{field_id}/archive``   — archive.
-- ``POST /admin/taxonomy/fields/{field_id}/unarchive`` — unarchive (leaf re-checked).
+- ``POST /admin/taxonomy/fields/{field_id}/unarchive`` — unarchive.
 
 The router is mounted at the same prefix as ``app.taxonomy.router``
 (``/admin/taxonomy``) but kept in a separate module so neither file passes the
@@ -210,6 +214,83 @@ def _check_key_unique(
         )
 
 
+def _ancestor_ids(db: Session, node: TaxonomyNode) -> list[int]:
+    """Walk ``parent_id`` upward from ``node`` (exclusive). Top of chain first."""
+    chain: list[int] = []
+    cursor: TaxonomyNode | None = node
+    seen: set[int] = set()
+    if cursor is not None and cursor.parent_id is not None:
+        cursor = db.get(TaxonomyNode, cursor.parent_id)
+        while cursor is not None and cursor.id not in seen:
+            chain.append(cursor.id)
+            seen.add(cursor.id)
+            if cursor.parent_id is None:
+                break
+            cursor = db.get(TaxonomyNode, cursor.parent_id)
+    return chain
+
+
+def _descendant_ids(db: Session, node_id: int) -> list[int]:
+    """Two-level descendant collection (matches the taxonomy depth limit).
+
+    Excludes ``node_id`` itself. Includes both active and archived descendants
+    — archived sub-cats can still host field defs whose keys would clash on
+    unarchive.
+    """
+    children = list(
+        db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id == node_id))
+        .scalars()
+        .all()
+    )
+    grandchildren: list[int] = []
+    if children:
+        grandchildren = list(
+            db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id.in_(children)))
+            .scalars()
+            .all()
+        )
+    return [*children, *grandchildren]
+
+
+def _check_key_unique_in_tree(
+    db: Session, *, node: TaxonomyNode, key: str, exclude_id: int | None = None
+) -> None:
+    """Reject ``key`` if it collides with any active field def on an ancestor
+    or descendant of ``node``.
+
+    Field defs inherit downward through ancestors (see
+    ``app.items._get_active_field_defs``), so the same key appearing at two
+    different levels would surface twice on a leaf's item form — ambiguous and
+    bug-prone. Sibling-level collisions (two different sub-categories under the
+    same parent both defining ``"colour"``) are fine: those keys are
+    independently scoped.
+    """
+    others = set(_ancestor_ids(db, node)) | set(_descendant_ids(db, node.id))
+    if not others:
+        return
+    stmt = (
+        select(TaxonomyFieldDef.id, TaxonomyFieldDef.node_id)
+        .where(TaxonomyFieldDef.node_id.in_(others))
+        .where(TaxonomyFieldDef.key == key)
+        .where(TaxonomyFieldDef.archived_at.is_(None))
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TaxonomyFieldDef.id != exclude_id)
+    row = db.execute(stmt).first()
+    if row is None:
+        return
+    other_node = db.get(TaxonomyNode, row.node_id)
+    other_name = other_node.name if other_node is not None else f"node {row.node_id}"
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"field key {key!r} already exists on “{other_name}” in the same "
+            "category tree. Field keys must be unique across a category and its "
+            "descendants (inheritance would surface it twice)."
+        ),
+    )
+
+
 def _next_sort_order(db: Session, node_id: int) -> int:
     stmt = select(func.max(TaxonomyFieldDef.sort_order)).where(TaxonomyFieldDef.node_id == node_id)
     current_max = db.execute(stmt).scalar()
@@ -327,6 +408,30 @@ def list_field_defs(
     if node.parent_id is not None:
         parent = db.get(TaxonomyNode, node.parent_id)
 
+    # Inherited groups — active field defs on each ancestor, grouped by the
+    # owning node so the template can render "Inherited from <name>" blocks.
+    # Always shown on the active tab; the archived tab is for this node's own
+    # archived defs only.
+    inherited_groups: list[dict[str, object]] = []
+    if show == "active":
+        ancestor_ids = _ancestor_ids(db, node)
+        for ancestor_id in ancestor_ids:
+            ancestor = db.get(TaxonomyNode, ancestor_id)
+            if ancestor is None:
+                continue
+            ancestor_fields = list(
+                db.execute(
+                    select(TaxonomyFieldDef)
+                    .where(TaxonomyFieldDef.node_id == ancestor.id)
+                    .where(TaxonomyFieldDef.archived_at.is_(None))
+                    .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
+                )
+                .scalars()
+                .all()
+            )
+            if ancestor_fields:
+                inherited_groups.append({"node": ancestor, "fields": ancestor_fields})
+
     return templates.TemplateResponse(
         request,
         "taxonomy_field_defs_list.html",
@@ -335,6 +440,7 @@ def list_field_defs(
             "node": node,
             "parent": parent,
             "fields": rows,
+            "inherited_groups": inherited_groups,
             "show": show,
             "is_leaf": _is_leaf(db, node),
             "back_url": _children_back_url(node),
@@ -362,14 +468,6 @@ def new_field_def_form(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add fields under an archived node",
-        )
-    if not _is_leaf(db, node):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "fields can only be added to a leaf node — this node has "
-                "sub-categories. Add fields to those sub-categories instead."
-            ),
         )
 
     parent: TaxonomyNode | None = None
@@ -418,11 +516,6 @@ def create_field_def(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add fields under an archived node",
         )
-    if not _is_leaf(db, node):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=("fields can only be added to a leaf node — this node has sub-categories"),
-        )
 
     fields = _normalise(name, type, options_text, required, sort_order)
     _validate_name(fields["name"])
@@ -430,6 +523,7 @@ def create_field_def(
 
     _check_name_unique(db, node_id=node.id, name=fields["name"])
     _check_key_unique(db, node_id=node.id, key=key)
+    _check_key_unique_in_tree(db, node=node, key=key)
 
     if fields["sort_order"] is None:
         fields["sort_order"] = _next_sort_order(db, node.id)
@@ -575,6 +669,11 @@ def update_field_def(
 
     _check_name_unique(db, node_id=field.node_id, name=fields["name"], exclude_id=field.id)
     _check_key_unique(db, node_id=field.node_id, key=new_key, exclude_id=field.id)
+    field_node = db.get(TaxonomyNode, field.node_id)
+    assert field_node is not None  # FK guarantees presence; narrows for mypy
+    _check_key_unique_in_tree(
+        db, node=field_node, key=new_key, exclude_id=field.id
+    )
     if fields["sort_order"] is None:
         fields["sort_order"] = field.sort_order
 
@@ -699,10 +798,13 @@ def unarchive_field_def(
     field = _get_field_def(db, field_id)
 
     if field.archived_at is not None:
-        # The leaf invariant has to hold on unarchive too — without this, a
-        # def archived back when the node was a leaf could be silently
-        # resurrected after the node grew sub-categories, leaving a dangling
-        # def on a non-leaf. Symmetric with the create-time check.
+        # Node-archive guard stays — an archived node is structurally inert
+        # and shouldn't accept a re-activated field. The legacy "leaf only"
+        # gate is dropped: field defs can now live on any node and inherit
+        # downward, so unarchiving onto a parent-of-children is legitimate.
+        # The tree-wide key uniqueness is re-checked so a sibling field
+        # added at a different level while this one was archived doesn't
+        # silently clash on resurrection.
         node = db.get(TaxonomyNode, field.node_id)
         assert node is not None
         if node.archived_at is not None:
@@ -710,11 +812,7 @@ def unarchive_field_def(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="cannot unarchive a field on an archived node",
             )
-        if not _is_leaf(db, node):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=("cannot unarchive a field on a node that has sub-categories"),
-            )
+        _check_key_unique_in_tree(db, node=node, key=field.key, exclude_id=field.id)
 
         previous = field.archived_at
         field.archived_at = None

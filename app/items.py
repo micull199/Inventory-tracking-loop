@@ -890,15 +890,46 @@ _VALUE_COLUMN: dict[FieldType, str] = {
 }
 
 
+def _ancestor_chain_ids(db: Session, node_id: int) -> list[int]:
+    """Return the id chain ``[root, …, node_id]`` by walking ``parent_id`` upward.
+
+    Returns ``[]`` if the node doesn't exist. Top-level nodes return their own
+    id only. Cap at the taxonomy's natural depth (3) plus a safety margin to
+    defend against a cycle from a corrupt parent_id chain.
+    """
+    chain: list[int] = []
+    cursor: TaxonomyNode | None = db.get(TaxonomyNode, node_id)
+    seen: set[int] = set()
+    while cursor is not None and cursor.id not in seen:
+        chain.append(cursor.id)
+        seen.add(cursor.id)
+        if cursor.parent_id is None:
+            break
+        cursor = db.get(TaxonomyNode, cursor.parent_id)
+    chain.reverse()
+    return chain
+
+
 def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
-    """Active (non-archived) field defs for ``node_id``, ordered by sort_order then name."""
+    """Active field defs effective for ``node_id``, including inherited from ancestors.
+
+    Walks up the parent chain and collects ``archived_at IS NULL`` field defs
+    from every node in the chain. Order: root first (most general), then
+    descendants (most specific); within each level, by ``sort_order`` then
+    ``name``. Item forms render the inherited fields above the leaf's own.
+    """
+    chain = _ancestor_chain_ids(db, node_id)
+    if not chain:
+        return []
     stmt = (
         select(TaxonomyFieldDef)
-        .where(TaxonomyFieldDef.node_id == node_id)
+        .where(TaxonomyFieldDef.node_id.in_(chain))
         .where(TaxonomyFieldDef.archived_at.is_(None))
-        .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
     )
-    return list(db.execute(stmt).scalars().all())
+    rows = list(db.execute(stmt).scalars().all())
+    chain_position = {nid: idx for idx, nid in enumerate(chain)}
+    rows.sort(key=lambda r: (chain_position[r.node_id], r.sort_order, r.name))
+    return rows
 
 
 def _filter_category_options(db: Session) -> list[dict[str, Any]]:

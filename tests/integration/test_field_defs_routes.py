@@ -288,17 +288,23 @@ class TestFieldDefList:
         assert "Karat" in resp.text
         assert "HandleSize" not in resp.text
 
-    def test_list_renders_non_leaf_note_when_node_has_active_children(
+    def test_list_on_non_leaf_node_allows_field_management(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """Inheritance: a non-leaf node can host fields that descendants inherit.
+
+        Pre-inheritance the field-defs list rendered a "non-leaf-note" steering
+        the user to manage fields on the sub-categories instead. With
+        inheritance, the parent is the *right* place to define shared schema.
+        """
         parent = _make_node(db_session, "Raw Materials")
         _make_sub(db_session, parent, "Silver")
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/taxonomy/{parent.id}/fields")
         assert resp.status_code == 200
-        assert "non-leaf-note" in resp.text
-        assert "new-field-def" not in resp.text  # CTA hidden
+        assert "non-leaf-note" not in resp.text
+        assert "new-field-def" in resp.text  # CTA visible on non-leaf too
 
     def test_list_for_archived_node_shows_note_and_no_cta(
         self, client: TestClient, db_session: Session
@@ -355,15 +361,16 @@ class TestFieldDefCreate:
         resp = client.get(f"/admin/taxonomy/{node.id}/fields/new")
         assert resp.status_code == 400
 
-    def test_get_new_form_under_non_leaf_is_400(
+    def test_get_new_form_under_non_leaf_is_allowed(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """Inheritance: defining a field on a parent makes every child inherit."""
         parent = _make_node(db_session)
         _make_sub(db_session, parent)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/taxonomy/{parent.id}/fields/new")
-        assert resp.status_code == 400
+        assert resp.status_code == 200
 
     def test_get_new_form_under_top_level_with_only_archived_children_is_ok(
         self, client: TestClient, db_session: Session
@@ -791,7 +798,10 @@ class TestFieldDefCreate:
         )
         assert resp.status_code == 303
 
-    def test_create_under_non_leaf_is_400(self, client: TestClient, db_session: Session) -> None:
+    def test_create_under_non_leaf_is_allowed(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Inheritance: a parent category can host fields that descendants inherit."""
         parent = _make_node(db_session)
         _make_sub(db_session, parent)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -805,7 +815,7 @@ class TestFieldDefCreate:
             },
             follow_redirects=False,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 303
 
     def test_create_under_archived_node_is_400(
         self, client: TestClient, db_session: Session
@@ -1291,15 +1301,10 @@ class TestFieldDefArchive:
         rows = _audit_rows(db_session, action="taxonomy_field_def.unarchived")
         assert rows == []
 
-    def test_unarchive_on_non_leaf_node_is_400(
+    def test_unarchive_on_non_leaf_node_is_allowed(
         self, client: TestClient, db_session: Session
     ) -> None:
-        """Symmetric with the create-time leaf check.
-
-        Sequence: create field on a leaf (top-level with no children), archive
-        it, then add a sub-cat (which un-leafs the parent). Unarchiving the
-        archived field def should now be rejected — schema doesn't apply.
-        """
+        """Inheritance: a field on a non-leaf node is legitimate (it inherits down)."""
         parent = _make_node(db_session)
         f = TaxonomyFieldDef(
             node_id=parent.id,
@@ -1310,8 +1315,6 @@ class TestFieldDefArchive:
         )
         db_session.add(f)
         db_session.commit()
-        # Add a sub-cat that un-leafs the parent (allowed because the only
-        # field def is archived).
         _make_sub(db_session, parent)
         f_id = f.id
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -1321,7 +1324,7 @@ class TestFieldDefArchive:
             data={"csrf_token": _csrf(client)},
             follow_redirects=False,
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 303
 
     def test_unarchive_on_archived_node_is_400(
         self, client: TestClient, db_session: Session
@@ -1360,14 +1363,15 @@ class TestFieldDefArchive:
 
 
 # ---------------------------------------------------------------------------
-# Cross-cutting: sub-cat create blocked when parent has active field defs.
+# Cross-cutting: sub-cat create + parent fields now coexist via inheritance.
 # ---------------------------------------------------------------------------
 
 
-class TestSubCategoryCreateGuardedByActiveFieldDefs:
-    def test_create_sub_under_node_with_active_field_def_is_400(
+class TestSubCategoryCreateWithParentFieldsInherits:
+    def test_create_sub_under_node_with_active_field_def_is_allowed(
         self, client: TestClient, db_session: Session
     ) -> None:
+        """Inheritance replaces the legacy block: parent fields propagate to new sub-cats."""
         parent = _make_node(db_session)
         db_session.add(
             TaxonomyFieldDef(
@@ -1385,15 +1389,13 @@ class TestSubCategoryCreateGuardedByActiveFieldDefs:
             data={"name": "Silver", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
-        assert resp.status_code == 400
-        assert (
-            db_session.execute(
-                select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
-            ).first()
-            is None
-        )
+        assert resp.status_code == 303
+        sub = db_session.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent.id)
+        ).scalar_one()
+        assert sub.name == "Silver"
 
-    def test_new_sub_form_GET_under_node_with_active_field_def_is_400(
+    def test_new_sub_form_GET_under_node_with_active_field_def_is_allowed(
         self, client: TestClient, db_session: Session
     ) -> None:
         parent = _make_node(db_session)
@@ -1409,7 +1411,7 @@ class TestSubCategoryCreateGuardedByActiveFieldDefs:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.get(f"/admin/taxonomy/{parent.id}/children/new")
-        assert resp.status_code == 400
+        assert resp.status_code == 200
 
     def test_create_sub_works_when_only_archived_field_defs(
         self, client: TestClient, db_session: Session

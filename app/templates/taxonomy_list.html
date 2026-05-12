@@ -58,7 +58,7 @@
                             </td>
                             <td class="uc-actions">
                                 <a href="/admin/taxonomy/{{ n.id }}/children" data-testid="open-children">Sub-categories</a>
-                                {% if n.id in leaf_ids %}
+                                {% if n.archived_at is none %}
                                     <a href="/admin/taxonomy/{{ n.id }}/fields" data-testid="open-fields">Fields</a>
                                 {% endif %}
                                 <a href="/admin/taxonomy/{{ n.id }}/stages" data-testid="open-stages">Stages</a>

@@ -6,10 +6,10 @@
 
     {% call c.page_header(
         "Fields on " ~ node.name,
-        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Custom field schema for items in this leaf category.",
+        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Custom field schema for items in this category. Fields defined here are inherited by every sub-category below.",
         heading_testid="field-defs-heading"
     ) %}
-        {% if not node.archived_at and is_leaf %}
+        {% if not node.archived_at %}
             {{ c.button("+ New field", href="/admin/taxonomy/" ~ node.id ~ "/fields/new", testid="new-field-def") }}
         {% endif %}
     {% endcall %}
@@ -21,10 +21,6 @@
     {% if node.archived_at %}
         <p data-testid="node-archived-note" class="uc-muted">
             <em>This node is archived. Existing fields stay visible for history; no new fields can be added.</em>
-        </p>
-    {% elif not is_leaf %}
-        <p data-testid="non-leaf-note" class="uc-muted">
-            <em>This category has sub-categories. Fields are defined per leaf — manage them on each sub-category.</em>
         </p>
     {% endif %}
 
@@ -77,7 +73,51 @@
         {% endcall %}
     {% endif %}
 
-    <h3 class="uc-section-title">Custom fields</h3>
+    {% if inherited_groups %}
+        <h3 class="uc-section-title" data-testid="inherited-fields-heading">Inherited fields</h3>
+        <p class="uc-helper uc-mb-4">
+            Defined on a parent category. Read-only here — edit them on the owning category to change them for every descendant.
+        </p>
+        {% for group in inherited_groups %}
+            {% call c.card() %}
+                <div class="uc-row-2 uc-mb-4" data-testid="inherited-fields-group" data-source-node-id="{{ group.node.id }}">
+                    <strong>From “{{ group.node.name }}”</strong>
+                    <a href="/admin/taxonomy/{{ group.node.id }}/fields"
+                       data-testid="inherited-fields-source-link">Manage on “{{ group.node.name }}” &rarr;</a>
+                </div>
+                <div class="uc-table-wrap">
+                    <table class="uc-table" data-testid="inherited-fields-table">
+                        <thead>
+                            <tr>
+                                <th class="uc-right">Order</th>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Required</th>
+                                <th>Options</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for f in group.fields %}
+                                <tr data-testid="inherited-field-row" data-field-id="{{ f.id }}">
+                                    <td class="uc-num uc-right">{{ f.sort_order }}</td>
+                                    <td>{{ f.name }}</td>
+                                    <td>{{ f.type.value }}</td>
+                                    <td>{% if f.required %}Yes{% else %}No{% endif %}</td>
+                                    <td>
+                                        {% if f.options_json %}
+                                            {{ f.options_json | join(", ") }}
+                                        {% else %}—{% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endcall %}
+        {% endfor %}
+    {% endif %}
+
+    <h3 class="uc-section-title">Custom fields (this category)</h3>
 
     <nav class="uc-tabs" aria-label="Filter fields" data-testid="field-defs-tabs">
         <a href="/admin/taxonomy/{{ node.id }}/fields?show=active"

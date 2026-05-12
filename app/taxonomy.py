@@ -50,7 +50,6 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
-from app.field_defs import has_active_field_defs
 from app.models import (
     Archetype,
     Item,
@@ -1129,17 +1128,10 @@ def new_sub_category_form(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add sub-categories under an archived category",
         )
-    # S5 leaf invariant: a top-level node with active field defs is the leaf
-    # — adding a sub-cat would un-leaf it and orphan the schema. Manager has
-    # to archive the field defs first.
-    if has_active_field_defs(db, parent.id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "cannot add sub-categories: this category has custom fields. "
-                "Archive the fields first, then add sub-categories."
-            ),
-        )
+    # Field defs at this level remain valid — sub-categories created under
+    # them will inherit those fields automatically (see
+    # ``app.items._get_active_field_defs``). Items attached here still block
+    # the un-leafing because they'd be orphaned at the schema level.
     if _has_active_items(db, parent.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1199,15 +1191,7 @@ def create_sub_category(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="cannot add sub-categories under an archived category",
         )
-    # S5 leaf invariant — same as the form GET above.
-    if has_active_field_defs(db, parent.id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "cannot add sub-categories: this category has custom fields. "
-                "Archive the fields first, then add sub-categories."
-            ),
-        )
+    # Field defs at this level remain valid — see the GET form for context.
     if _has_active_items(db, parent.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1596,14 +1580,8 @@ def new_grandchild_form(
                 "automatically when items are added"
             ),
         )
-    if has_active_field_defs(db, sub.id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "cannot add sub-sub-categories: this sub-category has "
-                "custom fields. Archive the fields first."
-            ),
-        )
+    # Field defs at this level remain valid — sub-sub-categories created
+    # here will inherit them automatically.
     if _has_active_items(db, sub.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1673,14 +1651,8 @@ def create_grandchild(
                 "automatically when items are added"
             ),
         )
-    if has_active_field_defs(db, sub.id):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "cannot add sub-sub-categories: this sub-category has "
-                "custom fields. Archive the fields first."
-            ),
-        )
+    # Field defs at this level remain valid — sub-sub-categories created
+    # here will inherit them automatically.
     if _has_active_items(db, sub.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
