@@ -1,19 +1,17 @@
-"""Per-leaf visibility rules for built-in item-form fields.
+"""Default visibility for built-in item-form fields.
 
-A Manager can mark each built-in field as ``required``, ``optional``, or
-``hidden`` on a taxonomy leaf via the Fields admin page. The items form
-respects these on render (hide hidden, drop required attr on optional) and
-the items POST handler respects them on submit (ignore submitted values for
-hidden fields, skip required-string validation for optional ones,
-auto-fill DB-required fields that are hidden).
+Slice 6 of the catalog-driven taxonomy refactor removed per-leaf
+overrides — every node now uses the same defaults. The module survives
+as a thin compatibility shim because ``app.items`` route handlers pass
+the resulting dict through to the form template, and inlining that
+constant at every callsite would just be churn.
 
-Persistence: ``TaxonomyNode.field_visibility_json`` — JSON dict mapping
-field name → state string. Absent keys / null column fall back to
-``_DEFAULT_VISIBILITY`` below.
+Two things follow from the deletion of the override:
 
-Categories outside the manager's surface (``sku``, ``taxonomy_node_id``) are
-not configurable. SKU auto-generates from the leaf prefix; category is the
-selector for the whole form, so toggling it would be incoherent.
+1. ``effective_field_visibility(node)`` no longer reads the database. It
+   ignores ``node`` entirely and returns the defaults. The parameter is
+   retained so callers don't have to be touched.
+2. ``TaxonomyNode.field_visibility_json`` is dropped in migration 0023.
 """
 
 from __future__ import annotations
@@ -22,8 +20,8 @@ from typing import Final
 
 from app.models import TaxonomyNode
 
-# Field-name strings here mirror the items form's ``name=`` attributes and
-# the items route's ``Form(...)`` parameter names. Keep in sync with both.
+# Field-name strings mirror the items form's ``name=`` attributes and the
+# items route's ``Form(...)`` parameter names. Keep in sync with both.
 BUILT_IN_FIELDS: Final[tuple[str, ...]] = (
     "name",
     "unit",
@@ -36,11 +34,10 @@ BUILT_IN_FIELDS: Final[tuple[str, ...]] = (
     "qr_code",
 )
 
-VISIBILITY_STATES: Final[tuple[str, ...]] = ("required", "optional", "hidden")
-
-# Defaults match the current items form's behaviour pre-visibility: ``name``
-# and ``unit`` are required (DB NOT NULL), everything else is optional. A
-# Manager can override these per-leaf via the Fields admin page.
+# ``name`` and ``unit`` are DB NOT NULL on ``Item``, so they stay required
+# at form level — without them the route would 400 anyway. Everything else
+# is optional. SKU is auto-allocated and handled as a structural field
+# elsewhere; it's never in this dict.
 _DEFAULT_VISIBILITY: Final[dict[str, str]] = {
     "name": "required",
     "unit": "required",
@@ -55,23 +52,13 @@ _DEFAULT_VISIBILITY: Final[dict[str, str]] = {
 
 
 def effective_field_visibility(node: TaxonomyNode | None) -> dict[str, str]:
-    """Resolve the effective visibility map for ``node``.
+    """Return the default visibility map. ``node`` is ignored.
 
-    Returns a dict with every key in ``BUILT_IN_FIELDS``. The stored
-    ``field_visibility_json`` overlays the defaults; unknown keys and
-    invalid values are ignored (defensive against hand-edited rows).
+    Pre-slice-6 this looked up ``node.field_visibility_json`` and overlaid
+    the defaults; that column is gone and the override mechanism with it.
     """
-    out = dict(_DEFAULT_VISIBILITY)
-    if node is None:
-        return out
-    stored = node.field_visibility_json
-    if not stored:
-        return out
-    for key in BUILT_IN_FIELDS:
-        raw = stored.get(key)
-        if isinstance(raw, str) and raw in VISIBILITY_STATES:
-            out[key] = raw
-    return out
+
+    return dict(_DEFAULT_VISIBILITY)
 
 
 def is_hidden(visibility: dict[str, str], field: str) -> bool:
@@ -80,22 +67,3 @@ def is_hidden(visibility: dict[str, str], field: str) -> bool:
 
 def is_required(visibility: dict[str, str], field: str) -> bool:
     return visibility.get(field) == "required"
-
-
-def validate_visibility_submission(form: dict[str, str]) -> dict[str, str]:
-    """Coerce a flat form submission into a visibility dict.
-
-    Inputs from the admin form arrive as ``visibility_<field>`` keys (e.g.
-    ``visibility_name=required``). Unknown fields and invalid states are
-    silently dropped — the resulting dict is what gets stored on
-    ``field_visibility_json``. An all-defaults dict still gets stored so
-    the round-trip is observable in audit logs.
-    """
-    out: dict[str, str] = {}
-    for key in BUILT_IN_FIELDS:
-        raw = form.get(f"visibility_{key}", "")
-        if raw in VISIBILITY_STATES:
-            out[key] = raw
-        else:
-            out[key] = _DEFAULT_VISIBILITY[key]
-    return out

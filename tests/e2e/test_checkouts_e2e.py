@@ -133,7 +133,9 @@ def test_workshop_checks_out_a_unique_tracked_unit(
     mgr_page.get_by_test_id("item-tracking-mode-input").select_option("unique")
     mgr_page.get_by_test_id("item-requires-checkout-input").check()
     mgr_page.get_by_test_id("item-submit").click()
-    mgr_page.wait_for_url(f"{app_server}/admin/items")
+    # Slice 5: create redirects to /admin/items?node_id=<category> so the
+    # per-category items list shows the new row.
+    mgr_page.wait_for_url(lambda u: u.startswith(f"{app_server}/admin/items?"))
 
     item_row = mgr_page.locator('[data-testid="item-row"]', has_text="CHK-MOULD-1")
     item_id = item_row.get_attribute("data-item-id")

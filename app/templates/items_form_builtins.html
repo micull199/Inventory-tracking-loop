@@ -1,0 +1,164 @@
+{# Built-in item fields. Rendered once from ``items_form.html`` outside the
+   HTMX swap target, so values typed before the user picks a category are not
+   wiped when the category-change HTMX fragment swaps in.
+
+   Variables expected:
+       form, ro, can_edit_thresholds, item (None on create, the row on edit),
+       supplier_options, location_options, tracking_modes.
+#}
+
+{# ---- Identity (SKU readonly on edit, Name) ---- #}
+<section class="uc-section">
+    <h2 class="uc-section-title">Identity</h2>
+
+    {% if item %}
+        {# Create-side SKU input lives above the category picker (always
+           visible). Edit-side SKU is system-allocated and read-only; keep
+           the hidden input + the readonly display next to Name. #}
+        <div class="uc-field">
+            <span class="uc-label">SKU</span>
+            <div class="uc-num uc-strong" data-testid="item-sku-readonly">{{ form.sku }}</div>
+        </div>
+        <input type="hidden" name="sku" value="{{ form.sku }}">
+    {% endif %}
+
+    <div class="uc-field">
+        <label class="uc-label" for="name">
+            Name <span class="uc-required" aria-hidden="true">*</span>
+        </label>
+        <input class="uc-input" type="text" id="name" name="name"
+               required
+               value="{{ form.name }}"
+               data-testid="item-name-input"
+               maxlength="255"
+               {% if ro %}disabled{% endif %}>
+    </div>
+</section>
+
+{# ---- Stock behaviour: Unit, Tracking mode, Requires checkout ---- #}
+<section class="uc-section">
+    <h2 class="uc-section-title">Stock behaviour</h2>
+
+    <div class="uc-field">
+        <label class="uc-label" for="unit">
+            Unit <span class="uc-required" aria-hidden="true">*</span>
+        </label>
+        <input class="uc-input" type="text" id="unit" name="unit"
+               required
+               value="{{ form.unit }}"
+               data-testid="item-unit-input"
+               maxlength="32"
+               placeholder="e.g. g, ml, ea"
+               {% if ro %}disabled{% endif %}>
+    </div>
+
+    <div class="uc-field">
+        <label class="uc-label" for="tracking_mode">Tracking mode</label>
+        <select class="uc-select" id="tracking_mode" name="tracking_mode"
+                data-testid="item-tracking-mode-input"
+                {% if ro %}disabled{% endif %}>
+            {% for m in tracking_modes %}
+                <option value="{{ m }}"
+                        {% if form.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="uc-field">
+        <label class="uc-check">
+            <input type="checkbox" id="requires_checkout" name="requires_checkout" value="true"
+                   data-testid="item-requires-checkout-input"
+                   {% if form.requires_checkout %}checked{% endif %}
+                   {% if ro %}disabled{% endif %}>
+            Requires check-out (tools, moulds)
+        </label>
+        <small class="uc-helper" data-testid="item-requires-checkout-help">
+            Track who has the item out and when it's due back.
+        </small>
+    </div>
+</section>
+
+{# ---- Reorder: threshold + qty ---- #}
+<section class="uc-section">
+    <h2 class="uc-section-title">Reorder</h2>
+
+    {% if can_edit_thresholds %}
+        <div class="uc-grid-2">
+            <div class="uc-field">
+                <label class="uc-label" for="reorder_threshold">Reorder threshold</label>
+                <input class="uc-input" type="text" inputmode="decimal" id="reorder_threshold" name="reorder_threshold"
+                       value="{{ form.reorder_threshold }}"
+                       data-testid="item-reorder-threshold-input"
+                       {% if ro %}disabled{% endif %}>
+            </div>
+            <div class="uc-field">
+                <label class="uc-label" for="reorder_qty">Reorder quantity</label>
+                <input class="uc-input" type="text" inputmode="decimal" id="reorder_qty" name="reorder_qty"
+                       value="{{ form.reorder_qty }}"
+                       data-testid="item-reorder-qty-input"
+                       {% if ro %}disabled{% endif %}>
+            </div>
+        </div>
+    {% else %}
+        <div class="uc-grid-2">
+            <div class="uc-field">
+                <span class="uc-label">Reorder threshold</span>
+                <div class="uc-num">
+                    <span data-testid="item-reorder-threshold-readonly">{{ form.reorder_threshold }}</span>
+                    <small class="uc-helper">Manager-only</small>
+                </div>
+            </div>
+            <div class="uc-field">
+                <span class="uc-label">Reorder quantity</span>
+                <div class="uc-num">
+                    <span data-testid="item-reorder-qty-readonly">{{ form.reorder_qty }}</span>
+                    <small class="uc-helper">Manager-only</small>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</section>
+
+{# ---- References: Supplier, Location, QR code ---- #}
+<section class="uc-section">
+    <h2 class="uc-section-title">References</h2>
+
+    <div class="uc-grid-2">
+        <div class="uc-field">
+            <label class="uc-label" for="supplier_id">Supplier</label>
+            <select class="uc-select" id="supplier_id" name="supplier_id" data-testid="item-supplier-input"
+                    {% if ro %}disabled{% endif %}>
+                <option value="">— none —</option>
+                {% for s in supplier_options %}
+                    <option value="{{ s.id }}"
+                            {% if form.supplier_id == (s.id | string) %}selected{% endif %}>
+                        {{ s.label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="uc-field">
+            <label class="uc-label" for="location_id">Location</label>
+            <select class="uc-select" id="location_id" name="location_id" data-testid="item-location-input"
+                    {% if ro %}disabled{% endif %}>
+                <option value="">— none —</option>
+                {% for l in location_options %}
+                    <option value="{{ l.id }}"
+                            {% if form.location_id == (l.id | string) %}selected{% endif %}>
+                        {{ l.label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="uc-field">
+        <label class="uc-label" for="qr_code">QR code</label>
+        <input class="uc-input" type="text" id="qr_code" name="qr_code"
+               value="{{ form.qr_code }}"
+               data-testid="item-qr-input"
+               maxlength="128"
+               {% if ro %}disabled{% endif %}>
+    </div>
+</section>

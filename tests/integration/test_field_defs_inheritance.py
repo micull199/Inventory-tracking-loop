@@ -177,12 +177,8 @@ class TestTreeWideKeyUniqueness:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
-            f"/admin/taxonomy/{sub.id}/fields",
-            data={
-                "name": "Karat",
-                "type": "text",
-                "csrf_token": _csrf(client),
-            },
+            f"/admin/taxonomy/{sub.id}/fields/pick",
+            data={"catalog_key": "karat", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -197,12 +193,8 @@ class TestTreeWideKeyUniqueness:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
-            f"/admin/taxonomy/{top.id}/fields",
-            data={
-                "name": "Karat",
-                "type": "text",
-                "csrf_token": _csrf(client),
-            },
+            f"/admin/taxonomy/{top.id}/fields/pick",
+            data={"catalog_key": "karat", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 400
@@ -219,15 +211,15 @@ class TestTreeWideKeyUniqueness:
         _login_as(client, mgr)
 
         resp_a = client.post(
-            f"/admin/taxonomy/{sub_a.id}/fields",
-            data={"name": "Karat", "type": "text", "csrf_token": _csrf(client)},
+            f"/admin/taxonomy/{sub_a.id}/fields/pick",
+            data={"catalog_key": "karat", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp_a.status_code == 303
 
         resp_b = client.post(
-            f"/admin/taxonomy/{sub_b.id}/fields",
-            data={"name": "Karat", "type": "text", "csrf_token": _csrf(client)},
+            f"/admin/taxonomy/{sub_b.id}/fields/pick",
+            data={"catalog_key": "karat", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp_b.status_code == 303
@@ -244,8 +236,8 @@ class TestTreeWideKeyUniqueness:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
         resp = client.post(
-            f"/admin/taxonomy/{sub.id}/fields",
-            data={"name": "Karat", "type": "text", "csrf_token": _csrf(client)},
+            f"/admin/taxonomy/{sub.id}/fields/pick",
+            data={"catalog_key": "karat", "csrf_token": _csrf(client)},
             follow_redirects=False,
         )
         assert resp.status_code == 303

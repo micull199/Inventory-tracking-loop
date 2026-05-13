@@ -159,20 +159,15 @@ def test_manager_creates_views_archives_and_unarchives_a_category(
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
     expect(mgr_page.get_by_test_id("field-defs-empty")).to_be_visible()
 
-    # Step 17: Create a "Karat" select field with options 9, 14, 18.
-    mgr_page.get_by_test_id("new-field-def").click()
-    mgr_page.wait_for_url(lambda u: u.endswith("/fields/new"))
-    mgr_page.get_by_test_id("field-def-name-input").fill("Karat")
-    mgr_page.get_by_test_id("field-def-type-input").select_option("select")
-    mgr_page.get_by_test_id("field-def-options-input").fill("9\n14\n18")
-    mgr_page.get_by_test_id("field-def-required-input").check()
-    mgr_page.get_by_test_id("field-def-submit").click()
+    # Step 17: Pick the "Karat" field from the hardcoded catalog.
+    mgr_page.get_by_test_id("field-def-picker-select").select_option("karat")
+    mgr_page.get_by_test_id("field-def-picker-submit").click()
     mgr_page.wait_for_url(lambda u: u.endswith("/fields"))
     expect(mgr_page.get_by_test_id("flash")).to_contain_text("Karat")
     karat_row = mgr_page.locator('[data-testid="field-def-row"]', has_text="Karat")
     expect(karat_row).to_be_visible()
     expect(karat_row.get_by_test_id("field-def-type")).to_have_text("select")
-    expect(karat_row.get_by_test_id("field-def-required")).to_have_text("Yes")
+    expect(karat_row.get_by_test_id("field-def-catalog-key")).to_contain_text("karat")
 
     # Step 18: Archive it.
     karat_row.get_by_test_id("archive-field-def").click()

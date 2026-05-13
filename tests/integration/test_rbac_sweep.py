@@ -140,15 +140,7 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren/new", MANAGER),
     ("POST", "/admin/taxonomy/99999/sub/99999/grandchildren", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields", MANAGER),
-    ("GET", "/admin/taxonomy/99999/fields/new", MANAGER),
-    ("POST", "/admin/taxonomy/99999/fields", MANAGER),
     ("POST", "/admin/taxonomy/99999/fields/pick", MANAGER),
-    ("POST", "/admin/taxonomy/99999/fields/visibility", MANAGER),
-    # HTMX fragment: options-textarea visibility per type — Manager-only,
-    # same gate as the form that drives it.
-    ("GET", "/admin/taxonomy/fields/_options-partial", MANAGER),
-    ("GET", "/admin/taxonomy/fields/99999/edit", MANAGER),
-    ("POST", "/admin/taxonomy/fields/99999", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/archive", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/unarchive", MANAGER),
     # Lifecycle stages CRUD — Manager-only. Stages are owned by a top-level

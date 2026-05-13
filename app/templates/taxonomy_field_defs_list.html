@@ -6,12 +6,9 @@
 
     {% call c.page_header(
         "Fields on " ~ node.name,
-        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Custom field schema for items in this category. Fields defined here are inherited by every sub-category below.",
+        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Pick the fields items in this category collect. The picker draws from the hardcoded catalog so the same field can&rsquo;t be invented twice under different names. Fields picked here are inherited by every sub-category below.",
         heading_testid="field-defs-heading"
     ) %}
-        {% if not node.archived_at %}
-            {{ c.button("+ New field", href="/admin/taxonomy/" ~ node.id ~ "/fields/new", testid="new-field-def") }}
-        {% endif %}
     {% endcall %}
 
     {% if parent %}
@@ -22,55 +19,6 @@
         <p data-testid="node-archived-note" class="uc-muted">
             <em>This node is archived. Existing fields stay visible for history; no new fields can be added.</em>
         </p>
-    {% endif %}
-
-    {% if is_leaf and not node.archived_at and built_in_fields %}
-        {% call c.card() %}
-            <h3 class="uc-section-title" data-testid="built-in-fields-heading">Built-in fields</h3>
-            <p class="uc-helper uc-mb-4">
-                Choose which of the standard item fields appear on the Add Item form for this category.
-                Hidden fields are auto-filled on submit (name → SKU; unit → default).
-            </p>
-            <form method="post"
-                  action="/admin/taxonomy/{{ node.id }}/fields/visibility"
-                  data-testid="built-in-fields-form">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <div class="uc-table-wrap">
-                    <table class="uc-table" data-testid="built-in-fields-table">
-                        <thead>
-                            <tr>
-                                <th>Field</th>
-                                <th>Visibility</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for f in built_in_fields %}
-                                <tr data-testid="built-in-field-row" data-field="{{ f }}">
-                                    <td data-testid="built-in-field-name">{{ f.replace("_", " ").capitalize() }}</td>
-                                    <td>
-                                        <select class="uc-select"
-                                                name="visibility_{{ f }}"
-                                                data-testid="visibility-{{ f }}">
-                                            {% for s in visibility_states %}
-                                                <option value="{{ s }}"
-                                                        {% if field_visibility[f] == s %}selected{% endif %}>
-                                                    {{ s.capitalize() }}
-                                                </option>
-                                            {% endfor %}
-                                        </select>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% call c.form_actions() %}
-                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="built-in-fields-submit">
-                        Save visibility
-                    </button>
-                {% endcall %}
-            </form>
-        {% endcall %}
     {% endif %}
 
     {% if inherited_groups %}
@@ -210,7 +158,6 @@
                                 {% endif %}
                             </td>
                             <td class="uc-actions">
-                                <a href="/admin/taxonomy/fields/{{ f.id }}/edit" data-testid="edit-field-def">Edit</a>
                                 {% if f.archived_at is none %}
                                     <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/archive" style="display:inline">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

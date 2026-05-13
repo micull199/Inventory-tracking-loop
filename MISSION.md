@@ -22,19 +22,21 @@ All users authenticate with Google SSO (UC already uses Google Workspace).
 
 ### In scope (v1)
 
-**Taxonomy (categories, sub-categories, custom fields)**
-- Managers and Admins can define a hierarchy of categories and sub-categories from the settings UI. The hierarchy is at most two levels deep (Category → Sub-category) for v1.
-- For each leaf node (a Category, or a Sub-category if one exists under that Category), a Manager can define a schema of custom fields: name, type (text, number, decimal, date, boolean, single-select with options, multi-select with options), and whether it is required.
-- Items inherit the field schema of their leaf node. Required custom fields must be filled to save the item.
-- The schema is versioned. Editing a field schema does not retroactively break existing items: existing items keep their stored values, but new edits to those items must satisfy the current schema. Deleting a field hides it from new entry but preserves the value in audit history.
+**Taxonomy (categories, sub-categories, picked fields)**
+- Managers and Admins define a hierarchy of categories and sub-categories from the settings UI. The hierarchy is at most two levels deep (Category → Sub-category) for v1.
+- For each node (Category or Sub-category), a Manager picks fields from a fixed in-code catalog (`app/field_catalog.py`). Each catalog entry has a stable key, label, type (text, number, decimal, date, boolean, single-select, multi-select), and a storage target — either a column on the item or a row in `item_field_values`. Fields are not invented per-node; they are chosen from a curated list so the same field cannot be defined twice under different names.
+- A field picked on a node is inherited by every descendant. The same catalog entry cannot be picked twice in one ancestor-descendant chain (sibling sub-categories may independently pick the same entry — those keys are scoped to their branch).
+- Per-leaf overrides: a picked field can be marked **required**, given a custom **sort order**, and **archived**. Archived picks hide the field from new entry but preserve existing values in history.
+- The catalog is hardcoded. Adding a new field type or entry is a code change plus a migration, never a settings-UI action. Deliberate: each new field gets a deliberate review of audit-log shape, CSV column meaning, and storage target rather than letting unstructured drift accumulate.
 - A Manager can rename, archive, or reorder taxonomy nodes. Archived nodes are hidden from item creation but still appear in historical reports and on existing items.
-- Seed taxonomy on first run: Raw Materials, Consumables, Tools, Wax Injection Moulds, each with no sub-categories and no custom fields. Managers configure from there.
+- Seed taxonomy on first run: Raw Materials, Consumables, Tools, Wax Injection Moulds, each with no sub-categories and no picked fields. Managers configure from there.
 
 **Item management**
-- Each item belongs to exactly one leaf node in the taxonomy.
-- Each item has core fields: name, SKU, optional QR code, unit of measurement, current quantity, reorder threshold, reorder quantity, supplier, location, notes, created/updated timestamps. (Cost is tracked via FIFO layers, not as a single field — see Cost tracking.)
-- On top of core fields, each item has the custom fields defined by its leaf node.
-- Some items are tracked uniquely (one record per physical item, e.g. a specific tool or mould). Others are tracked by quantity on hand (e.g. a box of polishing compound).
+- Each item belongs to exactly one node in the taxonomy.
+- SKU is the only structural field — system-allocated from the leaf's prefix, present on every item. Every other field on an item — name, unit, quantity, supplier, location, threshold, reorder qty, tracking mode, checkout requirement, plus jewellery-specific fields like karat or weight — is present on the item *iff* the item's node (or an ancestor) picked that field from the catalog. Required picks must be filled to save.
+- Some catalog entries store values directly on the `items` table (column-backed: name, unit, supplier_id, location_id, reorder_threshold, reorder_qty, requires_checkout, tracking_mode, qr_code, notes); others store them in `item_field_values` (row-backed: karat, weight_grams, material, etc.). Item code reads and writes both through a single storage abstraction (`app/field_storage.py`) so route logic is uniform.
+- Items page requires the user to pick a category before items are shown. The table columns and CSV export then match exactly the fields that category's tree collects from the catalog.
+- Quantity is present on every item. Tracking mode `unique` forces `current_qty = 1` and disables reorder logic (one-of-a-kind items); tracking mode `qty` is the default for stock that is counted in bulk. (Cost is tracked via FIFO layers regardless of tracking mode — see Cost tracking.)
 - Items can be archived (soft delete), not hard deleted.
 
 **Stock movements**

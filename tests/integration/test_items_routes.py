@@ -549,12 +549,13 @@ class TestItemCreate:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, "Raw Materials")
         _login_as(client, mgr)
-        # With no category picked, only the picker shows + a prompt to pick.
+        # SKU is the only structural field (MISSION §3 Item management) so
+        # it renders before the category picker — always visible.
         resp = client.get("/admin/items/new")
         assert resp.status_code == 200
         assert 'data-testid="item-category-picker"' in resp.text
         assert 'data-testid="item-pick-category-prompt"' in resp.text
-        assert 'data-testid="item-sku-input"' not in resp.text
+        assert 'data-testid="item-sku-input"' in resp.text
         # Pre-selecting a category via ?node_id= renders the full form.
         resp = client.get(f"/admin/items/new?node_id={leaf.id}")
         assert resp.status_code == 200
@@ -585,7 +586,9 @@ class TestItemCreate:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == "/admin/items"
+        # Slice 5 onward: redirect to the created item's category so the
+        # items list (per-category since slice 5) actually shows the new row.
+        assert resp.headers["location"].startswith("/admin/items?node_id=")
 
         item = db_session.execute(select(Item)).scalar_one()
         # Server now owns SKU allocation under the taxonomy refinement; the
@@ -4325,183 +4328,6 @@ class TestSkuPreviewOnCustomFieldsFragment:
         assert 'id="sku-preview"' in resp.text
         assert "Next SKU:" not in resp.text
 
-
-# ---------------------------------------------------------------------------
-# Built-in field visibility (per leaf)
-# ---------------------------------------------------------------------------
-
-
-class TestBuiltInFieldVisibility:
-    """A Manager can mark built-in item-form fields as required, optional, or
-    hidden on a taxonomy leaf via the Fields admin page. Hidden fields are
-    auto-filled on submit (name → SKU; unit → leaf default or "ea"); optional
-    fields skip the required-string validation; required is the default and
-    preserves current behaviour."""
-
-    def test_hidden_name_falls_back_to_sku_on_create(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        leaf.field_visibility_json = {"name": "hidden"}
-        leaf.defaults_json = {"unit": "ea"}
-        db_session.add(leaf)
-        db_session.commit()
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            "/admin/items",
-            data=_create_payload(
-                name="ignored on hidden",
-                taxonomy_node_id=leaf.id,
-                unit="g",
-                csrf=_csrf(client),
-            ),
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303, resp.text
-        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
-        # ``name`` got auto-filled with the allocated SKU; the user-typed
-        # value was ignored because the field is hidden.
-        assert item.name == item.sku
-        assert item.name != "ignored on hidden"
-
-    def test_hidden_unit_falls_back_to_leaf_default(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        leaf.field_visibility_json = {"unit": "hidden"}
-        leaf.defaults_json = {"unit": "ea"}
-        db_session.add(leaf)
-        db_session.commit()
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            "/admin/items",
-            data=_create_payload(
-                name="Ruby band",
-                taxonomy_node_id=leaf.id,
-                unit="g",  # ignored, hidden
-                csrf=_csrf(client),
-            ),
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303, resp.text
-        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
-        assert item.unit == "ea"
-
-    def test_hidden_unit_with_no_default_falls_back_to_ea(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        leaf.field_visibility_json = {"unit": "hidden"}
-        # No defaults_json — server uses the "ea" fallback.
-        db_session.add(leaf)
-        db_session.commit()
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            "/admin/items",
-            data=_create_payload(
-                name="Plain band",
-                taxonomy_node_id=leaf.id,
-                unit="",  # hidden, blank
-                csrf=_csrf(client),
-            ),
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303, resp.text
-        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
-        assert item.unit == "ea"
-
-    def test_optional_name_blank_falls_back_to_sku(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        leaf.field_visibility_json = {"name": "optional"}
-        db_session.add(leaf)
-        db_session.commit()
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            "/admin/items",
-            data=_create_payload(
-                name="",  # blank, optional → falls back to SKU
-                taxonomy_node_id=leaf.id,
-                unit="g",
-                csrf=_csrf(client),
-            ),
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303, resp.text
-        item = db_session.execute(select(Item).where(Item.taxonomy_node_id == leaf.id)).scalar_one()
-        assert item.name == item.sku
-
-    def test_required_name_blank_still_400s(self, client: TestClient, db_session: Session) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        # No visibility column → defaults apply (name=required).
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            "/admin/items",
-            data=_create_payload(
-                name="",
-                taxonomy_node_id=leaf.id,
-                unit="g",
-                csrf=_csrf(client),
-            ),
-        )
-        assert resp.status_code == 400, resp.text
-        assert "name is required" in resp.text
-
-    def test_visibility_save_route_persists_dict(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.post(
-            f"/admin/taxonomy/{leaf.id}/fields/visibility",
-            data={
-                "csrf_token": _csrf(client),
-                "visibility_name": "hidden",
-                "visibility_unit": "optional",
-                "visibility_supplier_id": "hidden",
-                # Other fields omitted → fall back to defaults.
-            },
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        db_session.refresh(leaf)
-        stored = leaf.field_visibility_json or {}
-        assert stored["name"] == "hidden"
-        assert stored["unit"] == "optional"
-        assert stored["supplier_id"] == "hidden"
-        # An omitted entry collapses to the default.
-        assert stored["tracking_mode"] == "optional"
-        assert stored["reorder_threshold"] == "optional"
-
-    def test_form_render_hides_section_when_all_fields_hidden(
-        self, client: TestClient, db_session: Session
-    ) -> None:
-        leaf = _make_leaf(db_session, name="Rings")
-        leaf.field_visibility_json = {
-            "reorder_threshold": "hidden",
-            "reorder_qty": "hidden",
-            "supplier_id": "hidden",
-            "location_id": "hidden",
-            "qr_code": "hidden",
-        }
-        db_session.add(leaf)
-        db_session.commit()
-        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        _login_as(client, mgr)
-        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
-        assert resp.status_code == 200
-        # Whole Reorder + References sections are gone.
-        assert "Reorder threshold" not in resp.text
-        assert "QR code" not in resp.text
-        # Stock behaviour still present (default).
-        assert "Stock behaviour" in resp.text
 
 
 # ---------------------------------------------------------------------------

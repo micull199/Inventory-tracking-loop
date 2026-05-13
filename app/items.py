@@ -1988,7 +1988,13 @@ async def create_item(
     )
     db.commit()
     _flash(request, f"Item “{item.name}” created.")
-    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
+    # Redirect back to the items list scoped to the created item's category
+    # so the user lands on a page that actually shows the new row (the list
+    # is per-category since slice 5).
+    return RedirectResponse(
+        url=f"/admin/items?node_id={item.taxonomy_node_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # ---------------------------------------------------------------------------
