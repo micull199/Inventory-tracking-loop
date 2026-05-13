@@ -416,6 +416,7 @@ class TaxonomyFieldDef(Base):
         ),
         Index("ix_taxonomy_field_defs_node_id", "node_id"),
         Index("ix_taxonomy_field_defs_archived_at", "archived_at"),
+        Index("ix_taxonomy_field_defs_catalog_key", "catalog_key"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -426,6 +427,10 @@ class TaxonomyFieldDef(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # References ``app.field_catalog.FIELD_CATALOG[*].key``. Nullable for the
+    # backfill window introduced in migration 0021; tightened to NOT NULL in
+    # 0023 once 0022 has matched every row.
+    catalog_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     type: Mapped[FieldType] = mapped_column(
         SAEnum(
             FieldType,
@@ -1441,9 +1446,7 @@ class TransferOrder(Base):
     __tablename__ = "transfer_orders"
     __table_args__ = (
         Index("ix_transfer_orders_source_location_id", "source_location_id"),
-        Index(
-            "ix_transfer_orders_destination_location_id", "destination_location_id"
-        ),
+        Index("ix_transfer_orders_destination_location_id", "destination_location_id"),
         Index("ix_transfer_orders_status", "status"),
         Index("ix_transfer_orders_created_at", "created_at"),
     )

@@ -779,10 +779,18 @@ class TestDeployInfrastructure:
         assert dockerfile.exists(), "Dockerfile missing at repo root — required for Fly.io deploy"
 
     def test_dockerfile_names_uvicorn(self) -> None:
-        dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
-        text = dockerfile.read_text(encoding="utf-8")
-        assert "uvicorn" in text, (
-            "Dockerfile does not reference uvicorn; expected CMD to start uvicorn"
+        repo_root = Path(__file__).resolve().parents[2]
+        dockerfile = repo_root / "Dockerfile"
+        candidates = [dockerfile.read_text(encoding="utf-8")]
+        # The Dockerfile may delegate startup to a script (e.g. fly-entrypoint.sh)
+        # that invokes uvicorn after running migrations. Pull in any *.sh script
+        # the Dockerfile references so this assertion covers either layout.
+        for script in (repo_root / "scripts").glob("*.sh"):
+            if script.name in candidates[0]:
+                candidates.append(script.read_text(encoding="utf-8"))
+        assert any("uvicorn" in text for text in candidates), (
+            "Neither the Dockerfile nor any script it references invokes uvicorn; "
+            "expected CMD (directly or via an entrypoint script) to start uvicorn"
         )
 
     def test_fly_toml_exists_at_repo_root(self) -> None:
@@ -790,9 +798,15 @@ class TestDeployInfrastructure:
         assert fly_toml.exists(), "fly.toml missing at repo root — required for Fly.io deploy"
 
     def test_fly_toml_names_release_command(self) -> None:
-        fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"
-        text = fly_toml.read_text(encoding="utf-8")
-        assert "alembic upgrade head" in text, (
-            "fly.toml does not set release_command to 'alembic upgrade head'; "
+        repo_root = Path(__file__).resolve().parents[2]
+        fly_toml = repo_root / "fly.toml"
+        candidates = [fly_toml.read_text(encoding="utf-8")]
+        # Migrations may run via release_command in fly.toml *or* via the
+        # machine-startup entrypoint script (the latter is the only option that
+        # sees a mounted volume — see fly.toml comment).
+        for script in (repo_root / "scripts").glob("*.sh"):
+            candidates.append(script.read_text(encoding="utf-8"))
+        assert any("alembic upgrade head" in text for text in candidates), (
+            "Neither fly.toml nor any scripts/*.sh runs 'alembic upgrade head'; "
             "migrations would not run automatically on deploy"
         )
