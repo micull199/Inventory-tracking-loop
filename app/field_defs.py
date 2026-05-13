@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.db import get_session
+from app.field_catalog import CATALOG_BY_KEY, FIELD_CATALOG, CatalogEntry
 from app.field_visibility import (
     BUILT_IN_FIELDS,
     VISIBILITY_STATES,
@@ -291,6 +292,35 @@ def _check_key_unique_in_tree(
     )
 
 
+def _picked_catalog_keys_in_tree(db: Session, node: TaxonomyNode) -> set[str]:
+    """Catalog keys already picked on ``node``, its ancestors, or descendants.
+
+    Used to filter the picker dropdown so users can't pick the same catalog
+    entry twice in one inheritance chain. Includes active rows only —
+    archived picks are free to be re-picked. Sibling collisions are
+    independently scoped and not surfaced here.
+    """
+    tree_ids = {node.id, *_ancestor_ids(db, node), *_descendant_ids(db, node.id)}
+    stmt = (
+        select(TaxonomyFieldDef.catalog_key)
+        .where(TaxonomyFieldDef.node_id.in_(tree_ids))
+        .where(TaxonomyFieldDef.archived_at.is_(None))
+        .where(TaxonomyFieldDef.catalog_key.is_not(None))
+    )
+    return {row for row in db.execute(stmt).scalars().all() if row}
+
+
+def _available_catalog_entries(db: Session, node: TaxonomyNode) -> list[CatalogEntry]:
+    """Catalog entries the manager can still pick on ``node``.
+
+    Order: catalog declaration order. The catalog's ``sort_order`` is the
+    field's *display* order on items (used by templates); the picker shows
+    entries in their declared order so related fields stay grouped.
+    """
+    picked = _picked_catalog_keys_in_tree(db, node)
+    return [e for e in FIELD_CATALOG if e.key not in picked]
+
+
 def _next_sort_order(db: Session, node_id: int) -> int:
     stmt = select(func.max(TaxonomyFieldDef.sort_order)).where(TaxonomyFieldDef.node_id == node_id)
     current_max = db.execute(stmt).scalar()
@@ -447,6 +477,8 @@ def list_field_defs(
             "built_in_fields": BUILT_IN_FIELDS,
             "visibility_states": VISIBILITY_STATES,
             "field_visibility": effective_field_visibility(node),
+            "available_catalog_entries": _available_catalog_entries(db, node),
+            "catalog_by_key": CATALOG_BY_KEY,
         },
     )
 
@@ -559,6 +591,85 @@ def create_field_def(
     )
     db.commit()
     _flash(request, f"Field “{field.name}” created.")
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{node.id}/fields",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pick from catalog (catalog-driven schema)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{node_id}/fields/pick")
+def pick_field_def_from_catalog(
+    request: Request,
+    node_id: int,
+    catalog_key: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Materialise a ``TaxonomyFieldDef`` row from a catalog entry.
+
+    Name, type, options, and key all come from the catalog — the manager
+    does not type them. Same tree-uniqueness rule as the free-text create
+    route (`_check_key_unique_in_tree`): a catalog entry cannot be picked
+    twice in one ancestor-descendant chain, but sibling sub-categories
+    can independently pick the same entry.
+    """
+
+    node = _get_node(db, node_id)
+    if node.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot add fields under an archived node",
+        )
+
+    entry = CATALOG_BY_KEY.get(catalog_key.strip())
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown catalog field {catalog_key!r}",
+        )
+
+    # Same-node uniqueness on both ``name`` and ``key`` (across active +
+    # archived rows). Tree uniqueness on the catalog key for active rows.
+    _check_name_unique(db, node_id=node.id, name=entry.label)
+    _check_key_unique(db, node_id=node.id, key=entry.key)
+    _check_key_unique_in_tree(db, node=node, key=entry.key)
+
+    field = TaxonomyFieldDef(
+        node_id=node.id,
+        name=entry.label,
+        key=entry.key,
+        catalog_key=entry.key,
+        type=entry.type,
+        options_json=list(entry.options) if entry.options else None,
+        required=False,
+        sort_order=_next_sort_order(db, node.id),
+    )
+    db.add(field)
+    db.flush()
+
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_field_def.picked_from_catalog",
+        entity_type="taxonomy_field_def",
+        entity_id=field.id,
+        before=None,
+        after={
+            "node_id": node.id,
+            "catalog_key": entry.key,
+            "key": field.key,
+            "label": entry.label,
+            "type": entry.type.value,
+            "storage": entry.storage,
+        },
+    )
+    db.commit()
+    _flash(request, f"Field “{entry.label}” added from the catalog.")
     return RedirectResponse(
         url=f"/admin/taxonomy/{node.id}/fields",
         status_code=status.HTTP_303_SEE_OTHER,

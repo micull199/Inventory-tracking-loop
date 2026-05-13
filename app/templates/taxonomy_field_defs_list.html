@@ -119,6 +119,47 @@
 
     <h3 class="uc-section-title">Custom fields (this category)</h3>
 
+    {% if not node.archived_at and available_catalog_entries %}
+        {% call c.card() %}
+            <form method="post"
+                  action="/admin/taxonomy/{{ node.id }}/fields/pick"
+                  data-testid="field-def-picker-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label class="uc-label" for="pick-catalog-key">
+                    Pick a field from the catalog
+                </label>
+                <p class="uc-helper uc-mb-4">
+                    Fields are chosen from a curated catalog so the same field can&rsquo;t be defined twice under different names. To add a brand-new kind of field, edit <code>app/field_catalog.py</code>.
+                </p>
+                <div class="uc-row-2">
+                    <select class="uc-select"
+                            id="pick-catalog-key"
+                            name="catalog_key"
+                            required
+                            data-testid="field-def-picker-select">
+                        <option value="" disabled selected>— choose a field —</option>
+                        {% for entry in available_catalog_entries %}
+                            <option value="{{ entry.key }}"
+                                    data-storage="{{ entry.storage }}"
+                                    data-type="{{ entry.type.value }}">
+                                {{ entry.label }} ({{ entry.type.value }})
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <button class="uc-btn uc-btn--primary"
+                            type="submit"
+                            data-testid="field-def-picker-submit">
+                        Add field
+                    </button>
+                </div>
+            </form>
+        {% endcall %}
+    {% elif not node.archived_at and not available_catalog_entries %}
+        <p class="uc-helper" data-testid="field-def-picker-empty">
+            Every catalog field is already in use somewhere in this category&rsquo;s tree.
+        </p>
+    {% endif %}
+
     <nav class="uc-tabs" aria-label="Filter fields" data-testid="field-defs-tabs">
         <a href="/admin/taxonomy/{{ node.id }}/fields?show=active"
            data-testid="field-defs-tab-active"
@@ -136,6 +177,7 @@
                         <th class="uc-right">Order</th>
                         <th>Name</th>
                         <th>Type</th>
+                        <th>From catalog</th>
                         <th>Required</th>
                         <th>Options</th>
                         <th class="uc-right">Actions</th>
@@ -152,6 +194,13 @@
                                 {% endif %}
                             </td>
                             <td data-testid="field-def-type">{{ f.type.value }}</td>
+                            <td data-testid="field-def-catalog-key">
+                                {% if f.catalog_key and catalog_by_key.get(f.catalog_key) %}
+                                    <code>{{ f.catalog_key }}</code>
+                                {% else %}
+                                    <span class="uc-muted">legacy</span>
+                                {% endif %}
+                            </td>
                             <td data-testid="field-def-required">{% if f.required %}Yes{% else %}No{% endif %}</td>
                             <td data-testid="field-def-options">
                                 {% if f.options_json %}
