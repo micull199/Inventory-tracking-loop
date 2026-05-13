@@ -57,6 +57,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from app import field_storage
 from app.audit import record_audit
 from app.auth import require_role
 from app.csv_export import csv_branch
@@ -876,18 +877,9 @@ def _can_save_item(user: User) -> bool:
 # the item — "Deleting a field hides it from new entry but preserves the
 # value in audit history."
 
-# Map a field def's type → the column on ``ItemFieldValue`` that stores the
-# value. Select stores the chosen option as a plain string in ``value_text``;
-# multiselect stores a list of strings in ``value_json``.
-_VALUE_COLUMN: dict[FieldType, str] = {
-    FieldType.TEXT: "value_text",
-    FieldType.NUMBER: "value_number",
-    FieldType.DECIMAL: "value_decimal",
-    FieldType.DATE: "value_date",
-    FieldType.BOOLEAN: "value_bool",
-    FieldType.SELECT: "value_text",
-    FieldType.MULTISELECT: "value_json",
-}
+# Field-value persistence (the ``ItemFieldValue.value_*`` column dispatch)
+# lives in ``app.field_storage`` so slice 6's column-backed catalog entries
+# can extend the abstraction in one place.
 
 
 def _ancestor_chain_ids(db: Session, node_id: int) -> list[int]:
@@ -1221,23 +1213,19 @@ def _persist_custom_field_values(
         v = values.get(fd.id)
         if not _is_set(fd, v):
             continue
-        ifv = ItemFieldValue(item_id=item_id, field_def_id=fd.id)
-        col = _VALUE_COLUMN[fd.type]
-        setattr(ifv, col, v)
-        db.add(ifv)
+        field_storage.write_new_value(db, item_id=item_id, field_def=fd, value=v)
         audit[fd.key] = _audit_friendly(fd, v)
     return audit
 
 
 def _load_custom_field_value_rows(db: Session, item_id: int) -> dict[int, ItemFieldValue]:
     """Existing ``ItemFieldValue`` rows for an item, keyed by ``field_def_id``."""
-    stmt = select(ItemFieldValue).where(ItemFieldValue.item_id == item_id)
-    return {row.field_def_id: row for row in db.execute(stmt).scalars().all()}
+    return field_storage.load_rows_for_item(db, item_id)
 
 
 def _stored_value(field_def: TaxonomyFieldDef, row: ItemFieldValue) -> Any:
     """Extract the populated value-column off a stored row."""
-    return getattr(row, _VALUE_COLUMN[field_def.type])
+    return field_storage.read_stored_value(field_def, row)
 
 
 def _diff_and_apply_custom_fields(
@@ -1265,9 +1253,9 @@ def _diff_and_apply_custom_fields(
         old_set = old_row is not None
         if new_set and not old_set:
             # Insert a new row.
-            ifv = ItemFieldValue(item_id=item_id, field_def_id=fd.id)
-            setattr(ifv, _VALUE_COLUMN[fd.type], new_val)
-            db.add(ifv)
+            field_storage.write_new_value(
+                db, item_id=item_id, field_def=fd, value=new_val
+            )
             before[fd.key] = None
             after[fd.key] = _audit_friendly(fd, new_val)
         elif not new_set and old_set:
@@ -1281,7 +1269,7 @@ def _diff_and_apply_custom_fields(
             # representations so we don't need to normalise here.
             if old_val != new_val:
                 assert old_row is not None
-                setattr(old_row, _VALUE_COLUMN[fd.type], new_val)
+                field_storage.update_existing_value(fd, old_row, new_val)
                 before[fd.key] = _audit_friendly(fd, old_val)
                 after[fd.key] = _audit_friendly(fd, new_val)
         # else: both unset — nothing to do.
