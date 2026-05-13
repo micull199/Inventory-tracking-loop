@@ -63,7 +63,6 @@ from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.field_catalog import CATALOG_BY_KEY, CatalogEntry
-from app.field_visibility import effective_field_visibility
 from app.models import (
     Archetype,
     FieldType,
@@ -925,6 +924,83 @@ def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
     return rows
 
 
+def _picked_built_in_keys(db: Session, node_id: int | None) -> set[str]:
+    """Catalog keys (``storage="column"``) picked on ``node_id`` or any ancestor.
+
+    The items form gates each built-in input on this set — fields the
+    category did not pick are hidden and auto-filled server-side (name →
+    SKU, unit → "ea") so unrelated category metadata doesn't clutter the
+    Add Item screen.
+    """
+
+    if node_id is None:
+        return set()
+    out: set[str] = set()
+    for fd in _get_active_field_defs(db, node_id):
+        if fd.catalog_key is None:
+            continue
+        entry = CATALOG_BY_KEY.get(fd.catalog_key)
+        if entry is None or entry.storage != "column":
+            continue
+        out.add(fd.catalog_key)
+    return out
+
+
+_BUILT_IN_REQUIRED_WHEN_PICKED: frozenset[str] = frozenset({"name", "unit"})
+
+
+def _built_in_visibility_from_picks(picked: set[str]) -> dict[str, str]:
+    """Derive the legacy visibility dict from the catalog picks.
+
+    Keeps the ``"required" | "optional" | "hidden"`` vocabulary the items
+    form template + form-validator already speak. Unpicked fields are
+    ``"hidden"`` (server auto-fills on save). Picked ``name`` / ``unit``
+    are ``"required"`` because the underlying columns are NOT NULL —
+    rejecting blanks here yields a clearer 400 than letting the DB
+    constraint fire. Every other picked field is ``"optional"``.
+    Slice 6 removed the per-leaf override stored in
+    ``TaxonomyNode.field_visibility_json``; the dict now derives wholly
+    from the catalog picks.
+    """
+
+    from app.field_visibility import BUILT_IN_FIELDS
+
+    out: dict[str, str] = {}
+    for key in BUILT_IN_FIELDS:
+        if key not in picked:
+            out[key] = "hidden"
+        elif key in _BUILT_IN_REQUIRED_WHEN_PICKED:
+            out[key] = "required"
+        else:
+            out[key] = "optional"
+    return out
+
+
+def _field_value_field_defs(
+    db: Session, node_id: int | None
+) -> list[TaxonomyFieldDef]:
+    """Active field defs whose catalog entry is *not* column-backed.
+
+    Column-backed picks (``unit``, ``supplier_id``, …) render as built-in
+    inputs in ``items_form_builtins.html``; the "Category fields" block
+    only renders the field-value-backed picks (``karat``, ``weight_grams``,
+    …). Legacy rows with no ``catalog_key`` keep rendering as generic
+    custom fields until they're either migrated or archived.
+    """
+
+    if node_id is None:
+        return []
+    out: list[TaxonomyFieldDef] = []
+    for fd in _get_active_field_defs(db, node_id):
+        if fd.catalog_key is None:
+            out.append(fd)
+            continue
+        entry = CATALOG_BY_KEY.get(fd.catalog_key)
+        if entry is None or entry.storage == "field_value":
+            out.append(fd)
+    return out
+
+
 def _filter_category_options(db: Session) -> list[dict[str, Any]]:
     """Return all non-archived taxonomy nodes as filter dropdown options.
 
@@ -1651,10 +1727,11 @@ def new_item_form(
         # defs so the form renders custom inputs alongside the core fields,
         # and apply any per-leaf defaults the manager configured.
         form["taxonomy_node_id"] = str(node_id)
-        field_defs = _get_active_field_defs(db, node_id)
+        field_defs = _field_value_field_defs(db, node_id)
         leaf = db.get(TaxonomyNode, node_id)
         _apply_leaf_defaults(form, leaf)
     form["custom"] = _form_for_custom_fields(field_defs, {})
+    picked_columns = _picked_built_in_keys(db, node_id)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -1672,7 +1749,8 @@ def new_item_form(
             "can_edit_thresholds": True,
             "can_save": True,
             "field_defs": field_defs,
-            "field_visibility": effective_field_visibility(leaf),
+            "field_visibility": _built_in_visibility_from_picks(picked_columns),
+            "picked_column_keys": picked_columns,
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form["taxonomy_node_id"]),
             "form_sku_preview": _sku_preview_for_form(db, form["taxonomy_node_id"]),
         },
@@ -1721,7 +1799,7 @@ def custom_fields_fragment(
     except (TypeError, ValueError):
         parsed_id = 0
     if parsed_id > 0:
-        field_defs = _get_active_field_defs(db, parsed_id)
+        field_defs = _field_value_field_defs(db, parsed_id)
         leaf = db.get(TaxonomyNode, parsed_id)
     form = _form_for_item(None)
     # The picked node id is what the partial conditional renders on. If the
@@ -1737,6 +1815,7 @@ def custom_fields_fragment(
         composed = _compose_sku_preview(db, leaf)
         if composed:
             sku_preview_caption = f"Next SKU: {composed}"
+    picked_columns = _picked_built_in_keys(db, leaf.id if leaf is not None else None)
     return templates.TemplateResponse(
         request,
         "items_form_fields.html",
@@ -1746,7 +1825,8 @@ def custom_fields_fragment(
             "ro": False,
             "item": None,
             "can_edit_thresholds": True,
-            "field_visibility": effective_field_visibility(leaf),
+            "field_visibility": _built_in_visibility_from_picks(picked_columns),
+            "picked_column_keys": picked_columns,
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
@@ -1845,7 +1925,8 @@ async def create_item(
             "notes": (notes or "").strip(),
             "custom": _custom_form_view_from_post(raw_form, view_field_defs),
         }
-        leaf_for_view = db.get(TaxonomyNode, leaf_id_for_view) if leaf_id_for_view > 0 else None
+        leaf_id_for_picks = leaf_id_for_view if leaf_id_for_view > 0 else None
+        view_picked_columns = _picked_built_in_keys(db, leaf_id_for_picks)
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -1862,8 +1943,9 @@ async def create_item(
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": True,
                 "can_save": True,
-                "field_defs": view_field_defs,
-                "field_visibility": effective_field_visibility(leaf_for_view),
+                "field_defs": _field_value_field_defs(db, leaf_id_for_picks),
+                "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
+                "picked_column_keys": view_picked_columns,
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": _sku_preview_for_form(db, form_view["taxonomy_node_id"]),
@@ -1891,7 +1973,7 @@ async def create_item(
         # validation. ``name`` left blank after _normalise is filled with
         # the allocated SKU below; ``unit`` fallback is handled inside
         # _normalise itself.
-        visibility = effective_field_visibility(picked)
+        visibility = _built_in_visibility_from_picks(_picked_built_in_keys(db, picked.id))
         leaf_defaults = picked.defaults_json or {}
 
         # Normalise the remaining fields against the *picked* leaf id
@@ -1939,7 +2021,11 @@ async def create_item(
         # user picked. For bulk / unique items the picked node is the
         # destination leaf, so the same id covers both cases.
         cf_node_id = picked.id
-        field_defs = _get_active_field_defs(db, cf_node_id)
+        # Only field-value-backed catalog entries get persisted through the
+        # ItemFieldValue path. Column-backed entries (name, unit, etc.) are
+        # already on the form's regular fields and land on Item columns
+        # directly.
+        field_defs = _field_value_field_defs(db, cf_node_id)
         parsed_custom = _collect_custom_fields(raw_form, field_defs)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_400_BAD_REQUEST:
@@ -2012,12 +2098,12 @@ def edit_item_form(
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
-    field_defs = _get_active_field_defs(db, item.taxonomy_node_id)
+    field_defs = _field_value_field_defs(db, item.taxonomy_node_id)
     existing_rows = _load_custom_field_value_rows(db, item.id)
     form = _form_for_item(item)
     form["custom"] = _form_for_custom_fields(field_defs, existing_rows)
     can_save = _can_save_item(_user)
-    leaf_node = db.get(TaxonomyNode, item.taxonomy_node_id)
+    picked_columns = _picked_built_in_keys(db, item.taxonomy_node_id)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -2035,7 +2121,8 @@ def edit_item_form(
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
             "field_defs": field_defs,
-            "field_visibility": effective_field_visibility(leaf_node),
+            "field_visibility": _built_in_visibility_from_picks(picked_columns),
+            "picked_column_keys": picked_columns,
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, item.taxonomy_node_id),
             # Edit form does not preview a "next SKU" — SKU is already
             # allocated and immutable.
@@ -2102,7 +2189,7 @@ async def update_item(
             "custom": _custom_form_view_from_post(raw_form, view_field_defs),
         }
         can_save = _can_save_item(user)
-        leaf_for_view = db.get(TaxonomyNode, leaf_id_for_view)
+        view_picked_columns = _picked_built_in_keys(db, leaf_id_for_view)
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -2119,8 +2206,9 @@ async def update_item(
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": _can_edit_thresholds(user),
                 "can_save": can_save,
-                "field_defs": view_field_defs,
-                "field_visibility": effective_field_visibility(leaf_for_view),
+                "field_defs": _field_value_field_defs(db, leaf_id_for_view),
+                "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
+                "picked_column_keys": view_picked_columns,
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": "",
@@ -2134,7 +2222,7 @@ async def update_item(
         # again inside ``_normalise``; the redundant lookup is cheap and
         # keeps the helper interface unchanged.
         edit_leaf = _resolve_leaf_node(db, taxonomy_node_id, current_id=item.taxonomy_node_id)
-        visibility = effective_field_visibility(edit_leaf)
+        visibility = _built_in_visibility_from_picks(_picked_built_in_keys(db, edit_leaf.id))
         leaf_defaults = edit_leaf.defaults_json or {}
 
         fields = _normalise(
@@ -2170,8 +2258,9 @@ async def update_item(
         # to this leaf if the category just changed) are intentionally left
         # alone — MISSION §3 "existing items keep their stored values".
         # Required-flag validation runs here, so a 400 short-circuits before
-        # any item update writes.
-        field_defs = _get_active_field_defs(db, fields["taxonomy_node_id"])
+        # any item update writes. Column-backed catalog entries are not in
+        # this set — they land on Item columns from the regular form fields.
+        field_defs = _field_value_field_defs(db, fields["taxonomy_node_id"])
         parsed_custom = _collect_custom_fields(raw_form, field_defs)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_400_BAD_REQUEST:

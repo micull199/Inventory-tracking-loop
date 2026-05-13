@@ -98,10 +98,13 @@
                 </div>
             </section>
 
-            {# Built-in inputs render once here, outside the HTMX swap
-               target, so values typed before picking a category persist
-               across category-change re-renders. #}
-            {% include "items_form_builtins.html" %}
+            {# Built-in inputs render here, outside the catalog-fields HTMX
+               swap target. When the user picks a different category, the
+               HTMX response OOB-swaps this entire block so unpicked
+               built-ins disappear and newly-picked ones appear. #}
+            <div id="item-builtins" data-testid="item-builtins">
+                {% include "items_form_builtins.html" %}
+            </div>
 
             {# Catalog-specific custom-field block. Wrapped in
                ``#item-fields-after-category`` (the HTMX swap target). Empty

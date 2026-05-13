@@ -80,12 +80,68 @@ def _audit_rows(db: Session, *, action: str | None = None) -> list[AuditLog]:
     return list(db.execute(stmt).scalars().all())
 
 
-def _make_leaf(db: Session, name: str = "Raw Materials") -> TaxonomyNode:
-    """A top-level taxonomy node with no children — i.e. a leaf."""
+_DEFAULT_PICKED_BUILT_INS: tuple[str, ...] = (
+    "name",
+    "unit",
+    "tracking_mode",
+    "requires_checkout",
+    "reorder_threshold",
+    "reorder_qty",
+    "supplier_id",
+    "location_id",
+    "qr_code",
+)
+
+
+def _pick_default_built_ins(db: Session, node: TaxonomyNode) -> None:
+    """Pick every column-backed catalog entry on ``node`` so the items form
+    renders the full set of built-in inputs.
+
+    Pre-slice-6 these inputs rendered unconditionally; slice 6 makes their
+    rendering catalog-driven. Most existing tests assume the legacy "all
+    built-ins visible" form, so this helper preserves that behaviour without
+    each test having to call the picker route.
+    """
+
+    from app.field_catalog import CATALOG_BY_KEY
+
+    for key in _DEFAULT_PICKED_BUILT_INS:
+        entry = CATALOG_BY_KEY[key]
+        db.add(
+            TaxonomyFieldDef(
+                node_id=node.id,
+                name=entry.label,
+                key=entry.key,
+                catalog_key=entry.key,
+                type=entry.type,
+                options_json=list(entry.options) if entry.options else None,
+                required=False,
+                sort_order=entry.sort_order,
+            )
+        )
+    db.commit()
+
+
+def _make_leaf(
+    db: Session, name: str = "Raw Materials", *, pick_built_ins: bool = True
+) -> TaxonomyNode:
+    """A top-level taxonomy node with no children — i.e. a leaf.
+
+    By default pre-picks every column-backed catalog entry so the items
+    form renders the full built-in input set (the legacy "all built-ins
+    visible" form every pre-slice-6 test assumed). Pass
+    ``pick_built_ins=False`` for tests that need the post-slice-6
+    "nothing picked yet" state, e.g. the items-list "Pick a category"
+    empty-state tests that need the eligible-categories set to stay
+    empty.
+    """
+
     n = TaxonomyNode(name=name)
     db.add(n)
     db.commit()
     db.refresh(n)
+    if pick_built_ins:
+        _pick_default_built_ins(db, n)
     return n
 
 
@@ -392,7 +448,7 @@ class TestRoleEnforcement:
 class TestItemList:
     def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         db_session.add_all(
             [
                 Item(
@@ -422,7 +478,7 @@ class TestItemList:
 
     def test_list_show_archived_filter(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         db_session.add_all(
             [
                 Item(
@@ -451,7 +507,7 @@ class TestItemList:
 
     def test_list_orders_by_sku(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         db_session.add_all(
             [
                 Item(
@@ -1574,7 +1630,7 @@ class TestOfficeEdit:
         self, client: TestClient, db_session: Session
     ) -> None:
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         db_session.add(
             Item(
                 sku="X",
@@ -2654,9 +2710,15 @@ class TestItemCustomFieldsEdit:
 
 
 class TestWorkshopReadOnlyView:
-    def _seed(self, db: Session, *, with_custom_field: bool = False) -> tuple[User, Item]:
+    def _seed(
+        self,
+        db: Session,
+        *,
+        with_custom_field: bool = False,
+        pick_built_ins: bool = False,
+    ) -> tuple[User, Item]:
         worker = _make_user(db, email="w@x.test", role=Role.WORKSHOP)
-        leaf = _make_leaf(db)
+        leaf = _make_leaf(db, pick_built_ins=pick_built_ins)
         item = Item(
             sku="WV-1",
             name="Workshop view item",
@@ -2710,7 +2772,7 @@ class TestWorkshopReadOnlyView:
     def test_list_shows_edit_link_for_office(self, client: TestClient, db_session: Session) -> None:
         """Confirms the link-label split: Office still sees 'Edit'."""
         office = _make_user(db_session, email="o@x.test", role=Role.OFFICE)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         item = Item(
             sku="OF-1",
             name="Office item",
@@ -2728,7 +2790,7 @@ class TestWorkshopReadOnlyView:
     def test_form_inputs_are_disabled_for_workshop(
         self, client: TestClient, db_session: Session
     ) -> None:
-        worker, item = self._seed(db_session)
+        worker, item = self._seed(db_session, pick_built_ins=True)
         _login_as(client, worker)
         resp = client.get(f"/admin/items/{item.id}/edit")
         assert resp.status_code == 200
@@ -2835,7 +2897,7 @@ class TestRequiresCheckoutFlag:
 
     def _seed_two(self, db: Session) -> tuple[User, Item, Item]:
         mgr = _make_user(db, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db)
+        leaf = _make_leaf(db, pick_built_ins=False)
         flagged = Item(
             sku="TOOL-A",
             name="Hammer",
@@ -2876,7 +2938,7 @@ class TestRequiresCheckoutFlag:
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         db_session.add(
             Item(
                 sku="MAT-A",
@@ -2961,7 +3023,7 @@ class TestRequiresCheckoutFlag:
         self, client: TestClient, db_session: Session
     ) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
-        leaf = _make_leaf(db_session)
+        leaf = _make_leaf(db_session, pick_built_ins=False)
         archived_flagged = Item(
             sku="TOOL-OLD",
             name="Retired chisel",

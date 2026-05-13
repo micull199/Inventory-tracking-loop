@@ -6,70 +6,28 @@
    it stays in the DOM with empty content when no category is picked yet so
    subsequent picker changes have a stable target.
 
-   Built-in fields (name, unit, supplier, location, etc.) live in
-   ``items_form_builtins.html`` and render outside this swap target — that
-   way values typed before picking a category aren't wiped by the HTMX
-   re-render.
+   When this template is rendered as the HTMX response (``sku_preview_oob``
+   is set), it also emits an OOB swap for the full ``#item-builtins`` block
+   so the built-in inputs match the newly-picked leaf's catalog picks
+   (added when the new leaf picks them, removed when it doesn't).
 
    Variables expected:
-       form, ro, field_defs, item (None on create, the row on edit).
+       form, ro, field_defs, picked_column_keys, item, supplier_options,
+       location_options, tracking_modes.
 #}
 
-{# SKU preview OOB swap: only fired when this template is rendered as the
-   HTMX response (sku_preview_oob is set). On initial server render the
-   value is already in ``#sku-preview`` so no OOB is needed. #}
 {% if sku_preview_oob is defined and sku_preview_oob %}
     <output id="sku-preview" data-testid="sku-preview" class="uc-sku-preview"
             for="taxonomy_node_id"
             hx-swap-oob="true">{{ sku_preview_caption or '' }}</output>
 
-    {# Built-in input OOB swaps: when the user picks a category on the
-       create form, the leaf's ``defaults_json`` overlays the create-time
-       form values. Each builtin gets an OOB swap so the existing
-       ``#unit`` / ``#tracking_mode`` / etc. inputs (rendered once in
-       ``items_form_builtins.html`` outside the swap target) update in
-       place. Values the user has already typed are preserved on the
-       server side via ``_apply_leaf_defaults`` only writing into blank
-       slots. #}
-    <input id="unit" name="unit" type="text" class="uc-input"
-           value="{{ form.unit }}"
-           data-testid="item-unit-input"
-           maxlength="32"
-           placeholder="e.g. g, ml, ea"
-           hx-swap-oob="true">
-
-    <select id="tracking_mode" name="tracking_mode" class="uc-select"
-            data-testid="item-tracking-mode-input"
-            hx-swap-oob="true">
-        {% for m in tracking_modes %}
-            <option value="{{ m }}"
-                    {% if form.tracking_mode == m %}selected{% endif %}>{{ m }}</option>
-        {% endfor %}
-    </select>
-
-    <select id="supplier_id" name="supplier_id" class="uc-select"
-            data-testid="item-supplier-input"
-            hx-swap-oob="true">
-        <option value="">— none —</option>
-        {% for s in supplier_options %}
-            <option value="{{ s.id }}"
-                    {% if form.supplier_id == (s.id | string) %}selected{% endif %}>
-                {{ s.label }}
-            </option>
-        {% endfor %}
-    </select>
-
-    <select id="location_id" name="location_id" class="uc-select"
-            data-testid="item-location-input"
-            hx-swap-oob="true">
-        <option value="">— none —</option>
-        {% for l in location_options %}
-            <option value="{{ l.id }}"
-                    {% if form.location_id == (l.id | string) %}selected{% endif %}>
-                {{ l.label }}
-            </option>
-        {% endfor %}
-    </select>
+    {# Full re-render of the built-in inputs to match the newly-picked
+       leaf's picks. Handles both adding (a newly-picked input that
+       didn't exist on the previous category) and removing (an input
+       the previous category had but the new one doesn't). #}
+    <div id="item-builtins" data-testid="item-builtins" hx-swap-oob="outerHTML">
+        {% include "items_form_builtins.html" %}
+    </div>
 {% endif %}
 
 <div id="item-fields-after-category" data-testid="item-fields-after-category">
