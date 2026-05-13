@@ -113,7 +113,14 @@
         <span class="uc-toolbar-spacer"></span>
     </div>
 
-    {% if rows %}
+    {% if not show_items %}
+        <div data-testid="items-pick-category">
+            {{ c.empty_state(
+                "Pick a category to view items",
+                "Items are listed per category so the columns and CSV export match the fields that category collects. Use the category dropdown above to choose one."
+            ) }}
+        </div>
+    {% elif rows %}
         <div class="uc-table-wrap">
             <table class="uc-table" data-testid="items-table">
                 <thead>
@@ -127,6 +134,9 @@
                         <th class="uc-right">Qty</th>
                         <th class="uc-right">Threshold</th>
                         <th>Checkout?</th>
+                        {% for col in catalog_columns %}
+                            <th data-testid="catalog-col-{{ col.key }}">{{ col.label }}</th>
+                        {% endfor %}
                         <th class="uc-right">Actions</th>
                     </tr>
                 </thead>
@@ -150,6 +160,12 @@
                             <td class="uc-num uc-right">{{ i.current_qty }}</td>
                             <td class="uc-num uc-right">{{ i.reorder_threshold }}</td>
                             <td data-testid="item-requires-checkout">{% if i.requires_checkout %}Yes{% else %}—{% endif %}</td>
+                            {% set catalog_cells = catalog_cells_by_item.get(i.id, []) %}
+                            {% for cell in catalog_cells %}
+                                <td data-testid="item-catalog-cell" data-col-key="{{ catalog_columns[loop.index0].key }}">
+                                    {% if cell %}{{ cell }}{% else %}—{% endif %}
+                                </td>
+                            {% endfor %}
                             <td class="uc-actions">
                                 <a href="/admin/items/{{ i.id }}/detail" data-testid="detail-link">Details</a>
                                 {% if can_edit_item %}

@@ -48,7 +48,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, cast
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -62,6 +62,7 @@ from app.audit import record_audit
 from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
+from app.field_catalog import CATALOG_BY_KEY, CatalogEntry
 from app.field_visibility import effective_field_visibility
 from app.models import (
     Archetype,
@@ -950,6 +951,42 @@ def _filter_category_options(db: Session) -> list[dict[str, Any]]:
     return options
 
 
+def _nodes_with_effective_fields(db: Session) -> list[dict[str, Any]]:
+    """Filter category options to nodes that have effective catalog fields.
+
+    A node is included if itself or any ancestor has at least one active
+    ``TaxonomyFieldDef`` — i.e. selecting it on the items list will surface a
+    non-trivial column set. Used to populate the "Pick a category" dropdown on
+    the items list per slice 5's requirement that the user choose a category
+    before viewing items.
+    """
+    nodes_with_own = set(
+        db.execute(
+            select(TaxonomyFieldDef.node_id)
+            .where(TaxonomyFieldDef.archived_at.is_(None))
+            .distinct()
+        ).scalars().all()
+    )
+    if not nodes_with_own:
+        return []
+    all_active = list(
+        db.execute(
+            select(TaxonomyNode)
+            .where(TaxonomyNode.archived_at.is_(None))
+            .order_by(TaxonomyNode.sort_order, TaxonomyNode.name)
+        )
+        .scalars()
+        .all()
+    )
+    eligible: list[dict[str, Any]] = []
+    for node in all_active:
+        chain = _ancestor_chain_ids(db, node.id)
+        if any(nid in nodes_with_own for nid in chain):
+            eligible.append({"id": node.id, "label": _node_breadcrumb(db, node)})
+    eligible.sort(key=lambda o: str(o["label"]).casefold())
+    return eligible
+
+
 def _apply_field_def_filters(
     stmt: Any,
     db: Session,
@@ -1404,6 +1441,30 @@ def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
     ]
 
 
+def _catalog_columns_for(
+    db: Session, node_id: int
+) -> list[tuple[TaxonomyFieldDef, CatalogEntry]]:
+    """Effective catalog-backed columns for the items list, in display order.
+
+    Walks ``_get_active_field_defs`` (inheritance-aware) and pairs each def
+    with its catalog entry. Defs whose ``catalog_key`` doesn't resolve to a
+    live catalog entry (legacy or backfilled-then-removed) are skipped — they
+    have no column header / cell formatter without a catalog entry.
+    """
+
+    columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
+    for fd in _get_active_field_defs(db, node_id):
+        if fd.catalog_key is None:
+            continue
+        entry = CATALOG_BY_KEY.get(fd.catalog_key)
+        if entry is None:
+            continue
+        columns.append((fd, entry))
+    return columns
+
+
+
+
 @router.get("")
 def list_items(
     request: Request,
@@ -1477,16 +1538,68 @@ def list_items(
         for item in items
     ]
 
+    # Catalog-driven columns: computed only when a node is picked. Empty list
+    # otherwise. Headers + per-item cells flow to both the HTML table and CSV
+    # export so the two stay in sync.
+    catalog_columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
+    catalog_cells_by_item: dict[int, list[str]] = {}
+    catalog_raw_values_by_item: dict[int, list[Any]] = {}
+    if node_id is not None:
+        catalog_columns = _catalog_columns_for(db, node_id)
+        for item in items:
+            ifv_rows = field_storage.load_rows_for_item(db, item.id)
+            ifv_by_key: dict[str, ItemFieldValue] = {
+                fd.key: ifv_rows[fd.id]
+                for fd, _ in catalog_columns
+                if fd.id in ifv_rows
+            }
+            raw_values = [
+                field_storage.read_catalog_value(
+                    item, entry, field_def=fd, ifv_by_key=ifv_by_key
+                )
+                for fd, entry in catalog_columns
+            ]
+            catalog_raw_values_by_item[item.id] = raw_values
+            catalog_cells_by_item[item.id] = [
+                field_storage.format_for_display(entry, raw)
+                for (_, entry), raw in zip(catalog_columns, raw_values, strict=True)
+            ]
+
+    csv_headers = list(_ITEMS_CSV_HEADERS) + [
+        f"cf_{fd.key}" for fd, _ in catalog_columns
+    ]
+    csv_rows = _csv_rows_for_items(rows)
+    if catalog_columns:
+        for row, csv_row in zip(rows, csv_rows, strict=True):
+            row_item = cast(Item, row["item"])
+            raws = catalog_raw_values_by_item.get(row_item.id, [])
+            extras = [
+                field_storage.format_for_csv(entry, raw)
+                for (_, entry), raw in zip(catalog_columns, raws, strict=True)
+            ]
+            csv_row.extend(extras)
+
     if (
         resp := csv_branch(
             format,
             filename=f"items_{show}.csv",
-            headers=_ITEMS_CSV_HEADERS,
-            rows=_csv_rows_for_items(rows),
+            headers=csv_headers,
+            rows=csv_rows,
         )
     ) is not None:
         return resp
 
+    # Items table is gated behind category selection (slice 5 of the
+    # catalog-driven taxonomy refactor): the user picks a category from the
+    # filtered dropdown first; the table then shows that category's items
+    # with both the fixed columns and the catalog-specific columns.
+    #
+    # Graceful degradation: if no category has any active field defs yet —
+    # i.e. nobody has picked anything from the catalog — the dropdown would
+    # be empty and forcing the user to pick is meaningless. Fall back to
+    # "show all items" until the catalog flow has been used at least once.
+    eligible_categories = _nodes_with_effective_fields(db)
+    show_items = node_id is not None or not eligible_categories
     return templates.TemplateResponse(
         request,
         "items_list.html",
@@ -1496,15 +1609,24 @@ def list_items(
             "show": show,
             "node_id": node_id,
             "requires_checkout_filter": requires_checkout_filter,
-            "category_options": _filter_category_options(db),
+            "category_options": eligible_categories,
+            "all_category_options": _filter_category_options(db),
             "filter_field_defs": filter_field_defs,
             "cf_filter_values": cf_filter_values,
+            "catalog_columns": [
+                {"key": fd.key, "label": entry.label, "type": entry.type.value}
+                for fd, entry in catalog_columns
+            ],
+            "catalog_cells_by_item": catalog_cells_by_item,
+            "show_items": show_items,
             "can_create": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_archive": _user.role in (Role.MANAGER, Role.ADMIN),
             "can_edit_item": _can_save_item(_user),
             "can_csv": _user.role in (Role.MANAGER, Role.OFFICE, Role.ADMIN),
         },
     )
+
+
 
 
 # ---------------------------------------------------------------------------

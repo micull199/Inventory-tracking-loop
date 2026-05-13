@@ -15,12 +15,15 @@ with ``column``-storage variants without renaming anything.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import FieldType, ItemFieldValue, TaxonomyFieldDef
+from app.field_catalog import CatalogEntry
+from app.models import FieldType, Item, ItemFieldValue, TaxonomyFieldDef
 
 # Stable map from a field def's type to the ``ItemFieldValue`` column that
 # stores its value. ``SELECT`` keeps its chosen option as plain text;
@@ -92,3 +95,81 @@ def load_rows_for_item(db: Session, item_id: int) -> dict[int, ItemFieldValue]:
 
     stmt = select(ItemFieldValue).where(ItemFieldValue.item_id == item_id)
     return {row.field_def_id: row for row in db.execute(stmt).scalars().all()}
+
+
+def read_catalog_value(
+    item: Item,
+    entry: CatalogEntry,
+    *,
+    field_def: TaxonomyFieldDef | None = None,
+    ifv_by_key: dict[str, ItemFieldValue] | None = None,
+) -> Any:
+    """Read the value for a catalog entry off the right storage target.
+
+    ``column``-storage entries read straight off the ``Item``. ``field_value``-
+    storage entries look up the row in ``ifv_by_key`` (keyed by the def's
+    ``key``, not its id, so the same lookup table works across catalog and
+    legacy rows). Returns ``None`` when there is no value.
+
+    ``ifv_by_key`` is callable's responsibility — typically derived from
+    ``load_rows_for_item`` followed by a re-key on ``field_def.key``.
+    """
+
+    if entry.storage == "column":
+        assert entry.column is not None  # invariant enforced by the catalog tests
+        return getattr(item, entry.column, None)
+    # field_value storage — needs both the def (for type dispatch) and the
+    # cached row.
+    if field_def is None or ifv_by_key is None:
+        return None
+    row = ifv_by_key.get(field_def.key)
+    if row is None:
+        return None
+    return read_stored_value(field_def, row)
+
+
+def format_for_display(entry: CatalogEntry, value: Any) -> str:
+    """Render a catalog value as a string for the items-list table cell.
+
+    Empty / missing values render as ``""``. Booleans render as ``"yes"`` /
+    ``"no"`` for spreadsheet readability. Lists (multiselect) render as a
+    comma-joined string. Dates and datetimes render as ISO.
+    """
+
+    if value is None or value == "":
+        return ""
+    if entry.type is FieldType.BOOLEAN:
+        return "yes" if value else "no"
+    if entry.type is FieldType.MULTISELECT and isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
+
+
+def format_for_csv(entry: CatalogEntry, value: Any) -> Any:
+    """Render a catalog value for a CSV cell.
+
+    Matches existing CSV conventions in ``app/csv_export.py``: ``None`` →
+    empty string, booleans as ``"yes"`` / ``"no"``, decimals / dates
+    pre-coerced to strings, multiselect lists joined with ``"|"`` so
+    cell-level CSV parsing stays clean.
+    """
+
+    if value is None or value == "":
+        return ""
+    if entry.type is FieldType.BOOLEAN:
+        return "yes" if value else "no"
+    if entry.type is FieldType.MULTISELECT and isinstance(value, list):
+        return "|".join(str(v) for v in value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return value

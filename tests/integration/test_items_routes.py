@@ -4613,9 +4613,14 @@ class TestItemsListCategoryFilter:
         _leaf, _karat, _a, _b = self._seed(db_session)
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, mgr)
-        # ``cf_karat`` without a ``node_id`` does not filter — the route only
-        # applies field-def filters when it can resolve the schema. Both items
-        # should still appear.
+        # ``cf_karat`` without a ``node_id`` cannot apply — the route only
+        # resolves field-def filters when it knows the schema. Under slice 5
+        # the items table is also gated behind category selection when some
+        # category has active field defs (here: ``Rings`` has ``Karat``), so
+        # the response renders the "Pick a category" empty state and the
+        # ``cf_karat`` value is ignored.
         resp = client.get("/admin/items?cf_karat=14")
-        assert "RIN-0001" in resp.text
-        assert "RIN-0002" in resp.text
+        assert resp.status_code == 200
+        assert 'data-testid="items-pick-category"' in resp.text
+        assert "RIN-0001" not in resp.text
+        assert "RIN-0002" not in resp.text
