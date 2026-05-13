@@ -6,6 +6,7 @@
         "Purchase orders",
         heading_testid="po-list-heading"
     ) %}
+        {{ c.button("+ New PO", href="/admin/purchase-orders/new", testid="po-list-new") }}
         {{ c.button("Reorder dashboard", variant="secondary", href="/admin/reorder", testid="po-list-reorder-link") }}
     {% endcall %}
 

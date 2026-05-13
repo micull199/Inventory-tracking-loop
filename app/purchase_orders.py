@@ -388,6 +388,221 @@ def _count_lines(db: Session, po_id: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Manual PO creation (alternative to the auto-draft from /admin/reorder)
+# ---------------------------------------------------------------------------
+#
+# The reorder dashboard drives the auto-draft path: pick a supplier, system
+# fills lines from low-stock items below their reorder threshold. That fits
+# the common case but doesn't help when you want to draft a PO for items not
+# yet in your inventory, or for one-off purchases. The manual flow here
+# accepts an arbitrary set of (item, qty, expected_unit_cost) triples and
+# creates the same shape of draft PO that the reorder path produces.
+#
+# Both routes live on ``list_router`` (prefix ``/admin/purchase-orders``).
+# Note the ``/new`` paths must be declared *before* the ``/{po_id}`` detail
+# route so FastAPI's first-match dispatcher tries the literal first.
+
+
+_DEFAULT_MANUAL_LINE_STUBS = 5
+
+
+@list_router.get("/new", response_class=HTMLResponse)
+def new_purchase_order_form(
+    request: Request,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    suppliers = list(
+        db.execute(
+            select(Supplier)
+            .where(Supplier.archived_at.is_(None))
+            .order_by(Supplier.name)
+        )
+        .scalars()
+        .all()
+    )
+    items = list(
+        db.execute(
+            select(Item).where(Item.archived_at.is_(None)).order_by(Item.sku)
+        )
+        .scalars()
+        .all()
+    )
+    return templates.TemplateResponse(
+        request,
+        "purchase_order_new_form.html",
+        {
+            "current_user": user,
+            "form": {
+                "supplier_id": "",
+                "expected_date": "",
+                "notes": "",
+            },
+            "suppliers": suppliers,
+            "items": items,
+            "line_stub_count": _DEFAULT_MANUAL_LINE_STUBS,
+            "title": "New purchase order",
+            "action": "/admin/purchase-orders/new",
+        },
+    )
+
+
+@list_router.post("/new")
+async def create_manual_purchase_order(
+    request: Request,
+    supplier_id: str = Form(""),
+    expected_date: str = Form(""),
+    notes: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    parsed_supplier_id = _parse_int_id(supplier_id, field_name="supplier")
+    supplier = _resolve_active_supplier(db, parsed_supplier_id)
+
+    expected_date_value: date | None = None
+    raw_expected = (expected_date or "").strip()
+    if raw_expected:
+        try:
+            expected_date_value = date.fromisoformat(raw_expected)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="expected_date must be an ISO date (YYYY-MM-DD)",
+            ) from exc
+
+    notes_value = (notes or "").strip() or None
+
+    raw_form = await request.form()
+    line_specs: list[tuple[int, Decimal, Decimal | None]] = []
+    seen_items: set[int] = set()
+    for key, value in raw_form.multi_items():
+        if not key.startswith("item_id_"):
+            continue
+        idx = key.removeprefix("item_id_")
+        item_raw = value if isinstance(value, str) else ""
+        if not item_raw.strip():
+            continue
+        try:
+            item_id = int(item_raw.strip())
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"line {idx}: item must be an integer",
+            ) from exc
+        if item_id in seen_items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="duplicate item on this PO",
+            )
+        seen_items.add(item_id)
+        item = db.get(Item, item_id)
+        if item is None or item.archived_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"item {item_id} not found or archived",
+            )
+
+        qty_raw = raw_form.get(f"qty_{idx}", "")
+        qty_text = qty_raw.strip() if isinstance(qty_raw, str) else ""
+        if not qty_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"line for {item.sku}: qty is required",
+            )
+        try:
+            qty_value = Decimal(qty_text)
+        except InvalidOperation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"line for {item.sku}: qty must be a number",
+            ) from exc
+        if qty_value <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"line for {item.sku}: qty must be greater than zero",
+            )
+
+        cost_raw = raw_form.get(f"cost_{idx}", "")
+        cost_text = cost_raw.strip() if isinstance(cost_raw, str) else ""
+        cost_value: Decimal | None
+        if not cost_text:
+            cost_value = None
+        else:
+            try:
+                cost_value = Decimal(cost_text)
+            except InvalidOperation as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"line for {item.sku}: expected unit cost must be a number",
+                ) from exc
+            if cost_value < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"line for {item.sku}: expected unit cost cannot be negative",
+                )
+        line_specs.append((item_id, qty_value, cost_value))
+
+    po = PurchaseOrder(
+        supplier_id=supplier.id,
+        status=POStatus.DRAFT,
+        expected_date=expected_date_value,
+        notes=notes_value,
+        created_by=user.id,
+    )
+    db.add(po)
+    db.flush()
+
+    line_audit: list[dict[str, Any]] = []
+    for item_id, qty_value, cost_value in line_specs:
+        db.add(
+            PurchaseOrderLine(
+                po_id=po.id,
+                item_id=item_id,
+                qty_ordered=qty_value,
+                qty_received=Decimal("0"),
+                expected_unit_cost=cost_value,
+            )
+        )
+        line_audit.append(
+            {
+                "item_id": item_id,
+                "qty_ordered": str(qty_value),
+                "expected_unit_cost": (
+                    str(cost_value) if cost_value is not None else None
+                ),
+            }
+        )
+    db.flush()
+
+    record_audit(
+        db,
+        actor=user,
+        action="purchase_order.created",
+        entity_type="purchase_order",
+        entity_id=po.id,
+        before=None,
+        after={
+            "supplier_id": supplier.id,
+            "status": POStatus.DRAFT.value,
+            "expected_date": expected_date_value,
+            "notes": notes_value,
+            "lines": line_audit,
+            "source": "manual",
+        },
+    )
+    db.commit()
+
+    _flash(
+        request,
+        f"Draft PO #{po.id} created for {supplier.name} with {len(line_specs)} line(s).",
+    )
+    return RedirectResponse(
+        url=f"/admin/purchase-orders/{po.id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /admin/purchase-orders/{po_id} — detail view
 # ---------------------------------------------------------------------------
 

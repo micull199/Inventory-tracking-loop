@@ -202,6 +202,10 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/purchase-orders/99999/pdf", OFFICE),
     ("POST", "/admin/purchase-orders/99999/send", OFFICE),
     ("POST", "/admin/purchase-orders/99999/mark-shipped", OFFICE),
+    # Manual PO creation — alternative to /admin/reorder/draft-po. Same role
+    # gate as the auto-draft path (Manager + Office).
+    ("GET", "/admin/purchase-orders/new", OFFICE),
+    ("POST", "/admin/purchase-orders/new", OFFICE),
     ("GET", "/admin/purchase-orders/99999/receive", OFFICE),
     ("POST", "/admin/purchase-orders/99999/receive", OFFICE),
     # --- Manager + Office: stock takes ---

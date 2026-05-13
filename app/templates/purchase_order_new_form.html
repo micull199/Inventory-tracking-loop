@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title, subtitle="Draft a PO manually. For a one-click PO from low-stock items, use the Reorder dashboard.") %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/purchase-orders" data-testid="po-new-back">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="po-new-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section" data-testid="po-new-summary">
+                <h3 class="uc-section-title">Summary</h3>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="supplier_id">Supplier <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-input" id="supplier_id" name="supplier_id" required
+                            data-testid="po-new-supplier-input">
+                        <option value="">— pick a supplier —</option>
+                        {% for s in suppliers %}
+                            <option value="{{ s.id }}"
+                                {% if form.supplier_id == s.id|string %}selected{% endif %}>
+                                {{ s.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="expected_date">Expected date</label>
+                    <input class="uc-input" type="date" id="expected_date" name="expected_date"
+                           value="{{ form.expected_date }}"
+                           data-testid="po-new-expected-date-input">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-input" id="notes" name="notes" rows="3"
+                              data-testid="po-new-notes-input"
+                              maxlength="2000">{{ form.notes }}</textarea>
+                </div>
+            </section>
+
+            <section class="uc-section" data-testid="po-new-lines">
+                <h3 class="uc-section-title">Lines</h3>
+                <p class="uc-helper uc-mb-4">
+                    Add one row per item to order. Leave a row blank to skip it.
+                    Expected unit cost is optional — leave blank if you don't know it yet.
+                </p>
+
+                <div id="po-new-lines-container">
+                    {% for idx in range(line_stub_count) %}
+                        <div class="uc-field uc-grid-3" data-testid="po-new-line-row">
+                            <div>
+                                <label class="uc-label" for="item_id_{{ idx }}">Item</label>
+                                <select class="uc-input" id="item_id_{{ idx }}" name="item_id_{{ idx }}"
+                                        data-testid="po-new-line-item-input">
+                                    <option value="">— none —</option>
+                                    {% for it in items %}
+                                        <option value="{{ it.id }}">{{ it.sku }} — {{ it.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="uc-label" for="qty_{{ idx }}">Qty</label>
+                                <input class="uc-input" type="text" inputmode="decimal"
+                                       id="qty_{{ idx }}" name="qty_{{ idx }}"
+                                       data-testid="po-new-line-qty-input"
+                                       placeholder="0">
+                            </div>
+                            <div>
+                                <label class="uc-label" for="cost_{{ idx }}">Expected unit cost</label>
+                                <input class="uc-input" type="text" inputmode="decimal"
+                                       id="cost_{{ idx }}" name="cost_{{ idx }}"
+                                       data-testid="po-new-line-cost-input"
+                                       placeholder="(blank if unknown)">
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <div class="uc-actions">
+                {{ c.button("Create draft PO", type="submit", testid="po-new-submit") }}
+                <a class="uc-btn uc-btn--ghost" href="/admin/purchase-orders" data-testid="po-new-cancel">Cancel</a>
+            </div>
+        </form>
+    {% endcall %}
+{% endblock %}
