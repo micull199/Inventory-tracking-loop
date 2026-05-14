@@ -1216,7 +1216,7 @@ def _catalog_columns_for(
 def list_items(
     request: Request,
     show: str = "active",
-    node_id: int | None = None,
+    node_id: str = "",
     requires_checkout: str = "",
     format: str = "",
     _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE, Role.WORKSHOP)),
@@ -1224,6 +1224,15 @@ def list_items(
 ) -> Response:
     if show not in {"active", "archived"}:
         show = "active"
+    # Category-filter dropdown submits ``node_id=`` (empty) for the "Any"
+    # option; coerce to ``None`` here instead of letting Pydantic 422 on
+    # the int parse. Non-integer cruft (tampered URL) silently degrades to
+    # "no filter" — same posture as ``show`` and ``requires_checkout``.
+    node_id_int: int | None
+    try:
+        node_id_int = int(node_id) if node_id.strip() else None
+    except ValueError:
+        node_id_int = None
     # Filter is on/off only — "yes" turns it on; anything else (including
     # blank, "no", "all", a tampered value) is treated as no filter. Same
     # silent-coerce posture as ``show`` above.
@@ -1245,26 +1254,26 @@ def list_items(
         stmt = stmt.where(Item.archived_at.is_(None))
     else:
         stmt = stmt.where(Item.archived_at.is_not(None))
-    if node_id is not None:
+    if node_id_int is not None:
         # Match items whose ``taxonomy_node_id`` is the given node OR any
         # descendant of it (inclusive). The taxonomy is at most 3 levels,
         # so a single down-walk through children + grandchildren is enough
         # — no recursive CTE needed. This makes the unique-variant case
         # work: items live on depth-2 auto-leaves, but a filter on the
         # depth-1 sub-cat must surface them.
-        descendant_ids = _collect_descendant_node_ids(db, node_id)
+        descendant_ids = _collect_descendant_node_ids(db, node_id_int)
         stmt = stmt.where(Item.taxonomy_node_id.in_(descendant_ids))
     if requires_checkout_filter:
         stmt = stmt.where(Item.requires_checkout.is_(True))
 
     # Per-leaf custom-field filters. Only applied when ``node_id`` points at
     # an active leaf with field defs — the filter inputs that produced the
-    # ``cf_<key>`` query params are only rendered then, so this is the
-    # contract the template enforces.
+    # query params are only rendered then, so this is the contract the
+    # template enforces.
     filter_field_defs: list[TaxonomyFieldDef] = []
     cf_filter_values: dict[str, str] = {}
-    if node_id is not None:
-        filter_field_defs = _get_active_field_defs(db, node_id)
+    if node_id_int is not None:
+        filter_field_defs = _get_active_field_defs(db, node_id_int)
         if filter_field_defs:
             stmt, cf_filter_values = _apply_field_def_filters(
                 stmt,
@@ -1311,8 +1320,8 @@ def list_items(
     # straight to ``Item.<column>`` via ``read_catalog_value``.
     catalog_columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
     catalog_cells_by_item: dict[int, list[str]] = {}
-    if node_id is not None:
-        catalog_columns = _catalog_columns_for(db, node_id)
+    if node_id_int is not None:
+        catalog_columns = _catalog_columns_for(db, node_id_int)
         for item in items:
             catalog_cells_by_item[item.id] = [
                 field_storage.format_for_display(entry, field_storage.read_catalog_value(item, entry))
@@ -1342,7 +1351,7 @@ def list_items(
     any_picks_exist = (
         db.execute(select(TaxonomyFieldDef.id).limit(1)).first() is not None
     )
-    show_items = node_id is not None or not any_picks_exist
+    show_items = node_id_int is not None or not any_picks_exist
 
     # Filter inputs render directly from the catalog (label, type, options).
     filter_specs = [
@@ -1365,7 +1374,7 @@ def list_items(
             "current_user": _user,
             "rows": rows,
             "show": show,
-            "node_id": node_id,
+            "node_id": node_id_int,
             "requires_checkout_filter": requires_checkout_filter,
             "category_options": eligible_categories,
             "all_category_options": _filter_category_options(db),

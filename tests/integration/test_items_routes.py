@@ -456,6 +456,18 @@ class TestRoleEnforcement:
 
 
 class TestItemList:
+    def test_list_accepts_empty_node_id_query(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """``?node_id=`` (empty string from the "Any" dropdown option) must
+        coerce to "no filter", not 422 on int parsing. Regression: the
+        dropdown's ``<option value="">`` submits the param empty.
+        """
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/items?show=active&node_id=")
+        assert resp.status_code == 200
+
     def test_list_shows_active_by_default(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         leaf = _make_leaf(db_session, pick_built_ins=False)
