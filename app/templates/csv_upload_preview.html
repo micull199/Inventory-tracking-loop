@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title, subtitle=subtitle, heading_testid="csv-upload-preview-heading") %}
+    {% endcall %}
+
+    {% if top_level_error %}
+        <div class="uc-card" data-testid="csv-upload-top-error">
+            <div class="uc-card-body">
+                <h2>Couldn't read this file</h2>
+                <p>{{ top_level_error }}</p>
+                <p>
+                    <a href="{{ upload_url }}" data-testid="csv-upload-retry">Try a different file</a>
+                </p>
+            </div>
+        </div>
+    {% else %}
+        {% set _update_count = update_count|default(0) %}
+        <div class="uc-card" data-testid="csv-upload-summary">
+            <div class="uc-card-body">
+                <p>
+                    <strong data-testid="csv-upload-new-count">{{ new_count }}</strong> new,
+                    <strong data-testid="csv-upload-update-count">{{ _update_count }}</strong> updated,
+                    <strong data-testid="csv-upload-skip-count">{{ skip_count }}</strong> skipped,
+                    <strong data-testid="csv-upload-error-count">{{ error_count }}</strong> with errors.
+                </p>
+                {% if committed %}
+                    <p data-testid="csv-upload-committed">
+                        Imported {{ new_count }} new{% if _update_count %}, updated {{ _update_count }}{% endif %}.
+                    </p>
+                {% elif error_count > 0 %}
+                    <p>Fix the errors below, then re-upload. Errors block commit.</p>
+                {% elif new_count == 0 and _update_count == 0 %}
+                    <p>Nothing new to import.</p>
+                {% else %}
+                    <p>Re-upload the file with dry-run unchecked to commit.</p>
+                {% endif %}
+                <p>
+                    <a href="{{ upload_url }}" data-testid="csv-upload-back">Upload another file</a>
+                    {% if cancel_url %}
+                        · <a href="{{ cancel_url }}" data-testid="csv-upload-cancel-link">Back to list</a>
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        {% if rows %}
+            <div class="uc-table-wrap">
+                <table class="uc-table" data-testid="csv-upload-preview-table">
+                    <thead>
+                        <tr>
+                            <th>Row</th>
+                            <th>Status</th>
+                            <th>Field</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in rows %}
+                            <tr data-testid="csv-upload-row" data-row-tag="{{ r.tag }}" data-row-number="{{ r.row_number }}">
+                                <td>{{ r.row_number }}</td>
+                                <td>
+                                    {% if r.tag == "error" %}
+                                        {{ c.pill("error", variant="warn") }}
+                                    {% elif r.tag == "skip" %}
+                                        {{ c.pill("skip") }}
+                                    {% elif r.tag == "update" %}
+                                        {{ c.pill("update") }}
+                                    {% else %}
+                                        {{ c.pill("new") }}
+                                    {% endif %}
+                                </td>
+                                <td>{{ r.error_field or "" }}</td>
+                                <td>
+                                    {% if r.error_message %}
+                                        {{ r.error_message }}{% if r.warnings %} — {% for w in r.warnings %}{{ w }}{% if not loop.last %}; {% endif %}{% endfor %}{% endif %}
+                                    {% elif r.warnings %}
+                                        {% for w in r.warnings %}{{ w }}{% if not loop.last %}; {% endif %}{% endfor %}
+                                    {% else %}
+                                        {{ r.summary or "" }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+    {% endif %}
+{% endblock %}

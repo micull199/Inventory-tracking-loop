@@ -41,6 +41,9 @@
         <a class="uc-btn uc-btn--ghost uc-btn--sm"
            data-testid="sub-csv-link"
            href="/admin/taxonomy/{{ parent.id }}/children?format=csv&amp;show={{ show }}">Download CSV</a>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           data-testid="sub-upload-link"
+           href="/admin/taxonomy/{{ parent.id }}/children/upload">Upload CSV</a>
     </div>
 
     {% if nodes %}

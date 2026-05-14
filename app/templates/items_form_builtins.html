@@ -25,17 +25,19 @@
 {% set _show_supplier = "supplier_id" in _picks %}
 {% set _show_location = "location_id" in _picks %}
 {% set _show_qr = "qr_code" in _picks %}
+{% set _show_ring_size = "ring_size" in _picks %}
+{% set _show_weight_grams = "weight_grams" in _picks %}
+{% set _show_stone_shape = "stone_shape" in _picks %}
 
 {% set _identity_visible = item or _show_name %}
 {% set _stock_visible = _show_unit or _show_tracking_mode or _show_checkout %}
 {% set _reorder_visible = _show_reorder_threshold or _show_reorder_qty %}
 {% set _refs_visible = _show_supplier or _show_location or _show_qr %}
+{% set _attributes_visible = _show_ring_size or _show_weight_grams or _show_stone_shape %}
 
 {# ---- Identity ---- #}
 {% if _identity_visible %}
     <section class="uc-section" data-testid="item-section-identity">
-        <h2 class="uc-section-title">Identity</h2>
-
         {% if item %}
             <div class="uc-field">
                 <span class="uc-label">SKU</span>
@@ -63,8 +65,6 @@
 {# ---- Stock behaviour ---- #}
 {% if _stock_visible %}
     <section class="uc-section" data-testid="item-section-stock">
-        <h2 class="uc-section-title">Stock behaviour</h2>
-
         {% if _show_unit %}
             <div class="uc-field">
                 <label class="uc-label" for="unit">
@@ -114,8 +114,6 @@
 {# ---- Reorder ---- #}
 {% if _reorder_visible %}
     <section class="uc-section" data-testid="item-section-reorder">
-        <h2 class="uc-section-title">Reorder</h2>
-
         {% if can_edit_thresholds %}
             <div class="uc-grid-2">
                 {% if _show_reorder_threshold %}
@@ -165,8 +163,6 @@
 {# ---- References ---- #}
 {% if _refs_visible %}
     <section class="uc-section" data-testid="item-section-references">
-        <h2 class="uc-section-title">References</h2>
-
         {% if _show_supplier or _show_location %}
             <div class="uc-grid-2">
                 {% if _show_supplier %}
@@ -210,6 +206,43 @@
                        value="{{ form.qr_code }}"
                        data-testid="item-qr-input"
                        maxlength="128"
+                       {% if ro %}disabled{% endif %}>
+            </div>
+        {% endif %}
+    </section>
+{% endif %}
+
+{# ---- Attributes (promoted standard fields) ---- #}
+{% if _attributes_visible %}
+    <section class="uc-section" data-testid="item-section-attributes">
+        {% if _show_ring_size %}
+            <div class="uc-field">
+                <label class="uc-label" for="ring_size">Ring size</label>
+                <input class="uc-input" type="text" id="ring_size" name="ring_size"
+                       value="{{ form.ring_size }}"
+                       data-testid="item-ring-size-input"
+                       maxlength="64"
+                       {% if ro %}disabled{% endif %}>
+            </div>
+        {% endif %}
+
+        {% if _show_weight_grams %}
+            <div class="uc-field">
+                <label class="uc-label" for="weight_grams">Weight (g)</label>
+                <input class="uc-input" type="text" inputmode="decimal" id="weight_grams" name="weight_grams"
+                       value="{{ form.weight_grams }}"
+                       data-testid="item-weight-grams-input"
+                       {% if ro %}disabled{% endif %}>
+            </div>
+        {% endif %}
+
+        {% if _show_stone_shape %}
+            <div class="uc-field">
+                <label class="uc-label" for="stone_shape">Stone shape</label>
+                <input class="uc-input" type="text" id="stone_shape" name="stone_shape"
+                       value="{{ form.stone_shape }}"
+                       data-testid="item-stone-shape-input"
+                       maxlength="64"
                        {% if ro %}disabled{% endif %}>
             </div>
         {% endif %}

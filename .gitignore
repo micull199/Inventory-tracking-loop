@@ -23,9 +23,11 @@ dist/
 build/
 *.egg
 
-# Database (dev)
+# Database (dev) — including ad-hoc backup snapshots taken before destructive
+# migrations / data-shape changes (e.g. dev.db.pre-0024).
 *.db
 *.db-journal
+*.db.*
 *.sqlite3
 
 # Loop runner

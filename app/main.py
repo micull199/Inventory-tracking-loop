@@ -71,10 +71,18 @@ app.mount(
 )
 
 app.include_router(auth_router)
+# Upload routers must be included BEFORE the matching CRUD routers so the
+# literal ``/admin/<domain>/upload`` path takes precedence over the dynamic
+# ``/{id}`` routes registered below. Without this ordering, a POST to
+# ``.../upload`` resolves to the update route and 422s on int coercion.
+app.include_router(suppliers_module.upload_router)
 app.include_router(suppliers_module.router)
+app.include_router(locations_module.upload_router)
 app.include_router(locations_module.router)
+app.include_router(taxonomy_module.upload_router)
 app.include_router(taxonomy_module.router)
 app.include_router(field_defs_module.router)
+app.include_router(items_module.upload_router)
 app.include_router(items_module.router)
 app.include_router(item_units_module.router)
 app.include_router(movements_module.router)

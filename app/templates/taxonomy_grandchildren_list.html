@@ -57,6 +57,11 @@
         <a class="uc-btn uc-btn--ghost uc-btn--sm"
            data-testid="grandchildren-csv-link"
            href="/admin/taxonomy/{{ grandparent.id }}/sub/{{ parent.id }}/grandchildren?format=csv&amp;show={{ show }}">Download CSV</a>
+        {% if inherited_archetype != "unique_variant" %}
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               data-testid="grandchildren-upload-link"
+               href="/admin/taxonomy/{{ grandparent.id }}/sub/{{ parent.id }}/grandchildren/upload">Upload CSV</a>
+        {% endif %}
     </div>
 
     {% if nodes %}

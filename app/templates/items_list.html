@@ -50,42 +50,42 @@
 
         {% if filter_field_defs %}
             {% for fd in filter_field_defs %}
-                {% set raw = cf_filter_values.get("cf_" ~ fd.key, "") %}
-                <label class="uc-label" for="filter-cf-{{ fd.key }}" style="margin: 0;">{{ fd.name }}</label>
-                {% if fd.type.value == "select" or fd.type.value == "multiselect" %}
-                    <select id="filter-cf-{{ fd.key }}"
-                            name="cf_{{ fd.key }}"
+                {% set raw = cf_filter_values.get(fd.key, "") %}
+                <label class="uc-label" for="filter-{{ fd.key }}" style="margin: 0;">{{ fd.label }}</label>
+                {% if fd.type == "select" or fd.type == "multiselect" %}
+                    <select id="filter-{{ fd.key }}"
+                            name="{{ fd.key }}"
                             class="uc-select uc-select--sm"
-                            data-testid="filter-cf-{{ fd.key }}">
+                            data-testid="filter-{{ fd.key }}">
                         <option value="">— any —</option>
-                        {% for opt in fd.options_json or [] %}
+                        {% for opt in fd.options %}
                             <option value="{{ opt }}" {% if raw == opt %}selected{% endif %}>{{ opt }}</option>
                         {% endfor %}
                     </select>
-                {% elif fd.type.value == "boolean" %}
-                    <select id="filter-cf-{{ fd.key }}"
-                            name="cf_{{ fd.key }}"
+                {% elif fd.type == "boolean" %}
+                    <select id="filter-{{ fd.key }}"
+                            name="{{ fd.key }}"
                             class="uc-select uc-select--sm"
-                            data-testid="filter-cf-{{ fd.key }}">
+                            data-testid="filter-{{ fd.key }}">
                         <option value="">— any —</option>
                         <option value="yes" {% if raw == "yes" %}selected{% endif %}>Yes</option>
                         <option value="no" {% if raw == "no" %}selected{% endif %}>No</option>
                     </select>
-                {% elif fd.type.value == "date" %}
-                    <input id="filter-cf-{{ fd.key }}"
-                           name="cf_{{ fd.key }}"
+                {% elif fd.type == "date" %}
+                    <input id="filter-{{ fd.key }}"
+                           name="{{ fd.key }}"
                            type="date"
                            class="uc-input uc-input--sm"
                            value="{{ raw }}"
-                           data-testid="filter-cf-{{ fd.key }}">
+                           data-testid="filter-{{ fd.key }}">
                 {% else %}
-                    <input id="filter-cf-{{ fd.key }}"
-                           name="cf_{{ fd.key }}"
+                    <input id="filter-{{ fd.key }}"
+                           name="{{ fd.key }}"
                            type="text"
                            class="uc-input uc-input--sm"
                            value="{{ raw }}"
                            placeholder="search"
-                           data-testid="filter-cf-{{ fd.key }}">
+                           data-testid="filter-{{ fd.key }}">
                 {% endif %}
             {% endfor %}
             <button type="submit" class="uc-btn uc-btn--secondary uc-btn--sm" data-testid="items-filter-apply">Apply</button>
@@ -96,6 +96,9 @@
             <a class="uc-btn uc-btn--ghost uc-btn--sm"
                href="/admin/items?format=csv&amp;show={{ show }}{% if requires_checkout_filter %}&amp;requires_checkout=yes{% endif %}{% if node_id %}&amp;node_id={{ node_id }}{% endif %}"
                data-testid="items-list-csv-link">Download CSV</a>
+            <a class="uc-btn uc-btn--ghost uc-btn--sm"
+               href="/admin/items/upload"
+               data-testid="items-list-upload-link">Upload CSV</a>
         {% endif %}
     </form>
 

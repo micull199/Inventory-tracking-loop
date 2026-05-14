@@ -1743,7 +1743,7 @@ class TestTaxonomyListCsvBody:
         _login_as(client, u)
         resp = client.get("/admin/taxonomy?format=csv")
         assert resp.status_code == 200
-        assert resp.text == "id,sort_order,name\r\n"
+        assert resp.text == "id,sort_order,name,sku_prefix,archetype\r\n"
 
     def test_one_node_one_data_row(self, client: TestClient, db_session: Session) -> None:
         mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)

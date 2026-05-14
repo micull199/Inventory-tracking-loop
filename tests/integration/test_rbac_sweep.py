@@ -112,6 +112,9 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/suppliers/99999", MANAGER),
     ("POST", "/admin/suppliers/99999/archive", MANAGER),
     ("POST", "/admin/suppliers/99999/unarchive", MANAGER),
+    # CSV upload (bulk create) — Manager-only.
+    ("GET", "/admin/suppliers/upload", MANAGER),
+    ("POST", "/admin/suppliers/upload", MANAGER),
     # --- Manager-only: locations ---
     ("GET", "/admin/locations", MANAGER),
     ("GET", "/admin/locations/new", MANAGER),
@@ -120,6 +123,9 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/locations/99999", MANAGER),
     ("POST", "/admin/locations/99999/archive", MANAGER),
     ("POST", "/admin/locations/99999/unarchive", MANAGER),
+    # CSV upload (bulk create) — Manager-only.
+    ("GET", "/admin/locations/upload", MANAGER),
+    ("POST", "/admin/locations/upload", MANAGER),
     # --- Manager-only: taxonomy (top-level + sub + field defs) ---
     ("GET", "/admin/taxonomy", MANAGER),
     ("GET", "/admin/taxonomy/new", MANAGER),
@@ -139,6 +145,13 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren", MANAGER),
     ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren/new", MANAGER),
     ("POST", "/admin/taxonomy/99999/sub/99999/grandchildren", MANAGER),
+    # CSV upload (bulk create) — Manager-only, three surfaces.
+    ("GET", "/admin/taxonomy/upload", MANAGER),
+    ("POST", "/admin/taxonomy/upload", MANAGER),
+    ("GET", "/admin/taxonomy/99999/children/upload", MANAGER),
+    ("POST", "/admin/taxonomy/99999/children/upload", MANAGER),
+    ("GET", "/admin/taxonomy/99999/sub/99999/grandchildren/upload", MANAGER),
+    ("POST", "/admin/taxonomy/99999/sub/99999/grandchildren/upload", MANAGER),
     ("GET", "/admin/taxonomy/99999/fields", MANAGER),
     ("POST", "/admin/taxonomy/99999/fields/pick", MANAGER),
     ("POST", "/admin/taxonomy/fields/99999/archive", MANAGER),
@@ -177,6 +190,9 @@ ROUTES: list[tuple[str, str, str]] = [
     ("POST", "/admin/items/units/99999/unarchive", MANAGER),
     # --- Manager + Office: items edit POST ---
     ("POST", "/admin/items/99999", OFFICE),
+    # --- Manager + Office: items CSV upload ---
+    ("GET", "/admin/items/upload", OFFICE),
+    ("POST", "/admin/items/upload", OFFICE),
     # --- Manager + Office: item units list / edit ---
     ("GET", "/admin/items/99999/units", OFFICE),
     ("GET", "/admin/items/units/99999/edit", OFFICE),

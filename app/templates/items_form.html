@@ -21,32 +21,6 @@
         <form method="post" action="{{ action }}" data-testid="item-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            {# ---- SKU (always visible) ----
-
-               SKU is the only structural field per MISSION §3 Item management —
-               it's allocated from the leaf's prefix once a category is picked
-               (auto-generated when the user leaves it blank), but the input is
-               always rendered so the user can override or pre-fill it.
-
-               On edit the value is read-only and rendered via the
-               post-category fragment so the form layout matches the
-               pre-catalog flow; new-item rendering keeps the input here. #}
-            {% if not item %}
-                <section class="uc-section">
-                    <h2 class="uc-section-title">SKU</h2>
-                    <div class="uc-field">
-                        <label class="uc-label" for="sku-top">SKU</label>
-                        <input class="uc-input" type="text" id="sku-top" name="sku"
-                               value="{{ form.sku }}"
-                               data-testid="item-sku-input"
-                               maxlength="64"
-                               placeholder="Leave blank to auto-generate from the category prefix"
-                               {% if ro %}disabled{% endif %}>
-                        <small class="uc-helper">Optional. Auto-generated from the category prefix when left blank.</small>
-                    </div>
-                </section>
-            {% endif %}
-
             {# ---- Category picker (gates the post-category fields) ----
 
                On create the user must pick a category before the other field
@@ -61,7 +35,6 @@
                On edit the category is already known; the fragment renders
                server-side immediately below. #}
             <section class="uc-section">
-                <h2 class="uc-section-title">Category</h2>
                 <div class="uc-field" data-testid="item-category-picker">
                     <label class="uc-label" for="taxonomy_node_search">Category <span class="uc-required" aria-hidden="true">*</span></label>
                     <input type="hidden" name="taxonomy_node_id" id="taxonomy_node_id"
@@ -98,6 +71,29 @@
                 </div>
             </section>
 
+            {# ---- SKU override (always visible on new) ----
+
+               SKU is the only structural field per MISSION §3 Item management —
+               it's allocated from the leaf's prefix once a category is picked
+               (auto-generated when the user leaves it blank), but the input is
+               always rendered so the user can override or pre-fill it.
+
+               On edit the SKU is read-only and rendered inside the
+               post-category builtins block. #}
+            {% if not item %}
+                <section class="uc-section">
+                    <div class="uc-field">
+                        <label class="uc-label" for="sku-top">SKU</label>
+                        <input class="uc-input" type="text" id="sku-top" name="sku"
+                               value="{{ form.sku }}"
+                               data-testid="item-sku-input"
+                               maxlength="64"
+                               placeholder="Leave blank to auto-generate from the category prefix"
+                               {% if ro %}disabled{% endif %}>
+                    </div>
+                </section>
+            {% endif %}
+
             {# Built-in inputs render here, outside the catalog-fields HTMX
                swap target. When the user picks a different category, the
                HTMX response OOB-swaps this entire block so unpicked
@@ -114,7 +110,6 @@
 
             {% if item %}
                 <section class="uc-section">
-                    <h2 class="uc-section-title">Stock</h2>
                     <div class="uc-field">
                         <span class="uc-label">Current quantity</span>
                         <div class="uc-num uc-strong">

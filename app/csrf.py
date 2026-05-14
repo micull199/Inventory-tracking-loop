@@ -25,20 +25,26 @@ Implementation notes
   the body to the downstream app. ``BaseHTTPMiddleware`` would let us do this
   more ergonomically but has well-known performance and exception-handling
   caveats; the raw-ASGI form is small enough to keep here.
-- Multipart bodies are out of scope until we have an upload route; today
-  multipart POSTs would fail CSRF unless they set the header — that's a
-  forcing function rather than a hidden hazard.
+- Multipart bodies *are* parsed for the ``csrf_token`` field — the four
+  CSV upload routes (``/admin/<domain>/upload``) submit
+  ``multipart/form-data`` so the legacy "header-only" path would force a
+  Javascript shim. The parser is delegated to ``python_multipart`` (already
+  a FastAPI dependency); the buffered body is replayed downstream so the
+  route handler still sees the full request.
 - Exempt set is hard-coded and small. New exemptions require touching this
   file (and a code review): no per-route opt-out via a decorator, on purpose.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import secrets
 from collections.abc import Awaitable, Callable
 from typing import cast
 from urllib.parse import parse_qs
 
+import python_multipart
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -65,14 +71,16 @@ def _extract_submitted_token(headers: dict[bytes, bytes], body: bytes) -> str | 
     """Pull the submitted token from header or form body.
 
     Preference order: ``X-CSRF-Token`` header (HTMX / fetch), then
-    ``csrf_token`` form field. JSON bodies and multipart bodies are not
-    inspected — those callers must use the header.
+    ``csrf_token`` form field. JSON bodies are not inspected — those callers
+    must use the header. Both ``application/x-www-form-urlencoded`` and
+    ``multipart/form-data`` form bodies are parsed for the token field.
     """
     header_value = headers.get(b"x-csrf-token")
     if header_value:
         return header_value.decode("latin-1")
 
-    content_type = headers.get(b"content-type", b"").decode("latin-1").lower()
+    content_type_raw = headers.get(b"content-type", b"").decode("latin-1")
+    content_type = content_type_raw.lower()
     if "application/x-www-form-urlencoded" in content_type:
         try:
             decoded = body.decode("utf-8")
@@ -82,7 +90,54 @@ def _extract_submitted_token(headers: dict[bytes, bytes], body: bytes) -> str | 
         values = parsed.get(CSRF_FORM_FIELD, [])
         return values[0] if values else None
 
+    if "multipart/form-data" in content_type:
+        return _extract_token_from_multipart(content_type_raw, body)
+
     return None
+
+
+def _extract_token_from_multipart(content_type: str, body: bytes) -> str | None:
+    """Return the ``csrf_token`` field value from a multipart body, or None.
+
+    Uses ``python_multipart.parse_form`` (already a FastAPI dependency) to
+    stream the body once; only the matching field name is captured. Files in
+    the body are ignored — we don't need them at this layer.
+    """
+    found: dict[str, str] = {}
+
+    def on_field(field: object) -> None:
+        try:
+            name = field.field_name.decode("latin-1")  # type: ignore[attr-defined]
+        except (AttributeError, UnicodeDecodeError):
+            return
+        if name != CSRF_FORM_FIELD:
+            return
+        try:
+            value_bytes = field.value  # type: ignore[attr-defined]
+        except AttributeError:
+            return
+        with contextlib.suppress(UnicodeDecodeError):
+            found[name] = value_bytes.decode("utf-8")
+
+    def on_file(_file: object) -> None:
+        # Files in a CSRF-protected multipart body are not inspected by the
+        # middleware. ``parse_form`` still needs the callback to be set.
+        return
+
+    try:
+        python_multipart.parse_form(
+            headers={"Content-Type": content_type.encode("latin-1")},
+            input_stream=io.BytesIO(body),
+            on_field=on_field,
+            on_file=on_file,
+        )
+    except Exception:
+        # A malformed body shouldn't crash the request — let the downstream
+        # handler surface its own 400. The middleware returns None and the
+        # caller renders the "CSRF token missing or invalid" 403, which is
+        # the same posture as any other unauthenticated request.
+        return None
+    return found.get(CSRF_FORM_FIELD)
 
 
 def _make_replay_receive(body: bytes) -> Callable[[], Awaitable[Message]]:

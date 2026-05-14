@@ -6,7 +6,7 @@
 
     {% call c.page_header(
         "Fields on " ~ node.name,
-        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Pick the fields items in this category collect. The picker draws from the hardcoded catalog so the same field can&rsquo;t be invented twice under different names. Fields picked here are inherited by every sub-category below.",
+        subtitle=("Sub-category of " ~ parent.name ~ ".") if parent else "Pick the standard fields items in this category collect. Picks are inherited by every sub-category below. Edit the catalog in code (app/field_catalog.py) to add a new kind of field.",
         heading_testid="field-defs-heading"
     ) %}
     {% endcall %}
@@ -17,14 +17,14 @@
 
     {% if node.archived_at %}
         <p data-testid="node-archived-note" class="uc-muted">
-            <em>This node is archived. Existing fields stay visible for history; no new fields can be added.</em>
+            <em>This node is archived. No new fields can be picked.</em>
         </p>
     {% endif %}
 
     {% if inherited_groups %}
         <h3 class="uc-section-title" data-testid="inherited-fields-heading">Inherited fields</h3>
         <p class="uc-helper uc-mb-4">
-            Defined on a parent category. Read-only here — edit them on the owning category to change them for every descendant.
+            Picked on a parent category. Read-only here — manage them on the owning category.
         </p>
         {% for group in inherited_groups %}
             {% call c.card() %}
@@ -46,14 +46,15 @@
                         </thead>
                         <tbody>
                             {% for f in group.fields %}
+                                {% set entry = catalog_by_key.get(f.key) %}
                                 <tr data-testid="inherited-field-row" data-field-id="{{ f.id }}">
                                     <td class="uc-num uc-right">{{ f.sort_order }}</td>
-                                    <td>{{ f.name }}</td>
-                                    <td>{{ f.type.value }}</td>
+                                    <td>{{ entry.label if entry else f.key }}</td>
+                                    <td>{{ entry.type.value if entry else "—" }}</td>
                                     <td>{% if f.required %}Yes{% else %}No{% endif %}</td>
                                     <td>
-                                        {% if f.options_json %}
-                                            {{ f.options_json | join(", ") }}
+                                        {% if entry and entry.options %}
+                                            {{ entry.options | join(", ") }}
                                         {% else %}—{% endif %}
                                     </td>
                                 </tr>
@@ -65,7 +66,7 @@
         {% endfor %}
     {% endif %}
 
-    <h3 class="uc-section-title">Custom fields (this category)</h3>
+    <h3 class="uc-section-title">Picks (this category)</h3>
 
     {% if not node.archived_at and available_catalog_entries %}
         {% call c.card() %}
@@ -77,7 +78,7 @@
                     Pick a field from the catalog
                 </label>
                 <p class="uc-helper uc-mb-4">
-                    Fields are chosen from a curated catalog so the same field can&rsquo;t be defined twice under different names. To add a brand-new kind of field, edit <code>app/field_catalog.py</code>.
+                    Every item already has every catalog field as a column. Picking a field here just makes it appear on this category&rsquo;s items form, list, and CSV.
                 </p>
                 <div class="uc-row-2">
                     <select class="uc-select"
@@ -88,7 +89,6 @@
                         <option value="" disabled selected>— choose a field —</option>
                         {% for entry in available_catalog_entries %}
                             <option value="{{ entry.key }}"
-                                    data-storage="{{ entry.storage }}"
                                     data-type="{{ entry.type.value }}">
                                 {{ entry.label }} ({{ entry.type.value }})
                             </option>
@@ -104,7 +104,7 @@
         {% endcall %}
     {% elif not node.archived_at and not available_catalog_entries %}
         <p class="uc-helper" data-testid="field-def-picker-empty">
-            Every catalog field is already in use somewhere in this category&rsquo;s tree.
+            Every catalog field is already picked somewhere in this category&rsquo;s tree.
         </p>
     {% endif %}
 
@@ -125,7 +125,6 @@
                         <th class="uc-right">Order</th>
                         <th>Name</th>
                         <th>Type</th>
-                        <th>From catalog</th>
                         <th>Required</th>
                         <th>Options</th>
                         <th class="uc-right">Actions</th>
@@ -133,42 +132,26 @@
                 </thead>
                 <tbody>
                     {% for f in fields %}
+                        {% set entry = catalog_by_key.get(f.key) %}
                         <tr data-testid="field-def-row" data-field-id="{{ f.id }}">
                             <td class="uc-num uc-right" data-testid="field-def-sort-order">{{ f.sort_order }}</td>
                             <td data-testid="field-def-name">
-                                {{ f.name }}
-                                {% if f.archived_at is not none %}
-                                    {{ c.pill("archived") }}
-                                {% endif %}
+                                {{ entry.label if entry else f.key }}
                             </td>
-                            <td data-testid="field-def-type">{{ f.type.value }}</td>
-                            <td data-testid="field-def-catalog-key">
-                                {% if f.catalog_key and catalog_by_key.get(f.catalog_key) %}
-                                    <code>{{ f.catalog_key }}</code>
-                                {% else %}
-                                    <span class="uc-muted">legacy</span>
-                                {% endif %}
-                            </td>
+                            <td data-testid="field-def-type">{{ entry.type.value if entry else "—" }}</td>
                             <td data-testid="field-def-required">{% if f.required %}Yes{% else %}No{% endif %}</td>
                             <td data-testid="field-def-options">
-                                {% if f.options_json %}
-                                    {{ f.options_json | join(", ") }}
+                                {% if entry and entry.options %}
+                                    {{ entry.options | join(", ") }}
                                 {% else %}
                                     —
                                 {% endif %}
                             </td>
                             <td class="uc-actions">
-                                {% if f.archived_at is none %}
-                                    <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/archive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="archive-field-def">Archive</button>
-                                    </form>
-                                {% else %}
-                                    <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/unarchive" style="display:inline">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button type="submit" data-testid="unarchive-field-def">Unarchive</button>
-                                    </form>
-                                {% endif %}
+                                <form method="post" action="/admin/taxonomy/fields/{{ f.id }}/archive" style="display:inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" data-testid="archive-field-def">Remove</button>
+                                </form>
                             </td>
                         </tr>
                     {% endfor %}
@@ -178,8 +161,8 @@
     {% else %}
         <div data-testid="field-defs-empty">
             {{ c.empty_state(
-                "No archived fields" if show == "archived" else "No fields yet",
-                "" if show == "archived" else "Add your first field above to get started."
+                "No archived fields" if show == "archived" else "No fields picked yet",
+                "" if show == "archived" else "Pick your first field above to get started."
             ) }}
         </div>
     {% endif %}

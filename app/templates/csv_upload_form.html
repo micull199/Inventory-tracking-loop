@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title, subtitle=subtitle, heading_testid="csv-upload-heading") %}
+    {% endcall %}
+
+    {% if intro_html %}
+        <p class="uc-subtitle">{{ intro_html|safe }}</p>
+    {% endif %}
+
+    {% if expected_columns %}
+        <div class="uc-card" data-testid="csv-upload-columns">
+            <div class="uc-card-body">
+                <h2>Expected columns</h2>
+                <p class="uc-helper">
+                    The upload format matches the
+                    <a href="{{ download_url }}" data-testid="csv-upload-download-link">downloadable CSV</a>
+                    for this list. Required columns must be present in the header row.
+                </p>
+                <ul>
+                    {% for col in expected_columns %}
+                        <li>
+                            <code>{{ col.name }}</code>
+                            {% if col.required %} <span class="uc-required" aria-hidden="true">*</span>{% endif %}
+                            {% if col.note %} — {{ col.note }}{% endif %}
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    {% endif %}
+
+    <form method="post" action="{{ action }}" enctype="multipart/form-data" data-testid="csv-upload-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="uc-field">
+            <label class="uc-label" for="file">CSV or Numbers file <span class="uc-required" aria-hidden="true">*</span></label>
+            <input class="uc-input" type="file" id="file" name="file" accept=".csv,text/csv,.numbers" required data-testid="csv-upload-file">
+            <small class="uc-helper">
+                UTF-8 CSV or Apple Numbers (<code>.numbers</code>). Max 5 MB / 5,000 rows.
+                Numbers uploads use the first sheet's first table.
+            </small>
+        </div>
+        <div class="uc-field">
+            <label class="uc-label" for="dry_run">
+                <input type="checkbox" id="dry_run" name="dry_run" value="1" checked data-testid="csv-upload-dry-run">
+                Dry-run (validate only — show preview, don't create)
+            </label>
+            <small class="uc-helper">
+                Leave dry-run on for the first pass to see what would be created. Re-upload with dry-run unchecked to commit.
+            </small>
+        </div>
+        {% call c.form_actions() %}
+            {{ c.button("Upload", testid="csv-upload-submit") }}
+            {{ c.button("Cancel", variant="ghost", href=cancel_url, type="button", testid="csv-upload-cancel") }}
+        {% endcall %}
+    </form>
+{% endblock %}

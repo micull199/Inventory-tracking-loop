@@ -1,18 +1,15 @@
-{# Catalog-driven custom fields. Returned by ``GET /admin/items/_custom-fields``
-   as the HTMX response when the user picks a different category in the
-   picker, and inline-included from ``items_form.html`` on initial render.
+{# Catalog-driven fields rendered after the category is picked. Returned by
+   ``GET /admin/items/_custom-fields`` as the HTMX response when the user
+   picks a different category in the picker, and inline-included from
+   ``items_form.html`` on initial render.
 
-   The outer ``#item-fields-after-category`` div is the HTMX swap target;
-   it stays in the DOM with empty content when no category is picked yet so
-   subsequent picker changes have a stable target.
-
-   When this template is rendered as the HTMX response (``sku_preview_oob``
-   is set), it also emits an OOB swap for the full ``#item-builtins`` block
-   so the built-in inputs match the newly-picked leaf's catalog picks
-   (added when the new leaf picks them, removed when it doesn't).
+   Every catalog entry is now column-backed — the per-leaf picks decide
+   which fields render in ``items_form_builtins.html``. This template's
+   only job today is the OOB rerender of the builtins block + the
+   stable HTMX target div.
 
    Variables expected:
-       form, ro, field_defs, picked_column_keys, item, supplier_options,
+       form, ro, picked_column_keys, item, supplier_options,
        location_options, tracking_modes.
 #}
 
@@ -31,13 +28,9 @@
 {% endif %}
 
 <div id="item-fields-after-category" data-testid="item-fields-after-category">
-    {% if form.taxonomy_node_id %}
-        <div id="cf-container">
-            {% include "items_form_custom_fields.html" %}
-        </div>
-    {% else %}
+    {% if not form.taxonomy_node_id %}
         <p class="uc-helper" data-testid="item-pick-category-prompt">
-            <em>Pick a category to load any category-specific fields.</em>
+            <em>Pick a category to load its fields.</em>
         </p>
     {% endif %}
 </div>

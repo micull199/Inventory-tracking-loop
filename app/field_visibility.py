@@ -32,6 +32,11 @@ BUILT_IN_FIELDS: Final[tuple[str, ...]] = (
     "supplier_id",
     "location_id",
     "qr_code",
+    # Promoted standard fields (migration 0024). Per-category picks decide
+    # which actually render on the items form.
+    "ring_size",
+    "weight_grams",
+    "stone_shape",
 )
 
 # ``name`` and ``unit`` are DB NOT NULL on ``Item``, so they stay required
@@ -48,6 +53,9 @@ _DEFAULT_VISIBILITY: Final[dict[str, str]] = {
     "supplier_id": "optional",
     "location_id": "optional",
     "qr_code": "optional",
+    "ring_size": "optional",
+    "weight_grams": "optional",
+    "stone_shape": "optional",
 }
 
 

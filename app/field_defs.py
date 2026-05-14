@@ -1,40 +1,36 @@
-"""Manager-owned custom-field-def CRUD on any taxonomy node (S5).
+"""Manager-owned visibility-selector for catalog fields (S5, post-0024).
 
-Items inherit field defs from their leaf node *and every ancestor* — defining
-a field on a top-level category propagates to every sub-category under it.
-This module owns the per-node CRUD; the inheritance walk lives in
-``app.items._get_active_field_defs``.
+Items have a fixed set of standard fields (every catalog entry maps to a
+column on ``items``). This module owns the per-category *picks* — which
+catalog fields show on the items form, list, and CSV for items in that
+category. Picks inherit downward: a key picked on a top-level category is
+visible on every descendant.
 
-Field keys must be unique across a node and all its ancestors / descendants.
-Sibling-level collisions (two different sub-categories under the same parent
-both defining ``"colour"``) are allowed — those keys are independently scoped.
+Sibling-level collisions (two different sub-categories under the same
+parent both picking ``ring_size``) are allowed — those picks are
+independently scoped. Same-tree collisions (a key picked on a node AND any
+ancestor/descendant) are rejected; inheritance would surface the key twice.
 
-URL shape (matches S4 sub-cat conventions: parent-scoped for list/create,
-flat-by-id for the rest):
+URL shape:
 
-- ``/admin/taxonomy/{node_id}/fields[?show=…]``       — list (active/archived).
-- ``/admin/taxonomy/{node_id}/fields/new``             — form.
-- ``POST /admin/taxonomy/{node_id}/fields``            — create.
-- ``/admin/taxonomy/fields/{field_id}/edit``           — edit form.
-- ``POST /admin/taxonomy/fields/{field_id}``           — update.
-- ``POST /admin/taxonomy/fields/{field_id}/archive``   — archive.
-- ``POST /admin/taxonomy/fields/{field_id}/unarchive`` — unarchive.
+- ``/admin/taxonomy/{node_id}/fields[?show=…]``       — list picks.
+- ``POST /admin/taxonomy/{node_id}/fields/pick``      — pick a catalog field.
+- ``POST /admin/taxonomy/fields/{field_id}/archive``   — remove the pick.
+- ``POST /admin/taxonomy/fields/{field_id}/unarchive`` — no-op, kept for
+  RBAC table stability; 400s with a "no longer supported" message.
 
 The router is mounted at the same prefix as ``app.taxonomy.router``
-(``/admin/taxonomy``) but kept in a separate module so neither file passes the
-~750-line readability threshold.
+(``/admin/taxonomy``) but kept in a separate module so neither file passes
+the ~750-line readability threshold.
 
-Access: ``Manager`` and ``Admin``. Workshop and Office both 403 — Office is a
-sibling role, not a subset, per MISSION §3 ("Office cannot manage the taxonomy").
+Access: ``Manager`` and ``Admin``. Workshop and Office both 403.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
@@ -54,23 +50,6 @@ router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy_field_defs"])
 _SORT_ORDER_STEP = 10
 
 
-def _check_name_unique(
-    db: Session, *, node_id: int, name: str, exclude_id: int | None = None
-) -> None:
-    stmt = (
-        select(TaxonomyFieldDef.id)
-        .where(TaxonomyFieldDef.node_id == node_id)
-        .where(TaxonomyFieldDef.name == name)
-    )
-    if exclude_id is not None:
-        stmt = stmt.where(TaxonomyFieldDef.id != exclude_id)
-    if db.execute(stmt).first() is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="a field with that name already exists on this node",
-        )
-
-
 def _check_key_unique(
     db: Session, *, node_id: int, key: str, exclude_id: int | None = None
 ) -> None:
@@ -84,7 +63,7 @@ def _check_key_unique(
     if db.execute(stmt).first() is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=("a field whose key collides with this name already exists on this node"),
+            detail="this field is already picked on this category",
         )
 
 
@@ -107,9 +86,7 @@ def _ancestor_ids(db: Session, node: TaxonomyNode) -> list[int]:
 def _descendant_ids(db: Session, node_id: int) -> list[int]:
     """Two-level descendant collection (matches the taxonomy depth limit).
 
-    Excludes ``node_id`` itself. Includes both active and archived descendants
-    — archived sub-cats can still host field defs whose keys would clash on
-    unarchive.
+    Excludes ``node_id`` itself.
     """
     children = list(
         db.execute(select(TaxonomyNode.id).where(TaxonomyNode.parent_id == node_id))
@@ -129,15 +106,9 @@ def _descendant_ids(db: Session, node_id: int) -> list[int]:
 def _check_key_unique_in_tree(
     db: Session, *, node: TaxonomyNode, key: str, exclude_id: int | None = None
 ) -> None:
-    """Reject ``key`` if it collides with any active field def on an ancestor
-    or descendant of ``node``.
-
-    Field defs inherit downward through ancestors (see
-    ``app.items._get_active_field_defs``), so the same key appearing at two
-    different levels would surface twice on a leaf's item form — ambiguous and
-    bug-prone. Sibling-level collisions (two different sub-categories under the
-    same parent both defining ``"colour"``) are fine: those keys are
-    independently scoped.
+    """Reject ``key`` if any ancestor or descendant of ``node`` already
+    picks it. Sibling-level overlap (two siblings under the same parent
+    picking the same key) is allowed — those picks are independently scoped.
     """
     others = set(_ancestor_ids(db, node)) | set(_descendant_ids(db, node.id))
     if not others:
@@ -146,7 +117,6 @@ def _check_key_unique_in_tree(
         select(TaxonomyFieldDef.id, TaxonomyFieldDef.node_id)
         .where(TaxonomyFieldDef.node_id.in_(others))
         .where(TaxonomyFieldDef.key == key)
-        .where(TaxonomyFieldDef.archived_at.is_(None))
     )
     if exclude_id is not None:
         stmt = stmt.where(TaxonomyFieldDef.id != exclude_id)
@@ -158,38 +128,22 @@ def _check_key_unique_in_tree(
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
-            f"field key {key!r} already exists on “{other_name}” in the same "
-            "category tree. Field keys must be unique across a category and its "
+            f"field {key!r} is already picked on “{other_name}” in the same "
+            "category tree. Picks must be unique across a category and its "
             "descendants (inheritance would surface it twice)."
         ),
     )
 
 
 def _picked_catalog_keys_in_tree(db: Session, node: TaxonomyNode) -> set[str]:
-    """Catalog keys already picked on ``node``, its ancestors, or descendants.
-
-    Used to filter the picker dropdown so users can't pick the same catalog
-    entry twice in one inheritance chain. Includes active rows only —
-    archived picks are free to be re-picked. Sibling collisions are
-    independently scoped and not surfaced here.
-    """
+    """Catalog keys already picked on ``node``, its ancestors, or descendants."""
     tree_ids = {node.id, *_ancestor_ids(db, node), *_descendant_ids(db, node.id)}
-    stmt = (
-        select(TaxonomyFieldDef.catalog_key)
-        .where(TaxonomyFieldDef.node_id.in_(tree_ids))
-        .where(TaxonomyFieldDef.archived_at.is_(None))
-        .where(TaxonomyFieldDef.catalog_key.is_not(None))
-    )
+    stmt = select(TaxonomyFieldDef.key).where(TaxonomyFieldDef.node_id.in_(tree_ids))
     return {row for row in db.execute(stmt).scalars().all() if row}
 
 
 def _available_catalog_entries(db: Session, node: TaxonomyNode) -> list[CatalogEntry]:
-    """Catalog entries the manager can still pick on ``node``.
-
-    Order: catalog declaration order. The catalog's ``sort_order`` is the
-    field's *display* order on items (used by templates); the picker shows
-    entries in their declared order so related fields stay grouped.
-    """
+    """Catalog entries the manager can still pick on ``node``."""
     picked = _picked_catalog_keys_in_tree(db, node)
     return [e for e in FIELD_CATALOG if e.key not in picked]
 
@@ -220,11 +174,7 @@ def _is_leaf(db: Session, node: TaxonomyNode) -> bool:
 
 def has_active_field_defs(db: Session, node_id: int) -> bool:
     """Public helper used by ``app.taxonomy`` to gate sub-cat creation."""
-    stmt = (
-        select(TaxonomyFieldDef.id)
-        .where(TaxonomyFieldDef.node_id == node_id)
-        .where(TaxonomyFieldDef.archived_at.is_(None))
-    )
+    stmt = select(TaxonomyFieldDef.id).where(TaxonomyFieldDef.node_id == node_id)
     return db.execute(stmt).first() is not None
 
 
@@ -250,14 +200,9 @@ def _flash(request: Request, message: str) -> None:
 
 
 def _children_back_url(node: TaxonomyNode) -> str:
-    """Where the breadcrumb back-link points: parent's children list, or the
-    top-level taxonomy index for a top-level node."""
     if node.parent_id is None:
         return "/admin/taxonomy"
     return f"/admin/taxonomy/{node.parent_id}/children"
-
-
-_LIST_ORDER = case((TaxonomyFieldDef.archived_at.is_(None), 0), else_=1)
 
 
 # ---------------------------------------------------------------------------
@@ -277,28 +222,28 @@ def list_field_defs(
 
     if show not in {"active", "archived"}:
         show = "active"
-
-    stmt = select(TaxonomyFieldDef).where(TaxonomyFieldDef.node_id == node.id)
-    if show == "active":
-        stmt = stmt.where(TaxonomyFieldDef.archived_at.is_(None))
+    # Picks are hard-delete now (no archived_at). The ``show=archived`` query
+    # param is retained for URL stability but always renders an empty list.
+    if show == "archived":
+        rows: list[TaxonomyFieldDef] = []
     else:
-        stmt = stmt.where(TaxonomyFieldDef.archived_at.is_not(None))
-    stmt = stmt.order_by(_LIST_ORDER, TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
-
-    rows = list(db.execute(stmt).scalars().all())
+        rows = list(
+            db.execute(
+                select(TaxonomyFieldDef)
+                .where(TaxonomyFieldDef.node_id == node.id)
+                .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.key)
+            )
+            .scalars()
+            .all()
+        )
 
     parent: TaxonomyNode | None = None
     if node.parent_id is not None:
         parent = db.get(TaxonomyNode, node.parent_id)
 
-    # Inherited groups — active field defs on each ancestor, grouped by the
-    # owning node so the template can render "Inherited from <name>" blocks.
-    # Always shown on the active tab; the archived tab is for this node's own
-    # archived defs only.
     inherited_groups: list[dict[str, object]] = []
     if show == "active":
-        ancestor_ids = _ancestor_ids(db, node)
-        for ancestor_id in ancestor_ids:
+        for ancestor_id in _ancestor_ids(db, node):
             ancestor = db.get(TaxonomyNode, ancestor_id)
             if ancestor is None:
                 continue
@@ -306,8 +251,7 @@ def list_field_defs(
                 db.execute(
                     select(TaxonomyFieldDef)
                     .where(TaxonomyFieldDef.node_id == ancestor.id)
-                    .where(TaxonomyFieldDef.archived_at.is_(None))
-                    .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.name)
+                    .order_by(TaxonomyFieldDef.sort_order, TaxonomyFieldDef.key)
                 )
                 .scalars()
                 .all()
@@ -334,7 +278,7 @@ def list_field_defs(
 
 
 # ---------------------------------------------------------------------------
-# Pick from catalog (catalog-driven schema)
+# Pick from catalog
 # ---------------------------------------------------------------------------
 
 
@@ -346,14 +290,7 @@ def pick_field_def_from_catalog(
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
-    """Materialise a ``TaxonomyFieldDef`` row from a catalog entry.
-
-    Name, type, options, and key all come from the catalog — the manager
-    does not type them. Same tree-uniqueness rule as the free-text create
-    route (`_check_key_unique_in_tree`): a catalog entry cannot be picked
-    twice in one ancestor-descendant chain, but sibling sub-categories
-    can independently pick the same entry.
-    """
+    """Pick a catalog field to show on this category's items."""
 
     node = _get_node(db, node_id)
     if node.archived_at is not None:
@@ -369,19 +306,12 @@ def pick_field_def_from_catalog(
             detail=f"unknown catalog field {catalog_key!r}",
         )
 
-    # Same-node uniqueness on both ``name`` and ``key`` (across active +
-    # archived rows). Tree uniqueness on the catalog key for active rows.
-    _check_name_unique(db, node_id=node.id, name=entry.label)
     _check_key_unique(db, node_id=node.id, key=entry.key)
     _check_key_unique_in_tree(db, node=node, key=entry.key)
 
     field = TaxonomyFieldDef(
         node_id=node.id,
-        name=entry.label,
         key=entry.key,
-        catalog_key=entry.key,
-        type=entry.type,
-        options_json=list(entry.options) if entry.options else None,
         required=False,
         sort_order=_next_sort_order(db, node.id),
     )
@@ -397,15 +327,13 @@ def pick_field_def_from_catalog(
         before=None,
         after={
             "node_id": node.id,
-            "catalog_key": entry.key,
-            "key": field.key,
+            "key": entry.key,
             "label": entry.label,
             "type": entry.type.value,
-            "storage": entry.storage,
         },
     )
     db.commit()
-    _flash(request, f"Field “{entry.label}” added from the catalog.")
+    _flash(request, f"Field “{entry.label}” added.")
     return RedirectResponse(
         url=f"/admin/taxonomy/{node.id}/fields",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -413,7 +341,7 @@ def pick_field_def_from_catalog(
 
 
 # ---------------------------------------------------------------------------
-# Archive / unarchive
+# Remove pick (hard-delete; replaces the archive/unarchive pair)
 # ---------------------------------------------------------------------------
 
 
@@ -424,25 +352,28 @@ def archive_field_def(
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
+    """Remove a pick. Path name kept for RBAC table stability — the action
+    is now a hard-delete since the slim TaxonomyFieldDef has no
+    ``archived_at`` column. Audited as ``taxonomy_field_def.removed``.
+    """
     field = _get_field_def(db, field_id)
-    if field.archived_at is None:
-        field.archived_at = datetime.now(UTC)
-        record_audit(
-            db,
-            actor=user,
-            action="taxonomy_field_def.archived",
-            entity_type="taxonomy_field_def",
-            entity_id=field.id,
-            before={"archived_at": None},
-            after={"archived_at": field.archived_at},
-        )
-        db.commit()
-        _flash(request, f"Field “{field.name}” archived.")
-    else:
-        db.rollback()
-
+    node_id = field.node_id
+    entry = CATALOG_BY_KEY.get(field.key)
+    label = entry.label if entry else field.key
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_field_def.removed",
+        entity_type="taxonomy_field_def",
+        entity_id=field.id,
+        before={"node_id": node_id, "key": field.key},
+        after=None,
+    )
+    db.delete(field)
+    db.commit()
+    _flash(request, f"Field “{label}” removed.")
     return RedirectResponse(
-        url=f"/admin/taxonomy/{field.node_id}/fields",
+        url=f"/admin/taxonomy/{node_id}/fields",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -454,42 +385,18 @@ def unarchive_field_def(
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
-    field = _get_field_def(db, field_id)
+    """No-op — picks are hard-deleted now. Returns 400 with explanation.
 
-    if field.archived_at is not None:
-        # Node-archive guard stays — an archived node is structurally inert
-        # and shouldn't accept a re-activated field. The legacy "leaf only"
-        # gate is dropped: field defs can now live on any node and inherit
-        # downward, so unarchiving onto a parent-of-children is legitimate.
-        # The tree-wide key uniqueness is re-checked so a sibling field
-        # added at a different level while this one was archived doesn't
-        # silently clash on resurrection.
-        node = db.get(TaxonomyNode, field.node_id)
-        assert node is not None
-        if node.archived_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="cannot unarchive a field on an archived node",
-            )
-        _check_key_unique_in_tree(db, node=node, key=field.key, exclude_id=field.id)
-
-        previous = field.archived_at
-        field.archived_at = None
-        record_audit(
-            db,
-            actor=user,
-            action="taxonomy_field_def.unarchived",
-            entity_type="taxonomy_field_def",
-            entity_id=field.id,
-            before={"archived_at": previous},
-            after={"archived_at": None},
-        )
-        db.commit()
-        _flash(request, f"Field “{field.name}” restored.")
-    else:
-        db.rollback()
-
-    return RedirectResponse(
-        url=f"/admin/taxonomy/{field.node_id}/fields",
-        status_code=status.HTTP_303_SEE_OTHER,
+    Path retained for RBAC sweep stability. ``record_audit`` is intentionally
+    *not* called because no state change occurs; the route is exempt from
+    the audit-coverage sweep via ``_EXEMPT_FROM_AUDIT_WRITE``.
+    """
+    _ = _get_field_def(db, field_id)
+    _ = user  # explicit gate via the dependency; no state to audit.
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "Picks are now hard-deleted on remove (no archive/unarchive). "
+            "Re-pick the field from the catalog if you want it back."
+        ),
     )

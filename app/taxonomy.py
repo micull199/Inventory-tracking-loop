@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -49,6 +49,14 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.auth import require_role
 from app.csv_export import csv_branch
+from app.csv_import import (
+    CsvUploadError,
+    RowResult,
+    check_required_and_known_headers,
+    mark_intra_file_duplicates,
+    read_upload,
+    row_to_dict,
+)
 from app.db import get_session
 from app.models import (
     Archetype,
@@ -65,6 +73,12 @@ from app.sku import effective_archetype, node_depth
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
+# Bulk-upload routes — three of them, mirroring the three CSV download
+# surfaces (top-level, sub-categories per parent, grandchildren per parent +
+# sub-cat). The literal paths must take precedence over the dynamic
+# ``/{node_id}`` and ``/{parent_id}/children`` routes; ``app/main.py``
+# includes this router BEFORE the main ``router``.
+upload_router = APIRouter(prefix="/admin/taxonomy", tags=["taxonomy"])
 
 
 # ---------------------------------------------------------------------------
@@ -614,20 +628,33 @@ _TAXONOMY_CSV_HEADERS: list[str] = [
     "id",
     "sort_order",
     "name",
+    "sku_prefix",
+    "archetype",
 ]
 
 
 def _csv_rows_for_taxonomy(rows: list[TaxonomyNode]) -> list[list[Any]]:
     """Map top-level ``TaxonomyNode`` rows to CSV cell values.
 
-    The cells mirror the HTML table's "Order" + "Name" columns one-for-one.
-    ``id`` is added at the front so a downstream consumer can join (the HTML
-    carries it as ``data-node-id`` rather than a cell). ``archived_at`` is
-    not exposed — the active partition is encoded in the filename. Caller
+    The cells mirror the HTML table's "Order" + "Name" columns one-for-one
+    and add ``sku_prefix`` + ``archetype`` so the download is round-trippable
+    through ``upload_taxonomy_top`` (which requires ``archetype`` in the
+    header). ``id`` is at the front so a downstream consumer can join (the
+    HTML carries it as ``data-node-id`` rather than a cell). ``archived_at``
+    is not exposed — the active partition is encoded in the filename. Caller
     is responsible for ensuring the input contains only top-level nodes
     (the route's ``parent_id IS NULL`` filter handles this).
     """
-    return [[n.id, n.sort_order, n.name] for n in rows]
+    return [
+        [
+            n.id,
+            n.sort_order,
+            n.name,
+            n.sku_prefix or "",
+            n.archetype.value if n.archetype else "",
+        ]
+        for n in rows
+    ]
 
 
 @router.get("")
@@ -2110,5 +2137,1085 @@ def unarchive_stage(
 
     return RedirectResponse(
         url=f"/admin/taxonomy/{node.id}/stages",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ===========================================================================
+# CSV uploads — three surfaces (top-level / sub-cats / grandchildren)
+# ===========================================================================
+#
+# Each surface accepts a CSV whose columns mirror its download. Top-level adds
+# optional ``sku_prefix`` + required ``archetype`` columns (the download skips
+# both, but the spec allows "optional columns the download skips"). Sub-cats
+# and grandchildren skip ``archetype`` — it's inherited from the root.
+
+
+_TOP_UPLOAD_KNOWN: set[str] = {"id", "sort_order", "name", "sku_prefix", "archetype"}
+_TOP_UPLOAD_REQUIRED: set[str] = {"name", "archetype"}
+_TOP_UPLOAD_COLUMNS = [
+    {"name": "id", "required": False, "note": "blank = create; matching id = skip"},
+    {"name": "sort_order", "required": False, "note": "integer; defaults to max+10"},
+    {"name": "name", "required": True, "note": "unique across active + archived"},
+    {"name": "sku_prefix", "required": False, "note": "1-8 alnum; auto-derived from name if blank"},
+    {
+        "name": "archetype",
+        "required": True,
+        "note": "bulk / unique / unique_variant",
+    },
+]
+
+_CHILD_UPLOAD_KNOWN: set[str] = {"id", "sort_order", "name", "sku_prefix"}
+_CHILD_UPLOAD_REQUIRED: set[str] = {"name"}
+_CHILD_UPLOAD_COLUMNS = [
+    {"name": "id", "required": False, "note": "blank = create; matching id = skip"},
+    {"name": "sort_order", "required": False, "note": "integer; defaults to max+10"},
+    {"name": "name", "required": True, "note": "unique within siblings under this parent"},
+    {"name": "sku_prefix", "required": False, "note": "1-8 alnum; auto-derived from name if blank"},
+]
+
+
+def _coerce_sort_order(raw: str) -> tuple[int | None, str | None]:
+    """Return ``(value, error)``. Empty input → ``(None, None)``."""
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return None, None
+    try:
+        return int(cleaned), None
+    except ValueError:
+        return None, "sort_order must be a whole number"
+
+
+def _coerce_archetype(raw: str) -> tuple[Archetype | None, str | None]:
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return None, "archetype is required"
+    try:
+        return Archetype(cleaned), None
+    except ValueError:
+        return None, "archetype must be one of: unique, bulk, unique_variant"
+
+
+def _coerce_sku_prefix(
+    raw: str, *, default_from_name: str | None
+) -> tuple[str | None, str | None]:
+    """Strip + uppercase + validate; auto-derive from name if blank."""
+    cleaned = (raw or "").strip().upper()
+    if not cleaned:
+        if default_from_name is None:
+            return None, "sku_prefix is required"
+        from app.models import _derive_sku_prefix as _derive
+
+        return _derive(default_from_name), None
+    if not cleaned.isalnum():
+        return None, "sku_prefix must contain only alphanumeric characters"
+    if len(cleaned) > 8:
+        return None, "sku_prefix must be 8 characters or fewer"
+    return cleaned, None
+
+
+# ---------------------------------------------------------------------------
+# Top-level upload
+# ---------------------------------------------------------------------------
+
+
+def _build_top_update_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    *,
+    existing: TaxonomyNode,
+    other_names_lc: set[str],
+    other_prefixes: set[str],
+) -> RowResult:
+    """Diff CSV cells against an existing top-level taxonomy node."""
+    # Parse + validate each editable cell. Blank cells = no change.
+    raw_name = (raw.get("name") or "").strip()
+    name = raw_name or existing.name
+    if name.lower() != existing.name.lower() and name.lower() in other_names_lc:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name",
+            error_message="another category already uses that name",
+        )
+
+    sort_value, err = _coerce_sort_order(raw.get("sort_order", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sort_order", error_message=err,
+        )
+    new_sort = sort_value if sort_value is not None else existing.sort_order
+
+    archetype_raw = (raw.get("archetype") or "").strip()
+    if archetype_raw:
+        new_archetype, err = _coerce_archetype(archetype_raw)
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="archetype", error_message=err,
+            )
+    else:
+        new_archetype = existing.archetype
+
+    prefix_raw = (raw.get("sku_prefix") or "").strip()
+    if prefix_raw:
+        new_prefix, err = _coerce_sku_prefix(prefix_raw, default_from_name=name)
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="sku_prefix", error_message=err,
+            )
+        assert new_prefix is not None
+        if new_prefix != (existing.sku_prefix or "") and new_prefix in other_prefixes:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="sku_prefix",
+                error_message=(
+                    f"another top-level category already uses sku_prefix {new_prefix!r}"
+                ),
+            )
+    else:
+        new_prefix = existing.sku_prefix
+
+    # Archetype + sku_prefix are locked once any descendant item exists
+    # (mirrors the per-edit form route). Reject changes; warn-and-keep
+    # would silently overwrite something the user typed deliberately.
+    locked = _has_descendant_items(db, existing.id)
+    if locked:
+        if new_archetype != existing.archetype:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="archetype",
+                error_message="cannot change archetype: items exist under this category",
+            )
+        if new_prefix != existing.sku_prefix:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="sku_prefix",
+                error_message="cannot change SKU prefix: items exist under this category",
+            )
+
+    changes: dict[str, Any] = {}
+    before: dict[str, Any] = {}
+    if name != existing.name:
+        changes["name"] = name
+        before["name"] = existing.name
+    if new_sort != existing.sort_order:
+        changes["sort_order"] = new_sort
+        before["sort_order"] = existing.sort_order
+    if new_archetype != existing.archetype:
+        changes["archetype"] = new_archetype
+        before["archetype"] = existing.archetype
+    if new_prefix != existing.sku_prefix:
+        changes["sku_prefix"] = new_prefix
+        before["sku_prefix"] = existing.sku_prefix
+
+    if not changes:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="skip",
+            error_field="id",
+            error_message=f"no changes (id={existing.id})",
+        )
+    return RowResult(
+        row_number=row_number, raw=raw, tag="update",
+        payload={"existing_id": existing.id, "changes": changes, "before": before},
+    )
+
+
+def _build_top_row_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    *,
+    existing_by_id: dict[int, TaxonomyNode],
+    existing_names_lc: set[str],
+    existing_prefixes: set[str],
+) -> RowResult:
+    raw_id = (raw.get("id") or "").strip()
+    if raw_id:
+        try:
+            id_int = int(raw_id)
+        except ValueError:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="id", error_message="id must be a whole number",
+            )
+        existing = existing_by_id.get(id_int)
+        if existing is not None:
+            others = existing_names_lc - {existing.name.lower()}
+            other_prefixes = existing_prefixes - {existing.sku_prefix or ""}
+            return _build_top_update_result(
+                db, row_number, raw,
+                existing=existing,
+                other_names_lc=others,
+                other_prefixes=other_prefixes,
+            )
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="id",
+            error_message=f"unknown id {id_int} — don't reuse ids from another database",
+        )
+
+    name = (raw.get("name") or "").strip()
+    if not name:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name", error_message="name is required",
+        )
+    if name.lower() in existing_names_lc:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name",
+            error_message="a category with that name already exists",
+        )
+
+    sort_value, err = _coerce_sort_order(raw.get("sort_order", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sort_order", error_message=err,
+        )
+
+    archetype_value, err = _coerce_archetype(raw.get("archetype", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="archetype", error_message=err,
+        )
+    assert archetype_value is not None
+
+    prefix_value, err = _coerce_sku_prefix(
+        raw.get("sku_prefix", ""), default_from_name=name
+    )
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sku_prefix", error_message=err,
+        )
+    assert prefix_value is not None
+    if prefix_value in existing_prefixes:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sku_prefix",
+            error_message=(
+                f"another top-level category already uses sku_prefix {prefix_value!r}"
+            ),
+        )
+
+    return RowResult(
+        row_number=row_number, raw=raw, tag="new",
+        payload={
+            "name": name,
+            "sort_order": sort_value,
+            "archetype": archetype_value,
+            "sku_prefix": prefix_value,
+        },
+    )
+
+
+def _validate_top_upload(
+    db: Session, headers: list[str], body: list[list[str]]
+) -> list[RowResult]:
+    check_required_and_known_headers(
+        headers, known=_TOP_UPLOAD_KNOWN, required=_TOP_UPLOAD_REQUIRED
+    )
+    existing_rows = list(
+        db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id.is_(None))
+        ).scalars().all()
+    )
+    existing_by_id: dict[int, TaxonomyNode] = {n.id: n for n in existing_rows}
+    existing_names_lc = {n.name.lower() for n in existing_rows}
+    existing_prefixes = {n.sku_prefix for n in existing_rows if n.sku_prefix}
+
+    results: list[RowResult] = []
+    for offset, row in enumerate(body):
+        row_number = offset + 2
+        raw = row_to_dict(headers, row)
+        results.append(
+            _build_top_row_result(
+                db, row_number, raw,
+                existing_by_id=existing_by_id,
+                existing_names_lc=existing_names_lc,
+                existing_prefixes=existing_prefixes,
+            )
+        )
+    mark_intra_file_duplicates(results, key="name", case_insensitive=True)
+    mark_intra_file_duplicates(results, key="sku_prefix", case_insensitive=True)
+    return results
+
+
+def _summarise_top_row(r: RowResult) -> str:
+    if r.payload is None:
+        return ""
+    if r.tag == "update":
+        return "changed: " + ", ".join(sorted(r.payload.get("changes", {})))
+    arch = r.payload["archetype"]
+    arch_name = arch.value if hasattr(arch, "value") else str(arch)
+    return f"name={r.payload['name']} archetype={arch_name} sku_prefix={r.payload['sku_prefix']}"
+
+
+@upload_router.get("/upload", response_class=HTMLResponse)
+def upload_taxonomy_top_form(
+    request: Request,
+    _user: User = Depends(require_role(Role.MANAGER)),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "csv_upload_form.html",
+        {
+            "current_user": _user,
+            "title": "Upload top-level categories CSV",
+            "subtitle": (
+                "Bulk-create top-level categories. Field defs, stages and "
+                "defaults are not uploadable in v1."
+            ),
+            "intro_html": "",
+            "action": "/admin/taxonomy/upload",
+            "cancel_url": "/admin/taxonomy",
+            "download_url": "/admin/taxonomy?format=csv&show=active",
+            "expected_columns": _TOP_UPLOAD_COLUMNS,
+        },
+    )
+
+
+@upload_router.post("/upload")
+async def upload_taxonomy_top(
+    request: Request,
+    file: UploadFile = File(...),
+    dry_run: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    raw_bytes = await file.read()
+    is_dry_run = dry_run == "1"
+
+    preview_ctx: dict[str, Any] = {
+        "current_user": user,
+        "title": "Top-level categories CSV — preview",
+        "subtitle": "",
+        "upload_url": "/admin/taxonomy/upload",
+        "cancel_url": "/admin/taxonomy",
+        "rows": [],
+        "headers": [],
+        "new_count": 0,
+        "skip_count": 0,
+        "error_count": 0,
+        "top_level_error": None,
+        "committed": False,
+    }
+
+    try:
+        file_sha256, headers, body = read_upload(raw_bytes, filename=file.filename)
+        results = _validate_top_upload(db, headers, body)
+    except CsvUploadError as exc:
+        preview_ctx["top_level_error"] = str(exc)
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    new_count = sum(1 for r in results if r.tag == "new")
+    update_count = sum(1 for r in results if r.tag == "update")
+    skip_count = sum(1 for r in results if r.tag == "skip")
+    error_count = sum(1 for r in results if r.tag == "error")
+    preview_ctx.update(
+        {
+            "headers": headers,
+            "rows": [
+                {
+                    "row_number": r.row_number,
+                    "tag": r.tag,
+                    "error_field": r.error_field,
+                    "error_message": r.error_message,
+                    "warnings": r.warnings,
+                    "summary": _summarise_top_row(r),
+                }
+                for r in results
+            ],
+            "new_count": new_count,
+            "update_count": update_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+        }
+    )
+
+    if is_dry_run or error_count > 0 or (new_count == 0 and update_count == 0):
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    next_sort = _next_top_sort_order(db)
+    for r in results:
+        if r.payload is None:
+            continue
+        if r.tag == "new":
+            p = r.payload
+            sort_order = p["sort_order"] if p["sort_order"] is not None else next_sort
+            next_sort = max(next_sort, sort_order) + _SORT_ORDER_STEP
+            node = TaxonomyNode(
+                parent_id=None,
+                name=p["name"],
+                sort_order=sort_order,
+                archetype=p["archetype"],
+                sku_prefix=p["sku_prefix"],
+            )
+            db.add(node)
+            db.flush()
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.created",
+                entity_type="taxonomy_node",
+                entity_id=node.id,
+                before=None,
+                after={
+                    "name": node.name,
+                    "sort_order": node.sort_order,
+                    "parent_id": None,
+                    "archetype": node.archetype.value if node.archetype else None,
+                    "sku_prefix": node.sku_prefix,
+                },
+            )
+        elif r.tag == "update":
+            p = r.payload
+            node_to_update = db.get(TaxonomyNode, p["existing_id"])
+            if node_to_update is None:  # pragma: no cover
+                continue
+            for field, new_val in p["changes"].items():
+                setattr(node_to_update, field, new_val)
+            # JSON-friendly before/after — enums collapse to their value.
+            json_changes = {
+                k: (v.value if hasattr(v, "value") else v)
+                for k, v in p["changes"].items()
+            }
+            json_before = {
+                k: (v.value if hasattr(v, "value") else v)
+                for k, v in p["before"].items()
+            }
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.updated",
+                entity_type="taxonomy_node",
+                entity_id=node_to_update.id,
+                before=json_before,
+                after=json_changes,
+            )
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_node.csv_uploaded",
+        entity_type="taxonomy_node",
+        entity_id=None,
+        before=None,
+        after={
+            "count": new_count,
+            "updated_count": update_count,
+            "file_sha256": file_sha256,
+            "depth": 0,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Imported {new_count} new, updated {update_count} categor(y/ies) from CSV.",
+    )
+    return RedirectResponse(url="/admin/taxonomy", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# ---------------------------------------------------------------------------
+# Sub-category upload (depth 1)
+# ---------------------------------------------------------------------------
+
+
+def _build_child_update_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    *,
+    existing: TaxonomyNode,
+    other_names_lc: set[str],
+    other_prefixes: set[str],
+) -> RowResult:
+    """Diff CSV cells against an existing sub-category / grandchild node."""
+    raw_name = (raw.get("name") or "").strip()
+    name = raw_name or existing.name
+    if name.lower() != existing.name.lower() and name.lower() in other_names_lc:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name",
+            error_message="another sibling already uses that name",
+        )
+
+    sort_value, err = _coerce_sort_order(raw.get("sort_order", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sort_order", error_message=err,
+        )
+    new_sort = sort_value if sort_value is not None else existing.sort_order
+
+    prefix_raw = (raw.get("sku_prefix") or "").strip()
+    if prefix_raw:
+        new_prefix, err = _coerce_sku_prefix(prefix_raw, default_from_name=name)
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="sku_prefix", error_message=err,
+            )
+        assert new_prefix is not None
+        if new_prefix != (existing.sku_prefix or "") and new_prefix in other_prefixes:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="sku_prefix",
+                error_message=(
+                    f"another sibling already uses sku_prefix {new_prefix!r}"
+                ),
+            )
+    else:
+        new_prefix = existing.sku_prefix
+
+    # SKU prefix is locked once descendant items exist.
+    if new_prefix != existing.sku_prefix and _has_descendant_items(db, existing.id):
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sku_prefix",
+            error_message="cannot change SKU prefix: items exist under this category",
+        )
+
+    changes: dict[str, Any] = {}
+    before: dict[str, Any] = {}
+    if name != existing.name:
+        changes["name"] = name
+        before["name"] = existing.name
+    if new_sort != existing.sort_order:
+        changes["sort_order"] = new_sort
+        before["sort_order"] = existing.sort_order
+    if new_prefix != existing.sku_prefix:
+        changes["sku_prefix"] = new_prefix
+        before["sku_prefix"] = existing.sku_prefix
+
+    if not changes:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="skip",
+            error_field="id",
+            error_message=f"no changes (id={existing.id})",
+        )
+    return RowResult(
+        row_number=row_number, raw=raw, tag="update",
+        payload={"existing_id": existing.id, "changes": changes, "before": before},
+    )
+
+
+def _build_child_row_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    *,
+    existing_by_id: dict[int, TaxonomyNode],
+    existing_names_lc: set[str],
+    existing_prefixes: set[str],
+) -> RowResult:
+    raw_id = (raw.get("id") or "").strip()
+    if raw_id:
+        try:
+            id_int = int(raw_id)
+        except ValueError:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="id", error_message="id must be a whole number",
+            )
+        existing = existing_by_id.get(id_int)
+        if existing is not None:
+            others = existing_names_lc - {existing.name.lower()}
+            other_prefixes = existing_prefixes - {existing.sku_prefix or ""}
+            return _build_child_update_result(
+                db, row_number, raw,
+                existing=existing,
+                other_names_lc=others,
+                other_prefixes=other_prefixes,
+            )
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="id",
+            error_message=(
+                f"unknown id {id_int} (or it belongs to a different parent)"
+            ),
+        )
+
+    name = (raw.get("name") or "").strip()
+    if not name:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name", error_message="name is required",
+        )
+    if name.lower() in existing_names_lc:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="name",
+            error_message="a sub-category with that name already exists under this parent",
+        )
+
+    sort_value, err = _coerce_sort_order(raw.get("sort_order", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sort_order", error_message=err,
+        )
+
+    prefix_value, err = _coerce_sku_prefix(
+        raw.get("sku_prefix", ""), default_from_name=name
+    )
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sku_prefix", error_message=err,
+        )
+    assert prefix_value is not None
+    if prefix_value in existing_prefixes:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="sku_prefix",
+            error_message=(
+                f"another sub-category under this parent already uses sku_prefix {prefix_value!r}"
+            ),
+        )
+
+    return RowResult(
+        row_number=row_number, raw=raw, tag="new",
+        payload={
+            "name": name,
+            "sort_order": sort_value,
+            "sku_prefix": prefix_value,
+        },
+    )
+
+
+def _validate_child_upload(
+    db: Session,
+    parent_id: int,
+    headers: list[str],
+    body: list[list[str]],
+) -> list[RowResult]:
+    check_required_and_known_headers(
+        headers, known=_CHILD_UPLOAD_KNOWN, required=_CHILD_UPLOAD_REQUIRED
+    )
+    existing_rows = list(
+        db.execute(
+            select(TaxonomyNode).where(TaxonomyNode.parent_id == parent_id)
+        ).scalars().all()
+    )
+    existing_by_id: dict[int, TaxonomyNode] = {n.id: n for n in existing_rows}
+    existing_names_lc = {n.name.lower() for n in existing_rows}
+    existing_prefixes = {n.sku_prefix for n in existing_rows if n.sku_prefix}
+
+    results: list[RowResult] = []
+    for offset, row in enumerate(body):
+        row_number = offset + 2
+        raw = row_to_dict(headers, row)
+        results.append(
+            _build_child_row_result(
+                db, row_number, raw,
+                existing_by_id=existing_by_id,
+                existing_names_lc=existing_names_lc,
+                existing_prefixes=existing_prefixes,
+            )
+        )
+    mark_intra_file_duplicates(results, key="name", case_insensitive=True)
+    mark_intra_file_duplicates(results, key="sku_prefix", case_insensitive=True)
+    return results
+
+
+def _summarise_child_row(r: RowResult) -> str:
+    if r.payload is None:
+        return ""
+    if r.tag == "update":
+        return "changed: " + ", ".join(sorted(r.payload.get("changes", {})))
+    return f"name={r.payload['name']} sku_prefix={r.payload['sku_prefix']}"
+
+
+@upload_router.get("/{parent_id}/children/upload", response_class=HTMLResponse)
+def upload_taxonomy_children_form(
+    request: Request,
+    parent_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    parent = _get_top_level_parent(db, parent_id)
+    return templates.TemplateResponse(
+        request,
+        "csv_upload_form.html",
+        {
+            "current_user": _user,
+            "title": f"Upload sub-categories under {parent.name}",
+            "subtitle": (
+                f"Bulk-create sub-categories under {parent.name}. Archetype "
+                f"is inherited from the parent — no archetype column."
+            ),
+            "intro_html": "",
+            "action": f"/admin/taxonomy/{parent.id}/children/upload",
+            "cancel_url": f"/admin/taxonomy/{parent.id}/children",
+            "download_url": f"/admin/taxonomy/{parent.id}/children?format=csv&show=active",
+            "expected_columns": _CHILD_UPLOAD_COLUMNS,
+        },
+    )
+
+
+@upload_router.post("/{parent_id}/children/upload")
+async def upload_taxonomy_children(
+    request: Request,
+    parent_id: int,
+    file: UploadFile = File(...),
+    dry_run: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    parent = _get_top_level_parent(db, parent_id)
+    if parent.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot add sub-categories under an archived category",
+        )
+    # The "category has items" check normally fires per-row at create-time
+    # but is parent-scoped, so it's a top-level guard here.
+    if _has_active_items(db, parent.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-categories here: this category has items "
+                "attached. Move or archive them first."
+            ),
+        )
+
+    raw_bytes = await file.read()
+    is_dry_run = dry_run == "1"
+
+    preview_ctx: dict[str, Any] = {
+        "current_user": user,
+        "title": f"Sub-categories under {parent.name} — preview",
+        "subtitle": "",
+        "upload_url": f"/admin/taxonomy/{parent.id}/children/upload",
+        "cancel_url": f"/admin/taxonomy/{parent.id}/children",
+        "rows": [],
+        "headers": [],
+        "new_count": 0,
+        "update_count": 0,
+        "skip_count": 0,
+        "error_count": 0,
+        "top_level_error": None,
+        "committed": False,
+    }
+
+    try:
+        file_sha256, headers, body = read_upload(raw_bytes, filename=file.filename)
+        results = _validate_child_upload(db, parent.id, headers, body)
+    except CsvUploadError as exc:
+        preview_ctx["top_level_error"] = str(exc)
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    new_count = sum(1 for r in results if r.tag == "new")
+    update_count = sum(1 for r in results if r.tag == "update")
+    skip_count = sum(1 for r in results if r.tag == "skip")
+    error_count = sum(1 for r in results if r.tag == "error")
+    preview_ctx.update(
+        {
+            "headers": headers,
+            "rows": [
+                {
+                    "row_number": r.row_number,
+                    "tag": r.tag,
+                    "error_field": r.error_field,
+                    "error_message": r.error_message,
+                    "warnings": r.warnings,
+                    "summary": _summarise_child_row(r),
+                }
+                for r in results
+            ],
+            "new_count": new_count,
+            "update_count": update_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+        }
+    )
+
+    if is_dry_run or error_count > 0 or (new_count == 0 and update_count == 0):
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    next_sort = _next_child_sort_order(db, parent.id)
+    for r in results:
+        if r.payload is None:
+            continue
+        if r.tag == "new":
+            p = r.payload
+            sort_order = p["sort_order"] if p["sort_order"] is not None else next_sort
+            next_sort = max(next_sort, sort_order) + _SORT_ORDER_STEP
+            node = TaxonomyNode(
+                parent_id=parent.id,
+                name=p["name"],
+                sort_order=sort_order,
+                sku_prefix=p["sku_prefix"],
+            )
+            db.add(node)
+            db.flush()
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.created",
+                entity_type="taxonomy_node",
+                entity_id=node.id,
+                before=None,
+                after={
+                    "name": node.name,
+                    "sort_order": node.sort_order,
+                    "parent_id": parent.id,
+                    "sku_prefix": node.sku_prefix,
+                },
+            )
+        elif r.tag == "update":
+            p = r.payload
+            node_to_update = db.get(TaxonomyNode, p["existing_id"])
+            if node_to_update is None:  # pragma: no cover
+                continue
+            for field, new_val in p["changes"].items():
+                setattr(node_to_update, field, new_val)
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.updated",
+                entity_type="taxonomy_node",
+                entity_id=node_to_update.id,
+                before=p["before"],
+                after=p["changes"],
+            )
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_node.csv_uploaded",
+        entity_type="taxonomy_node",
+        entity_id=parent.id,
+        before=None,
+        after={
+            "count": new_count,
+            "updated_count": update_count,
+            "file_sha256": file_sha256,
+            "depth": 1,
+            "parent_id": parent.id,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Imported {new_count} new, updated {update_count} sub-categor(y/ies) from CSV.",
+    )
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{parent.id}/children",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Grandchildren upload (depth 2)
+# ---------------------------------------------------------------------------
+
+
+@upload_router.get(
+    "/{parent_id}/sub/{sub_id}/grandchildren/upload",
+    response_class=HTMLResponse,
+)
+def upload_taxonomy_grandchildren_form(
+    request: Request,
+    parent_id: int,
+    sub_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    parent, sub = _get_depth1_subcat_under(db, parent_id, sub_id)
+    inherited = effective_archetype(db, sub)
+    if inherited == Archetype.UNIQUE_VARIANT:
+        # depth-2 nodes under UV trees are minted by item create, not by
+        # human action — uploading rows here would orphan the auto-leaves.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "depth-2 categories under unique-variant trees are created "
+                "automatically when items are added; bulk upload is not supported"
+            ),
+        )
+    return templates.TemplateResponse(
+        request,
+        "csv_upload_form.html",
+        {
+            "current_user": _user,
+            "title": f"Upload sub-sub-categories under {sub.name}",
+            "subtitle": (
+                f"Bulk-create depth-2 nodes under {parent.name} / {sub.name}."
+            ),
+            "intro_html": "",
+            "action": f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren/upload",
+            "cancel_url": f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren",
+            "download_url": (
+                f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren?format=csv&show=active"
+            ),
+            "expected_columns": _CHILD_UPLOAD_COLUMNS,
+        },
+    )
+
+
+@upload_router.post("/{parent_id}/sub/{sub_id}/grandchildren/upload")
+async def upload_taxonomy_grandchildren(
+    request: Request,
+    parent_id: int,
+    sub_id: int,
+    file: UploadFile = File(...),
+    dry_run: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    parent, sub = _get_depth1_subcat_under(db, parent_id, sub_id)
+    if sub.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot add a sub-sub-category under an archived parent",
+        )
+    inherited = effective_archetype(db, sub)
+    if inherited == Archetype.UNIQUE_VARIANT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "depth-2 categories under unique-variant trees are created "
+                "automatically when items are added; bulk upload is not supported"
+            ),
+        )
+    if _has_active_items(db, sub.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cannot add sub-sub-categories here: this sub-category has "
+                "items attached. Move or archive them first."
+            ),
+        )
+
+    raw_bytes = await file.read()
+    is_dry_run = dry_run == "1"
+
+    preview_ctx: dict[str, Any] = {
+        "current_user": user,
+        "title": f"Sub-sub-categories under {sub.name} — preview",
+        "subtitle": "",
+        "upload_url": f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren/upload",
+        "cancel_url": f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren",
+        "rows": [],
+        "headers": [],
+        "new_count": 0,
+        "update_count": 0,
+        "skip_count": 0,
+        "error_count": 0,
+        "top_level_error": None,
+        "committed": False,
+    }
+
+    try:
+        file_sha256, headers, body = read_upload(raw_bytes, filename=file.filename)
+        # Grandchildren share the child validator (same shape: id / sort_order
+        # / name / sku_prefix). Parent scope for uniqueness is ``sub.id``.
+        results = _validate_child_upload(db, sub.id, headers, body)
+    except CsvUploadError as exc:
+        preview_ctx["top_level_error"] = str(exc)
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    new_count = sum(1 for r in results if r.tag == "new")
+    update_count = sum(1 for r in results if r.tag == "update")
+    skip_count = sum(1 for r in results if r.tag == "skip")
+    error_count = sum(1 for r in results if r.tag == "error")
+    preview_ctx.update(
+        {
+            "headers": headers,
+            "rows": [
+                {
+                    "row_number": r.row_number,
+                    "tag": r.tag,
+                    "error_field": r.error_field,
+                    "error_message": r.error_message,
+                    "warnings": r.warnings,
+                    "summary": _summarise_child_row(r),
+                }
+                for r in results
+            ],
+            "new_count": new_count,
+            "update_count": update_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+        }
+    )
+
+    if is_dry_run or error_count > 0 or (new_count == 0 and update_count == 0):
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    next_sort = _next_child_sort_order(db, sub.id)
+    for r in results:
+        if r.payload is None:
+            continue
+        if r.tag == "new":
+            p = r.payload
+            sort_order = p["sort_order"] if p["sort_order"] is not None else next_sort
+            next_sort = max(next_sort, sort_order) + _SORT_ORDER_STEP
+            node = TaxonomyNode(
+                parent_id=sub.id,
+                name=p["name"],
+                sort_order=sort_order,
+                sku_prefix=p["sku_prefix"],
+            )
+            db.add(node)
+            db.flush()
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.created",
+                entity_type="taxonomy_node",
+                entity_id=node.id,
+                before=None,
+                after={
+                    "name": node.name,
+                    "sort_order": node.sort_order,
+                    "parent_id": sub.id,
+                    "sku_prefix": node.sku_prefix,
+                },
+            )
+        elif r.tag == "update":
+            p = r.payload
+            node_to_update = db.get(TaxonomyNode, p["existing_id"])
+            if node_to_update is None:  # pragma: no cover
+                continue
+            for field, new_val in p["changes"].items():
+                setattr(node_to_update, field, new_val)
+            record_audit(
+                db,
+                actor=user,
+                action="taxonomy_node.updated",
+                entity_type="taxonomy_node",
+                entity_id=node_to_update.id,
+                before=p["before"],
+                after=p["changes"],
+            )
+    record_audit(
+        db,
+        actor=user,
+        action="taxonomy_node.csv_uploaded",
+        entity_type="taxonomy_node",
+        entity_id=sub.id,
+        before=None,
+        after={
+            "count": new_count,
+            "updated_count": update_count,
+            "file_sha256": file_sha256,
+            "depth": 2,
+            "parent_id": sub.id,
+            "grandparent_id": parent.id,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Imported {new_count} new, updated {update_count} depth-2 node(s) from CSV.",
+    )
+    return RedirectResponse(
+        url=f"/admin/taxonomy/{parent.id}/sub/{sub.id}/grandchildren",
         status_code=status.HTTP_303_SEE_OTHER,
     )

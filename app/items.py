@@ -46,13 +46,12 @@ is archived — that's an explicit user action, not silent data loss.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, cast
+from typing import Any
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.datastructures import FormData
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -60,16 +59,26 @@ from sqlalchemy.orm import Session
 from app import field_storage
 from app.audit import record_audit
 from app.auth import require_role
+from app.cost_engine import record_receipt
 from app.csv_export import csv_branch
+from app.csv_import import (
+    CsvUploadError,
+    RowResult,
+    check_required_and_known_headers,
+    read_upload,
+    row_to_dict,
+)
 from app.db import get_session
 from app.field_catalog import CATALOG_BY_KEY, CatalogEntry
 from app.models import (
     Archetype,
-    FieldType,
+    CostLayer,
+    CostLayerSource,
     Item,
-    ItemFieldValue,
     Location,
+    MovementType,
     Role,
+    StockMovement,
     Supplier,
     TaxonomyFieldDef,
     TaxonomyNode,
@@ -88,6 +97,9 @@ from app.sku import (
 from app.template_env import templates
 
 router = APIRouter(prefix="/admin/items", tags=["items"])
+# See ``app/suppliers.py`` for the rationale: the literal ``/upload`` route
+# must be matched ahead of the dynamic ``/{item_id}`` routes.
+upload_router = APIRouter(prefix="/admin/items", tags=["items"])
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +124,9 @@ _FIELDS: tuple[str, ...] = (
     "location_id",
     "qr_code",
     "notes",
+    "ring_size",
+    "weight_grams",
+    "stone_shape",
 )
 
 
@@ -359,6 +374,9 @@ def _normalise(
     location_id: str,
     qr_code: str,
     notes: str,
+    ring_size: str = "",
+    weight_grams: str = "",
+    stone_shape: str = "",
     current_node_id: int | None = None,
     current_supplier_id: int | None = None,
     current_location_id: int | None = None,
@@ -428,6 +446,27 @@ def _normalise(
     clean_qr = (_input("qr_code", qr_code) or "").strip() or None
     clean_notes = (notes or "").strip() or None
 
+    clean_ring_size = (_input("ring_size", ring_size) or "").strip() or None
+    weight_grams_raw = (_input("weight_grams", weight_grams) or "").strip()
+    clean_weight_grams: Decimal | None
+    if weight_grams_raw:
+        try:
+            parsed_weight = Decimal(weight_grams_raw)
+        except InvalidOperation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weight (g) must be a number",
+            ) from exc
+        if parsed_weight < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weight (g) cannot be negative",
+            )
+        clean_weight_grams = parsed_weight
+    else:
+        clean_weight_grams = None
+    clean_stone_shape = (_input("stone_shape", stone_shape) or "").strip() or None
+
     return {
         "sku": clean_sku,
         "name": clean_name,
@@ -443,6 +482,9 @@ def _normalise(
         "location_id": loc_id,
         "qr_code": clean_qr,
         "notes": clean_notes,
+        "ring_size": clean_ring_size,
+        "weight_grams": clean_weight_grams,
+        "stone_shape": clean_stone_shape,
     }
 
 
@@ -488,37 +530,6 @@ def _flash(request: Request, message: str) -> None:
     request.session["flash"] = message
 
 
-def _custom_form_view_from_post(raw: Any, field_defs: list[TaxonomyFieldDef]) -> dict[str, Any]:
-    """Build the items-form custom-field view from raw POST data without parsing.
-
-    Used by the create / update re-render path so a validation failure
-    doesn't wipe the user's typed values: every key in ``form["custom"]``
-    is the raw string the operator submitted (or list, for multiselect),
-    not the typed parsed value. Returning the raw text means the template
-    re-fills the inputs verbatim — including malformed values like
-    ``"1.2x"`` that a user can correct in place rather than re-type from
-    scratch.
-
-    Boolean: present + truthy → True; absent → False (HTML checkbox shape).
-    Multiselect: multi-valued list (preserve order, drop blanks).
-    Everything else: trimmed string.
-    """
-    out: dict[str, Any] = {}
-    for fd in field_defs:
-        name = f"cf_{fd.key}"
-        if fd.type == FieldType.MULTISELECT:
-            getlist = getattr(raw, "getlist", None)
-            vals = getlist(name) if callable(getlist) else []
-            out[fd.key] = [v for v in vals if isinstance(v, str) and v.strip()]
-        elif fd.type == FieldType.BOOLEAN:
-            v = raw.get(name)
-            out[fd.key] = bool(v) and v != ""
-        else:
-            v = raw.get(name)
-            out[fd.key] = v.strip() if isinstance(v, str) else ""
-    return out
-
-
 def _form_for_item(item: Item | None) -> dict[str, Any]:
     """Render the form-input shape for a fresh form or an existing item."""
     if item is None:
@@ -535,6 +546,9 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
             "location_id": "",
             "qr_code": "",
             "notes": "",
+            "ring_size": "",
+            "weight_grams": "",
+            "stone_shape": "",
         }
     return {
         "sku": item.sku,
@@ -549,6 +563,9 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
         "location_id": str(item.location_id) if item.location_id is not None else "",
         "qr_code": item.qr_code or "",
         "notes": item.notes or "",
+        "ring_size": item.ring_size or "",
+        "weight_grams": str(item.weight_grams) if item.weight_grams is not None else "",
+        "stone_shape": item.stone_shape or "",
     }
 
 
@@ -905,10 +922,10 @@ def _ancestor_chain_ids(db: Session, node_id: int) -> list[int]:
 def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
     """Active field defs effective for ``node_id``, including inherited from ancestors.
 
-    Walks up the parent chain and collects ``archived_at IS NULL`` field defs
-    from every node in the chain. Order: root first (most general), then
-    descendants (most specific); within each level, by ``sort_order`` then
-    ``name``. Item forms render the inherited fields above the leaf's own.
+    Walks up the parent chain and collects field defs from every node in
+    the chain. Order: root first (most general), then descendants (most
+    specific); within each level, by ``sort_order`` then ``key``. Item
+    forms render inherited fields above the leaf's own.
     """
     chain = _ancestor_chain_ids(db, node_id)
     if not chain:
@@ -916,33 +933,28 @@ def _get_active_field_defs(db: Session, node_id: int) -> list[TaxonomyFieldDef]:
     stmt = (
         select(TaxonomyFieldDef)
         .where(TaxonomyFieldDef.node_id.in_(chain))
-        .where(TaxonomyFieldDef.archived_at.is_(None))
     )
     rows = list(db.execute(stmt).scalars().all())
     chain_position = {nid: idx for idx, nid in enumerate(chain)}
-    rows.sort(key=lambda r: (chain_position[r.node_id], r.sort_order, r.name))
+    rows.sort(key=lambda r: (chain_position[r.node_id], r.sort_order, r.key))
     return rows
 
 
 def _picked_built_in_keys(db: Session, node_id: int | None) -> set[str]:
-    """Catalog keys (``storage="column"``) picked on ``node_id`` or any ancestor.
+    """Catalog keys picked on ``node_id`` or any ancestor.
 
-    The items form gates each built-in input on this set — fields the
-    category did not pick are hidden and auto-filled server-side (name →
-    SKU, unit → "ea") so unrelated category metadata doesn't clutter the
-    Add Item screen.
+    The items form gates each input on this set — fields the category did
+    not pick are hidden and auto-filled server-side (name → SKU, unit →
+    "ea", others left null) so unrelated category metadata doesn't clutter
+    the Add Item screen.
     """
 
     if node_id is None:
         return set()
     out: set[str] = set()
     for fd in _get_active_field_defs(db, node_id):
-        if fd.catalog_key is None:
-            continue
-        entry = CATALOG_BY_KEY.get(fd.catalog_key)
-        if entry is None or entry.storage != "column":
-            continue
-        out.add(fd.catalog_key)
+        if fd.key in CATALOG_BY_KEY:
+            out.add(fd.key)
     return out
 
 
@@ -976,31 +988,6 @@ def _built_in_visibility_from_picks(picked: set[str]) -> dict[str, str]:
     return out
 
 
-def _field_value_field_defs(
-    db: Session, node_id: int | None
-) -> list[TaxonomyFieldDef]:
-    """Active field defs whose catalog entry is *not* column-backed.
-
-    Column-backed picks (``unit``, ``supplier_id``, …) render as built-in
-    inputs in ``items_form_builtins.html``; the "Category fields" block
-    only renders the field-value-backed picks (``karat``, ``weight_grams``,
-    …). Legacy rows with no ``catalog_key`` keep rendering as generic
-    custom fields until they're either migrated or archived.
-    """
-
-    if node_id is None:
-        return []
-    out: list[TaxonomyFieldDef] = []
-    for fd in _get_active_field_defs(db, node_id):
-        if fd.catalog_key is None:
-            out.append(fd)
-            continue
-        entry = CATALOG_BY_KEY.get(fd.catalog_key)
-        if entry is None or entry.storage == "field_value":
-            out.append(fd)
-    return out
-
-
 def _filter_category_options(db: Session) -> list[dict[str, Any]]:
     """Return all non-archived taxonomy nodes as filter dropdown options.
 
@@ -1027,100 +1014,48 @@ def _filter_category_options(db: Session) -> list[dict[str, Any]]:
     return options
 
 
-def _nodes_with_effective_fields(db: Session) -> list[dict[str, Any]]:
-    """Filter category options to nodes that have effective catalog fields.
-
-    A node is included if itself or any ancestor has at least one active
-    ``TaxonomyFieldDef`` — i.e. selecting it on the items list will surface a
-    non-trivial column set. Used to populate the "Pick a category" dropdown on
-    the items list per slice 5's requirement that the user choose a category
-    before viewing items.
-    """
-    nodes_with_own = set(
-        db.execute(
-            select(TaxonomyFieldDef.node_id)
-            .where(TaxonomyFieldDef.archived_at.is_(None))
-            .distinct()
-        ).scalars().all()
-    )
-    if not nodes_with_own:
-        return []
-    all_active = list(
-        db.execute(
-            select(TaxonomyNode)
-            .where(TaxonomyNode.archived_at.is_(None))
-            .order_by(TaxonomyNode.sort_order, TaxonomyNode.name)
-        )
-        .scalars()
-        .all()
-    )
-    eligible: list[dict[str, Any]] = []
-    for node in all_active:
-        chain = _ancestor_chain_ids(db, node.id)
-        if any(nid in nodes_with_own for nid in chain):
-            eligible.append({"id": node.id, "label": _node_breadcrumb(db, node)})
-    eligible.sort(key=lambda o: str(o["label"]).casefold())
-    return eligible
-
-
 def _apply_field_def_filters(
     stmt: Any,
     db: Session,
     field_defs: list[TaxonomyFieldDef],
     raw: dict[str, str],
 ) -> tuple[Any, dict[str, str]]:
-    """Filter ``stmt`` by per-field-def search criteria pulled from ``raw``.
+    """Filter ``stmt`` by per-catalog-key search criteria pulled from ``raw``.
 
-    ``raw`` is the request query string (``cf_<key>=<value>``). For each
-    field def with a non-empty value present, join ``ItemFieldValue`` and
-    add a WHERE clause keyed by the def's storage column:
+    Every catalog entry maps to an ``Item`` column (post-0024), so each
+    filter is a WHERE on the column directly. Query-string keys carry the
+    bare catalog ``key`` (e.g. ``ring_size=j 1/2``). Type dispatch is
+    driven by the catalog entry, not by ``TaxonomyFieldDef`` metadata.
 
-    - ``text``, ``select``  → substring match on ``value_text`` (case-insensitive).
-    - ``multiselect``       → LIKE on the JSON dump of ``value_json``
-      (good-enough cross-DB without per-dialect JSON ops).
-    - ``boolean``           → equality on ``value_bool`` (input ``"yes"`` /
-      ``"no"`` coerced).
-    - ``number``            → exact match on ``value_number``.
-    - ``decimal``           → exact match on ``value_decimal``.
-    - ``date``              → exact match on ``value_date`` (ISO string).
-
-    Invalid / unparseable values are silently ignored (the filter just
-    doesn't apply) so a hand-typed URL never 500s. Returns the patched
-    ``stmt`` plus the dict of applied ``{cf_<key>: <raw>}`` echoed back so
-    the template can reflect the active filters in the inputs.
+    Invalid / unparseable values are silently ignored so a hand-typed URL
+    never 500s. Returns the patched ``stmt`` plus the dict of applied
+    ``{<key>: <raw>}`` echoed back to the template for input echoes.
     """
-    from sqlalchemy.orm import aliased
-
     applied: dict[str, str] = {}
     for fd in field_defs:
-        key = f"cf_{fd.key}"
+        key = fd.key
         value = (raw.get(key) or "").strip()
         if not value:
             continue
+        entry = CATALOG_BY_KEY.get(key)
+        if entry is None:
+            continue
+        col = getattr(Item, entry.column, None)
+        if col is None:
+            continue
         applied[key] = value
-        ifv = aliased(ItemFieldValue)
-        stmt = stmt.join(
-            ifv,
-            (ifv.item_id == Item.id) & (ifv.field_def_id == fd.id),
-        )
-        type_value = fd.type.value
+        type_value = entry.type.value
         if type_value in ("text", "select"):
-            stmt = stmt.where(ifv.value_text.ilike(f"%{value}%"))
+            stmt = stmt.where(col.ilike(f"%{value}%"))
         elif type_value == "multiselect":
-            # ``value_json`` is a list of chosen options. SQLite's JSON1
-            # ``json_each`` would be ideal but Postgres needs jsonb_array_elements
-            # — for v1, the cheap cross-DB option is a substring match on the
-            # JSON-encoded string, which is correct for the comma-separated
-            # default option syntax used everywhere in the admin UI.
-            stmt = stmt.where(func.cast(ifv.value_json, sa.String).ilike(f"%{value}%"))
+            stmt = stmt.where(func.cast(col, sa.String).ilike(f"%{value}%"))
         elif type_value == "boolean":
-            normalised = value.strip().lower()
+            normalised = value.lower()
             if normalised in ("yes", "true", "1"):
-                stmt = stmt.where(ifv.value_bool.is_(True))
+                stmt = stmt.where(col.is_(True))
             elif normalised in ("no", "false", "0"):
-                stmt = stmt.where(ifv.value_bool.is_(False))
+                stmt = stmt.where(col.is_(False))
             else:
-                # Unknown literal — skip the filter rather than refuse the page.
                 applied.pop(key, None)
         elif type_value == "number":
             try:
@@ -1128,300 +1063,26 @@ def _apply_field_def_filters(
             except ValueError:
                 applied.pop(key, None)
                 continue
-            stmt = stmt.where(ifv.value_number == parsed_int)
+            stmt = stmt.where(col == parsed_int)
         elif type_value == "decimal":
             try:
                 parsed_dec = Decimal(value)
             except InvalidOperation:
                 applied.pop(key, None)
                 continue
-            stmt = stmt.where(ifv.value_decimal == parsed_dec)
+            stmt = stmt.where(col == parsed_dec)
         elif type_value == "date":
             try:
                 parsed_date = datetime.fromisoformat(value).date()
             except ValueError:
                 applied.pop(key, None)
                 continue
-            stmt = stmt.where(ifv.value_date == parsed_date)
+            stmt = stmt.where(col == parsed_date)
         else:
             applied.pop(key, None)
     return stmt, applied
 
 
-def _parse_custom_field(field_def: TaxonomyFieldDef, raw: str | list[str] | None) -> Any:
-    """Coerce a raw form value (or list, for multiselect) into the right Python type.
-
-    Returns ``None`` for blank / empty / unset (for booleans, returns ``False``
-    when the checkbox is absent — booleans always have a definite value). The
-    required-flag check is the caller's job (``_collect_custom_fields``).
-
-    Raises ``HTTPException(400)`` on a type mismatch or an out-of-options
-    select / multiselect.
-    """
-    field_label = field_def.name
-    if field_def.type == FieldType.MULTISELECT:
-        # ``raw`` may be a list (the form returned multiple values) or None
-        # (no entries submitted). Empty list → None.
-        values = [v.strip() for v in (raw if isinstance(raw, list) else []) if v and v.strip()]
-        if not values:
-            return None
-        options = field_def.options_json or []
-        bad = [v for v in values if v not in options]
-        if bad:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{field_label}: {bad[0]!r} is not a valid option",
-            )
-        # De-dup while preserving submission order; HTML <select multiple>
-        # can't naturally repeat but a tampered request could.
-        seen: set[str] = set()
-        out: list[str] = []
-        for v in values:
-            if v not in seen:
-                out.append(v)
-                seen.add(v)
-        return out
-
-    # Scalar types — collapse list (defensive) to first entry.
-    text = raw if isinstance(raw, str) else (raw[0] if isinstance(raw, list) and raw else "")
-    text = (text or "").strip()
-
-    if field_def.type == FieldType.BOOLEAN:
-        # HTML checkbox: present (any non-empty value) → True; absent → False.
-        return text != ""
-
-    if text == "":
-        return None
-
-    if field_def.type == FieldType.TEXT:
-        return text
-
-    if field_def.type == FieldType.NUMBER:
-        try:
-            return int(text)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{field_label} must be a whole number",
-            ) from exc
-
-    if field_def.type == FieldType.DECIMAL:
-        try:
-            return Decimal(text)
-        except InvalidOperation as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{field_label} must be a number",
-            ) from exc
-
-    if field_def.type == FieldType.DATE:
-        try:
-            return date.fromisoformat(text)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{field_label} must be a date (YYYY-MM-DD)",
-            ) from exc
-
-    if field_def.type == FieldType.SELECT:
-        options = field_def.options_json or []
-        if text not in options:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"{field_label}: {text!r} is not a valid option",
-            )
-        return text
-
-    # Defensive — should be unreachable given FieldType is closed.
-    raise HTTPException(  # pragma: no cover
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"unknown field type {field_def.type!r}",
-    )
-
-
-def _is_set(field_def: TaxonomyFieldDef, value: Any) -> bool:
-    """Whether a parsed value should be stored / treated as filled.
-
-    For booleans, both True and False count as "set" — a boolean checkbox
-    always has a definite value. For everything else, ``None`` (blank input)
-    counts as not set; required-flag enforcement and persistence both gate on
-    this.
-    """
-    if field_def.type == FieldType.BOOLEAN:
-        return True
-    if value is None:
-        return False
-    if isinstance(value, list):
-        return bool(value)
-    if isinstance(value, str):
-        return value != ""
-    return True
-
-
-def _collect_custom_fields(form: FormData, field_defs: list[TaxonomyFieldDef]) -> dict[int, Any]:
-    """Parse every active field def's submission and enforce ``required``.
-
-    Returns a dict keyed by ``field_def.id`` of parsed values (None for
-    blank-and-not-required, False for unchecked boolean). Raises 400 on the
-    first violation: bad type, out-of-options pick, or a required field that
-    wasn't filled. For boolean, "required" means the checkbox must be checked
-    (must be True) — see the route docstring for the rationale.
-    """
-    out: dict[int, Any] = {}
-    for fd in field_defs:
-        key = f"cf_{fd.key}"
-        raw: str | list[str] | None
-        if fd.type == FieldType.MULTISELECT:
-            raw = list(form.getlist(key))  # type: ignore[arg-type]
-        else:
-            raw_val = form.get(key)
-            raw = raw_val if isinstance(raw_val, str) else None
-        value = _parse_custom_field(fd, raw)
-        if fd.required:
-            if fd.type == FieldType.BOOLEAN:
-                if value is not True:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"{fd.name} must be checked",
-                    )
-            else:
-                if not _is_set(fd, value):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"{fd.name} is required",
-                    )
-        out[fd.id] = value
-    return out
-
-
-def _audit_friendly(field_def: TaxonomyFieldDef, value: Any) -> Any:
-    """Convert a parsed value into a JSON-serialisable shape for the audit log.
-
-    Decimals → str (preserves precision); dates → ISO; everything else passes
-    through (lists and primitives are already JSON-friendly).
-    """
-    if value is None:
-        return None
-    if field_def.type == FieldType.DECIMAL and isinstance(value, Decimal):
-        return str(value)
-    if field_def.type == FieldType.DATE and isinstance(value, date):
-        return value.isoformat()
-    return value
-
-
-def _persist_custom_field_values(
-    db: Session,
-    item_id: int,
-    field_defs: list[TaxonomyFieldDef],
-    values: dict[int, Any],
-) -> dict[str, Any]:
-    """Insert sparse ``ItemFieldValue`` rows; return audit dict (key → friendly value).
-
-    Skips rows for fields whose value is "not set" (blank text, None number,
-    empty multiselect). Boolean ``False`` IS persisted — it's a meaningful
-    answer.
-    """
-    audit: dict[str, Any] = {}
-    for fd in field_defs:
-        v = values.get(fd.id)
-        if not _is_set(fd, v):
-            continue
-        field_storage.write_new_value(db, item_id=item_id, field_def=fd, value=v)
-        audit[fd.key] = _audit_friendly(fd, v)
-    return audit
-
-
-def _load_custom_field_value_rows(db: Session, item_id: int) -> dict[int, ItemFieldValue]:
-    """Existing ``ItemFieldValue`` rows for an item, keyed by ``field_def_id``."""
-    return field_storage.load_rows_for_item(db, item_id)
-
-
-def _stored_value(field_def: TaxonomyFieldDef, row: ItemFieldValue) -> Any:
-    """Extract the populated value-column off a stored row."""
-    return field_storage.read_stored_value(field_def, row)
-
-
-def _diff_and_apply_custom_fields(
-    db: Session,
-    item_id: int,
-    field_defs: list[TaxonomyFieldDef],
-    parsed: dict[int, Any],
-    existing: dict[int, ItemFieldValue],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Apply parsed custom-field updates and return sparse before/after dicts.
-
-    For each active field def: insert / update / delete the row to match the
-    parsed value. ``before`` and ``after`` are keyed by the field def's
-    ``key`` and contain *only* fields whose value changed (``before`` may be
-    ``None`` for newly-set fields; ``after`` may be ``None`` for cleared
-    ones). Caller folds these into the wider audit diff.
-    """
-    before: dict[str, Any] = {}
-    after: dict[str, Any] = {}
-    for fd in field_defs:
-        new_val = parsed.get(fd.id)
-        new_set = _is_set(fd, new_val)
-        old_row = existing.get(fd.id)
-        old_val = _stored_value(fd, old_row) if old_row is not None else None
-        old_set = old_row is not None
-        if new_set and not old_set:
-            # Insert a new row.
-            field_storage.write_new_value(
-                db, item_id=item_id, field_def=fd, value=new_val
-            )
-            before[fd.key] = None
-            after[fd.key] = _audit_friendly(fd, new_val)
-        elif not new_set and old_set:
-            # Clear: delete the row.
-            assert old_row is not None
-            db.delete(old_row)
-            before[fd.key] = _audit_friendly(fd, old_val)
-            after[fd.key] = None
-        elif new_set and old_set:
-            # Both set — compare. Decimals compare correctly across str/Decimal
-            # representations so we don't need to normalise here.
-            if old_val != new_val:
-                assert old_row is not None
-                field_storage.update_existing_value(fd, old_row, new_val)
-                before[fd.key] = _audit_friendly(fd, old_val)
-                after[fd.key] = _audit_friendly(fd, new_val)
-        # else: both unset — nothing to do.
-    return before, after
-
-
-def _form_for_custom_fields(
-    field_defs: list[TaxonomyFieldDef],
-    rows: dict[int, ItemFieldValue],
-) -> dict[str, Any]:
-    """Render-shape the existing values for the form template.
-
-    Returns a dict keyed by field key. Values are stringified per type so the
-    template can drop them straight into ``value=`` attributes; multiselect
-    values stay as lists for the ``selected`` check.
-    """
-    out: dict[str, Any] = {}
-    for fd in field_defs:
-        row = rows.get(fd.id)
-        if row is None:
-            if fd.type == FieldType.MULTISELECT:
-                out[fd.key] = []
-            elif fd.type == FieldType.BOOLEAN:
-                out[fd.key] = False
-            else:
-                out[fd.key] = ""
-            continue
-        v = _stored_value(fd, row)
-        if fd.type == FieldType.MULTISELECT:
-            out[fd.key] = list(v) if v is not None else []
-        elif fd.type == FieldType.BOOLEAN:
-            out[fd.key] = bool(v)
-        elif fd.type == FieldType.DECIMAL and v is not None:
-            out[fd.key] = str(v)
-        elif fd.type == FieldType.DATE and v is not None:
-            out[fd.key] = v.isoformat()
-        else:
-            out[fd.key] = v if v is not None else ""
-    return out
 
 
 def _category_label(item: Item, db: Session) -> str:
@@ -1488,6 +1149,7 @@ _ITEMS_CSV_HEADERS: list[str] = [
     "reorder_threshold",
     "reorder_qty",
     "requires_checkout",
+    "unit_cost",
 ]
 
 
@@ -1498,13 +1160,23 @@ def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
     ``"no"`` rather than ``"True"`` / ``"False"`` — same posture as the PO
     list's ``supplier_archived`` cell. Spreadsheet receivers find yes/no
     easier to filter on.
+
+    The ``category`` cell uses the full top-down breadcrumb (e.g.
+    ``"Raw Materials / Silver / 925"``) — *not* the HTML's two-segment
+    ``_category_label`` — so the CSV is round-trippable through
+    ``upload_items`` (which resolves the slash-path from depth-0 down).
+
+    The ``unit_cost`` cell is populated for unique / unique-variant items
+    only and carries the open FIFO layer's unit cost (the per-row dict's
+    ``unit_cost`` key set by ``list_items``). BULK rows render blank — the
+    cell is meaningless across multiple FIFO layers and would mislead.
     """
     return [
         [
             r["item"].id,
             r["item"].sku,
             r["item"].name,
-            r["category_label"],
+            r["category_path"],
             r.get("stage_label", ""),
             r["item"].unit,
             r["item"].tracking_mode.value,
@@ -1512,6 +1184,7 @@ def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
             r["item"].reorder_threshold,
             r["item"].reorder_qty,
             "yes" if r["item"].requires_checkout else "no",
+            r.get("unit_cost", ""),
         ]
         for r in rows
     ]
@@ -1523,16 +1196,14 @@ def _catalog_columns_for(
     """Effective catalog-backed columns for the items list, in display order.
 
     Walks ``_get_active_field_defs`` (inheritance-aware) and pairs each def
-    with its catalog entry. Defs whose ``catalog_key`` doesn't resolve to a
-    live catalog entry (legacy or backfilled-then-removed) are skipped — they
-    have no column header / cell formatter without a catalog entry.
+    with its catalog entry. Defs whose ``key`` doesn't resolve to a live
+    catalog entry are skipped — they have no column header or cell
+    formatter without a catalog entry.
     """
 
     columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
     for fd in _get_active_field_defs(db, node_id):
-        if fd.catalog_key is None:
-            continue
-        entry = CATALOG_BY_KEY.get(fd.catalog_key)
+        entry = CATALOG_BY_KEY.get(fd.key)
         if entry is None:
             continue
         columns.append((fd, entry))
@@ -1605,62 +1276,55 @@ def list_items(
     stmt = stmt.order_by(_LIST_ORDER, Item.sku)
 
     items = list(db.execute(stmt).scalars().all())
-    rows = [
-        {
-            "item": item,
-            "category_label": _category_label(item, db),
-            "stage_label": _stage_label(item, db),
-        }
-        for item in items
-    ]
+    rows = []
+    for item in items:
+        leaf_node = db.get(TaxonomyNode, item.taxonomy_node_id)
+        # ``unit_cost`` cell: open-FIFO-layer unit cost for unique /
+        # unique-variant items, blank otherwise. There's at most one open
+        # layer for a unique-tracked item (qty 0/1; consumed → no open
+        # layers; received → one open layer). Picks the most recent.
+        unit_cost_cell: Any = ""
+        if item.tracking_mode is TrackingMode.UNIQUE:
+            open_layer = db.execute(
+                select(CostLayer.unit_cost)
+                .where(CostLayer.item_id == item.id)
+                .where(CostLayer.qty_remaining > 0)
+                .order_by(CostLayer.received_at.desc(), CostLayer.id.desc())
+                .limit(1)
+            ).scalar()
+            if open_layer is not None:
+                unit_cost_cell = open_layer
+        rows.append(
+            {
+                "item": item,
+                "category_label": _category_label(item, db),
+                # CSV-friendly full breadcrumb (round-trips through the
+                # upload's slash-path resolver). See ``_csv_rows_for_items``.
+                "category_path": _node_breadcrumb(db, leaf_node) if leaf_node else "",
+                "stage_label": _stage_label(item, db),
+                "unit_cost": unit_cost_cell,
+            }
+        )
 
     # Catalog-driven columns: computed only when a node is picked. Empty list
-    # otherwise. Headers + per-item cells flow to both the HTML table and CSV
-    # export so the two stay in sync.
+    # otherwise. Every catalog entry is column-backed post-0024 so reads go
+    # straight to ``Item.<column>`` via ``read_catalog_value``.
     catalog_columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
     catalog_cells_by_item: dict[int, list[str]] = {}
-    catalog_raw_values_by_item: dict[int, list[Any]] = {}
     if node_id is not None:
         catalog_columns = _catalog_columns_for(db, node_id)
         for item in items:
-            ifv_rows = field_storage.load_rows_for_item(db, item.id)
-            ifv_by_key: dict[str, ItemFieldValue] = {
-                fd.key: ifv_rows[fd.id]
-                for fd, _ in catalog_columns
-                if fd.id in ifv_rows
-            }
-            raw_values = [
-                field_storage.read_catalog_value(
-                    item, entry, field_def=fd, ifv_by_key=ifv_by_key
-                )
-                for fd, entry in catalog_columns
-            ]
-            catalog_raw_values_by_item[item.id] = raw_values
             catalog_cells_by_item[item.id] = [
-                field_storage.format_for_display(entry, raw)
-                for (_, entry), raw in zip(catalog_columns, raw_values, strict=True)
+                field_storage.format_for_display(entry, field_storage.read_catalog_value(item, entry))
+                for _, entry in catalog_columns
             ]
-
-    csv_headers = list(_ITEMS_CSV_HEADERS) + [
-        f"cf_{fd.key}" for fd, _ in catalog_columns
-    ]
-    csv_rows = _csv_rows_for_items(rows)
-    if catalog_columns:
-        for row, csv_row in zip(rows, csv_rows, strict=True):
-            row_item = cast(Item, row["item"])
-            raws = catalog_raw_values_by_item.get(row_item.id, [])
-            extras = [
-                field_storage.format_for_csv(entry, raw)
-                for (_, entry), raw in zip(catalog_columns, raws, strict=True)
-            ]
-            csv_row.extend(extras)
 
     if (
         resp := csv_branch(
             format,
             filename=f"items_{show}.csv",
-            headers=csv_headers,
-            rows=csv_rows,
+            headers=list(_ITEMS_CSV_HEADERS),
+            rows=_csv_rows_for_items(rows),
         )
     ) is not None:
         return resp
@@ -1670,12 +1334,30 @@ def list_items(
     # filtered dropdown first; the table then shows that category's items
     # with both the fixed columns and the catalog-specific columns.
     #
-    # Graceful degradation: if no category has any active field defs yet —
-    # i.e. nobody has picked anything from the catalog — the dropdown would
-    # be empty and forcing the user to pick is meaningless. Fall back to
-    # "show all items" until the catalog flow has been used at least once.
-    eligible_categories = _nodes_with_effective_fields(db)
-    show_items = node_id is not None or not eligible_categories
+    # Post-0024: every Item has every standard column. The dropdown shows
+    # *all* categories so the user can always navigate. The "Pick a
+    # category" gate stays in place only while at least one category has
+    # picked fields somewhere; otherwise items render unconditionally.
+    eligible_categories = _filter_category_options(db)
+    any_picks_exist = (
+        db.execute(select(TaxonomyFieldDef.id).limit(1)).first() is not None
+    )
+    show_items = node_id is not None or not any_picks_exist
+
+    # Filter inputs render directly from the catalog (label, type, options).
+    filter_specs = [
+        {
+            "key": fd.key,
+            "label": entry.label,
+            "type": entry.type.value,
+            "options": list(entry.options),
+        }
+        for fd, entry in (
+            (fd, CATALOG_BY_KEY[fd.key])
+            for fd in filter_field_defs
+            if fd.key in CATALOG_BY_KEY
+        )
+    ]
     return templates.TemplateResponse(
         request,
         "items_list.html",
@@ -1687,7 +1369,7 @@ def list_items(
             "requires_checkout_filter": requires_checkout_filter,
             "category_options": eligible_categories,
             "all_category_options": _filter_category_options(db),
-            "filter_field_defs": filter_field_defs,
+            "filter_field_defs": filter_specs,
             "cf_filter_values": cf_filter_values,
             "catalog_columns": [
                 {"key": fd.key, "label": entry.label, "type": entry.type.value}
@@ -1718,19 +1400,14 @@ def new_item_form(
     db: Session = Depends(get_session),
 ) -> HTMLResponse:
     form = _form_for_item(None)
-    field_defs: list[TaxonomyFieldDef] = []
     leaf: TaxonomyNode | None = None
     if node_id is not None:
         # Pre-fill the category if the URL specified one; the form still
         # re-validates on POST so an archived/non-leaf id here just means the
-        # user sees their pick rejected. Also fetch the leaf's active field
-        # defs so the form renders custom inputs alongside the core fields,
-        # and apply any per-leaf defaults the manager configured.
+        # user sees their pick rejected.
         form["taxonomy_node_id"] = str(node_id)
-        field_defs = _field_value_field_defs(db, node_id)
         leaf = db.get(TaxonomyNode, node_id)
         _apply_leaf_defaults(form, leaf)
-    form["custom"] = _form_for_custom_fields(field_defs, {})
     picked_columns = _picked_built_in_keys(db, node_id)
     return templates.TemplateResponse(
         request,
@@ -1748,7 +1425,6 @@ def new_item_form(
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": True,
             "can_save": True,
-            "field_defs": field_defs,
             "field_visibility": _built_in_visibility_from_picks(picked_columns),
             "picked_column_keys": picked_columns,
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form["taxonomy_node_id"]),
@@ -1792,14 +1468,12 @@ def custom_fields_fragment(
     future widening of the edit form's writable surface doesn't silently
     403 on the fragment.
     """
-    field_defs: list[TaxonomyFieldDef] = []
     leaf: TaxonomyNode | None = None
     try:
         parsed_id = int(taxonomy_node_id)
     except (TypeError, ValueError):
         parsed_id = 0
     if parsed_id > 0:
-        field_defs = _field_value_field_defs(db, parsed_id)
         leaf = db.get(TaxonomyNode, parsed_id)
     form = _form_for_item(None)
     # The picked node id is what the partial conditional renders on. If the
@@ -1809,7 +1483,6 @@ def custom_fields_fragment(
         form["taxonomy_node_id"] = str(leaf.id)
     if include_defaults == "1":
         _apply_leaf_defaults(form, leaf)
-    form["custom"] = _form_for_custom_fields(field_defs, {})
     sku_preview_caption = ""
     if include_defaults == "1" and leaf is not None:
         composed = _compose_sku_preview(db, leaf)
@@ -1820,7 +1493,6 @@ def custom_fields_fragment(
         request,
         "items_form_fields.html",
         {
-            "field_defs": field_defs,
             "form": form,
             "ro": False,
             "item": None,
@@ -1889,27 +1561,25 @@ async def create_item(
     location_id: str = Form(""),
     qr_code: str = Form(""),
     notes: str = Form(""),
+    ring_size: str = Form(""),
+    weight_grams: str = Form(""),
+    stone_shape: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
-    # Read the form once up-front so the re-render path below can echo the
-    # user's typed values (incl. custom fields) back into the template.
-    # FastAPI caches this for the route's lifetime, so the typed ``Form()``
-    # parameters above and ``request.form()`` below are the same object.
-    raw_form = await request.form()
+    # ``request.form()`` was previously needed to echo custom-field values
+    # back on validation failure. Post-0024 every standard field flows
+    # through a typed ``Form(...)`` parameter, so we no longer touch the
+    # raw form. Kept the call in case the re-render path grows shape later.
 
     def _re_render(error: str) -> Response:
         # Validation failed — re-render the create form with the typed
         # values + the error message rather than letting HTTPException
-        # bubble out as raw JSON. Keeps the manager's other typed inputs
-        # (incl. custom fields) so they can fix the problem in place.
+        # bubble out as raw JSON.
         try:
             leaf_id_for_view = int((taxonomy_node_id or "").strip())
         except ValueError:
             leaf_id_for_view = 0
-        view_field_defs = (
-            _get_active_field_defs(db, leaf_id_for_view) if leaf_id_for_view > 0 else []
-        )
         form_view: dict[str, Any] = {
             "sku": (sku or "").strip(),
             "name": (name or "").strip(),
@@ -1923,7 +1593,9 @@ async def create_item(
             "location_id": (location_id or "").strip(),
             "qr_code": (qr_code or "").strip(),
             "notes": (notes or "").strip(),
-            "custom": _custom_form_view_from_post(raw_form, view_field_defs),
+            "ring_size": (ring_size or "").strip(),
+            "weight_grams": (weight_grams or "").strip(),
+            "stone_shape": (stone_shape or "").strip(),
         }
         leaf_id_for_picks = leaf_id_for_view if leaf_id_for_view > 0 else None
         view_picked_columns = _picked_built_in_keys(db, leaf_id_for_picks)
@@ -1943,7 +1615,6 @@ async def create_item(
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": True,
                 "can_save": True,
-                "field_defs": _field_value_field_defs(db, leaf_id_for_picks),
                 "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
                 "picked_column_keys": view_picked_columns,
                 "error": error,
@@ -1995,6 +1666,9 @@ async def create_item(
             location_id=location_id,
             qr_code=qr_code,
             notes=notes,
+            ring_size=ring_size,
+            weight_grams=weight_grams,
+            stone_shape=stone_shape,
             visibility=visibility,
             leaf_defaults=leaf_defaults,
         )
@@ -2014,19 +1688,6 @@ async def create_item(
         if not fields["name"]:
             fields["name"] = allocated_sku
         _check_sku_unique(db, fields["sku"])
-
-        # Custom fields parse against the picked node's schema. For
-        # unique-variant items the auto-leaf has no field defs (it's a
-        # naked numeric leaf); field defs live on the depth-1 sub-cat the
-        # user picked. For bulk / unique items the picked node is the
-        # destination leaf, so the same id covers both cases.
-        cf_node_id = picked.id
-        # Only field-value-backed catalog entries get persisted through the
-        # ItemFieldValue path. Column-backed entries (name, unit, etc.) are
-        # already on the form's regular fields and land on Item columns
-        # directly.
-        field_defs = _field_value_field_defs(db, cf_node_id)
-        parsed_custom = _collect_custom_fields(raw_form, field_defs)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_400_BAD_REQUEST:
             raise
@@ -2047,6 +1708,9 @@ async def create_item(
         location_id=fields["location_id"],
         qr_code=fields["qr_code"],
         notes=fields["notes"],
+        ring_size=fields["ring_size"],
+        weight_grams=fields["weight_grams"],
+        stone_shape=fields["stone_shape"],
         current_qty=Decimal("0"),
         assigned_sequence=allocated_seq,
         current_stage_id=initial_stage_id,
@@ -2054,14 +1718,10 @@ async def create_item(
     db.add(item)
     db.flush()
 
-    custom_audit = _persist_custom_field_values(db, item.id, field_defs, parsed_custom)
-
     audit_after: dict[str, Any] = {f: fields[f] for f in _FIELDS} | {
         "current_qty": item.current_qty,
         "assigned_sequence": allocated_seq,
     }
-    if custom_audit:
-        audit_after["custom_fields"] = custom_audit
 
     record_audit(
         db,
@@ -2098,10 +1758,7 @@ def edit_item_form(
     item = db.get(Item, item_id)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="item not found")
-    field_defs = _field_value_field_defs(db, item.taxonomy_node_id)
-    existing_rows = _load_custom_field_value_rows(db, item.id)
     form = _form_for_item(item)
-    form["custom"] = _form_for_custom_fields(field_defs, existing_rows)
     can_save = _can_save_item(_user)
     picked_columns = _picked_built_in_keys(db, item.taxonomy_node_id)
     return templates.TemplateResponse(
@@ -2120,7 +1777,6 @@ def edit_item_form(
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
-            "field_defs": field_defs,
             "field_visibility": _built_in_visibility_from_picks(picked_columns),
             "picked_column_keys": picked_columns,
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, item.taxonomy_node_id),
@@ -2147,6 +1803,9 @@ async def update_item(
     location_id: str = Form(""),
     qr_code: str = Form(""),
     notes: str = Form(""),
+    ring_size: str = Form(""),
+    weight_grams: str = Form(""),
+    stone_shape: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -2161,8 +1820,6 @@ async def update_item(
         reorder_threshold = str(item.reorder_threshold)
         reorder_qty = str(item.reorder_qty)
 
-    raw_form = await request.form()
-
     def _re_render(error: str) -> Response:
         # Validation failed — re-render the edit form preserving the user's
         # typed values + error rather than letting HTTPException bubble out
@@ -2172,7 +1829,6 @@ async def update_item(
             leaf_id_for_view = int((taxonomy_node_id or "").strip())
         except ValueError:
             leaf_id_for_view = item.taxonomy_node_id
-        view_field_defs = _get_active_field_defs(db, leaf_id_for_view)
         form_view: dict[str, Any] = {
             "sku": (sku or "").strip() or item.sku,
             "name": (name or "").strip(),
@@ -2186,7 +1842,9 @@ async def update_item(
             "location_id": (location_id or "").strip(),
             "qr_code": (qr_code or "").strip(),
             "notes": (notes or "").strip(),
-            "custom": _custom_form_view_from_post(raw_form, view_field_defs),
+            "ring_size": (ring_size or "").strip(),
+            "weight_grams": (weight_grams or "").strip(),
+            "stone_shape": (stone_shape or "").strip(),
         }
         can_save = _can_save_item(user)
         view_picked_columns = _picked_built_in_keys(db, leaf_id_for_view)
@@ -2206,7 +1864,6 @@ async def update_item(
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": _can_edit_thresholds(user),
                 "can_save": can_save,
-                "field_defs": _field_value_field_defs(db, leaf_id_for_view),
                 "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
                 "picked_column_keys": view_picked_columns,
                 "error": error,
@@ -2239,6 +1896,9 @@ async def update_item(
             location_id=location_id,
             qr_code=qr_code,
             notes=notes,
+            ring_size=ring_size,
+            weight_grams=weight_grams,
+            stone_shape=stone_shape,
             current_node_id=item.taxonomy_node_id,
             current_supplier_id=item.supplier_id,
             current_location_id=item.location_id,
@@ -2252,37 +1912,16 @@ async def update_item(
             fields["name"] = item.name
         _check_sku_unique(db, fields["sku"], exclude_id=item.id)
         _check_qr_unique(db, fields["qr_code"], exclude_id=item.id)
-
-        # Custom fields: parse against the *current* leaf's active schema.
-        # Existing rows for archived defs (or for defs that no longer belong
-        # to this leaf if the category just changed) are intentionally left
-        # alone — MISSION §3 "existing items keep their stored values".
-        # Required-flag validation runs here, so a 400 short-circuits before
-        # any item update writes. Column-backed catalog entries are not in
-        # this set — they land on Item columns from the regular form fields.
-        field_defs = _field_value_field_defs(db, fields["taxonomy_node_id"])
-        parsed_custom = _collect_custom_fields(raw_form, field_defs)
     except HTTPException as exc:
         if exc.status_code != status.HTTP_400_BAD_REQUEST:
             raise
         return _re_render(str(exc.detail))
-    existing_rows = _load_custom_field_value_rows(db, item.id)
 
     diff = _diff(item, fields)
-    custom_before, custom_after = _diff_and_apply_custom_fields(
-        db, item.id, field_defs, parsed_custom, existing_rows
-    )
-    if diff is not None or custom_before:
-        if diff is not None:
-            before, after = diff
-            for f in _FIELDS:
-                setattr(item, f, fields[f])
-        else:
-            before = {}
-            after = {}
-        if custom_before:
-            before["custom_fields"] = custom_before
-            after["custom_fields"] = custom_after
+    if diff is not None:
+        before, after = diff
+        for f in _FIELDS:
+            setattr(item, f, fields[f])
         record_audit(
             db,
             actor=user,
@@ -2365,4 +2004,927 @@ def unarchive_item(
     else:
         db.rollback()
 
+    return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# ===========================================================================
+# CSV upload (items)
+# ===========================================================================
+#
+# Bulk-create items from a CSV mirroring the download. Server-allocated
+# SKU; ``current_qty`` ignored; ``tracking_mode`` forced from archetype.
+# Custom-field columns ``cf_<key>`` are accepted when the key resolves to an
+# active field def on the row's leaf (or any ancestor). See
+# ``CSV uploads spec.md`` for the full contract.
+
+_ITEMS_UPLOAD_KNOWN: set[str] = {
+    "id",
+    "sku",
+    "name",
+    "category",
+    "stage",
+    "unit",
+    "tracking_mode",
+    "current_qty",
+    "reorder_threshold",
+    "reorder_qty",
+    "requires_checkout",
+    "unit_cost",
+    "ring_size",
+    "weight_grams",
+    "stone_shape",
+}
+_ITEMS_UPLOAD_REQUIRED: set[str] = {"category"}
+_ITEMS_UPLOAD_COLUMNS = [
+    {"name": "id", "required": False, "note": "blank = create; matching id = skip"},
+    {
+        "name": "sku",
+        "required": False,
+        "note": "ignored on create — server allocates; row warning if non-blank",
+    },
+    {
+        "name": "name",
+        "required": False,
+        "note": "required unless leaf hides the name column",
+    },
+    {
+        "name": "category",
+        "required": True,
+        "note": "numeric id OR slash-path like 'Rings / Silver / 925'",
+    },
+    {
+        "name": "stage",
+        "required": False,
+        "note": "stage name on the leaf's top-level; defaults to is_initial if blank",
+    },
+    {
+        "name": "unit",
+        "required": False,
+        "note": "required unless leaf hides the unit column; default 'ea'",
+    },
+    {
+        "name": "tracking_mode",
+        "required": False,
+        "note": "ignored — derived from archetype (BULK→qty, UNIQUE/UV→unique)",
+    },
+    {
+        "name": "current_qty",
+        "required": False,
+        "note": "ignored — items always start at 0 (stock-in is a separate movement)",
+    },
+    {"name": "reorder_threshold", "required": False, "note": "decimal; default 0"},
+    {"name": "reorder_qty", "required": False, "note": "decimal; default 0"},
+    {
+        "name": "requires_checkout",
+        "required": False,
+        "note": "yes / no; default no",
+    },
+    {
+        "name": "unit_cost",
+        "required": False,
+        "note": (
+            "for unique / unique_variant items only; non-blank → synthesises a "
+            "stock-in of qty=1 at that cost (creates a FIFO cost layer + a "
+            "manual_in movement). Ignored on BULK rows. Blank → item starts at qty=0."
+        ),
+    },
+    {
+        "name": "ring_size",
+        "required": False,
+        "note": "free text; required if the leaf marks ring_size required",
+    },
+    {
+        "name": "weight_grams",
+        "required": False,
+        "note": "decimal; required if the leaf marks weight_grams required",
+    },
+    {
+        "name": "stone_shape",
+        "required": False,
+        "note": "free text; required if the leaf marks stone_shape required",
+    },
+]
+
+
+def _resolve_category_for_upload(
+    db: Session, raw: str
+) -> tuple[TaxonomyNode | None, str | None]:
+    """Resolve a category cell to a pickable ``TaxonomyNode`` (or error).
+
+    Accepts:
+    - numeric id (``"42"``)
+    - slash-path (``"Rings / Silver / 925"``) — leading/trailing slashes
+      ignored; segment names case-sensitive; resolves the deepest match.
+
+    Returns ``(node, None)`` on success, ``(None, error)`` otherwise. The
+    upload-row builder converts the error into a tagged ``RowResult``.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None, "category is required"
+
+    # Numeric path: must be a non-archived, pickable node.
+    if text.isdigit():
+        try:
+            node = db.get(TaxonomyNode, int(text))
+        except ValueError:
+            return None, f"category id {text!r} is not a whole number"
+        if node is None:
+            return None, f"category id {text} not found"
+        if node.archived_at is not None:
+            return None, "category is archived"
+        if not _is_pickable(db, node):
+            return None, (
+                "category has sub-categories — pick a sub-category instead"
+            )
+        return node, None
+
+    # Slash-path: walk down from depth 0.
+    segments = [s.strip() for s in text.split("/")]
+    segments = [s for s in segments if s]
+    if not segments:
+        return None, "category path is empty"
+
+    current_parent: TaxonomyNode | None = None
+    current_parent_id: int | None = None
+    node = None
+    for i, seg in enumerate(segments):
+        stmt = (
+            select(TaxonomyNode)
+            .where(TaxonomyNode.name == seg)
+            .where(TaxonomyNode.archived_at.is_(None))
+        )
+        if current_parent_id is None:
+            stmt = stmt.where(TaxonomyNode.parent_id.is_(None))
+        else:
+            stmt = stmt.where(TaxonomyNode.parent_id == current_parent_id)
+        matches = list(db.execute(stmt).scalars().all())
+        if not matches:
+            # Helpful message for the common UV-round-trip mistake: the user
+            # downloads an item whose category cell reads
+            # ``"RTS Rings / Emma / 003"`` (the auto-leaf path), strips the
+            # id to "create a new item", and re-uploads. The trailing segment
+            # never matches because UV auto-leaves are server-minted at
+            # item-create time, not user-typed. Steer them at the parent
+            # sub-cat — the upload accepts that and the server will mint a
+            # fresh auto-leaf.
+            if (
+                current_parent is not None
+                and i == len(segments) - 1
+                and node_depth(db, current_parent) == 1
+                and effective_archetype(db, current_parent) == Archetype.UNIQUE_VARIANT
+            ):
+                parent_path = " / ".join(segments[:i])
+                return None, (
+                    f"{seg!r} looks like a unique-variant auto-leaf; those are "
+                    f"created automatically when items are added. Use the parent "
+                    f"sub-category ({parent_path}) and leave the trailing segment off."
+                )
+            return None, f"no category matches segment {seg!r} in {text!r}"
+        if len(matches) > 1:
+            return None, (
+                f"multiple categories match segment {seg!r} in {text!r}"
+            )
+        node = matches[0]
+        current_parent = node
+        current_parent_id = node.id
+
+    assert node is not None
+    if not _is_pickable(db, node):
+        # Differentiate UV depth-2 auto-leaves (server-managed) from the
+        # generic "has sub-categories" case so the user sees a fixable
+        # instruction, not a dead end.
+        if (
+            node_depth(db, node) == 2
+            and effective_archetype(db, node) == Archetype.UNIQUE_VARIANT
+        ):
+            parent = db.get(TaxonomyNode, node.parent_id) if node.parent_id else None
+            parent_path = _node_breadcrumb(db, parent) if parent else "(parent)"
+            return None, (
+                f"{node.name!r} is a unique-variant auto-leaf and can't be picked "
+                f"directly. Use the parent sub-category ({parent_path}) and the "
+                f"server will allocate a new leaf."
+            )
+        return None, (
+            "category has sub-categories — pick a sub-category instead"
+        )
+    return node, None
+
+
+def _resolve_stage_for_upload(
+    db: Session, leaf: TaxonomyNode, raw: str
+) -> tuple[int | None, str | None]:
+    """Resolve a stage name on the leaf's top-level. Blank → default-or-none."""
+    text = (raw or "").strip()
+    if not text:
+        return _initial_stage_id_for_leaf(db, leaf), None
+    chain = ancestor_chain(db, leaf)
+    if not chain:
+        return None, "category has no ancestor chain (data integrity)"
+    top_level = chain[0]
+    stage = db.execute(
+        select(TaxonomyStage)
+        .where(TaxonomyStage.top_level_node_id == top_level.id)
+        .where(TaxonomyStage.name == text)
+        .where(TaxonomyStage.archived_at.is_(None))
+    ).scalar_one_or_none()
+    if stage is None:
+        return None, (
+            f"stage {text!r} not found on category {top_level.name!r}"
+        )
+    return stage.id, None
+
+
+def _parse_yes_no(raw: str, *, field_name: str) -> tuple[bool, str | None]:
+    """Coerce a CSV yes/no cell. Blank → False (default)."""
+    text = (raw or "").strip().lower()
+    if text in ("", "no", "n", "false", "0"):
+        return False, None
+    if text in ("yes", "y", "true", "1"):
+        return True, None
+    return False, f"{field_name} must be yes or no (got {raw!r})"
+
+
+def _parse_decimal_safe(
+    raw: str, *, field_name: str
+) -> tuple[Decimal, str | None]:
+    """Like ``_parse_decimal`` but returns ``(value, error)`` instead of raising."""
+    text = (raw or "").strip()
+    if text == "":
+        return Decimal("0"), None
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        return Decimal("0"), f"{field_name} must be a number"
+    if value < 0:
+        return Decimal("0"), f"{field_name} cannot be negative"
+    return value, None
+
+
+def _build_item_update_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    existing: Item,
+) -> RowResult:
+    """Diff CSV cells against an existing item row.
+
+    Updatable: ``name``, ``unit``, ``requires_checkout``, ``reorder_threshold``,
+    ``reorder_qty``, ``stage``, ``ring_size``, ``weight_grams``,
+    ``stone_shape``. Blank cells = no change.
+
+    Locked (warn if the CSV tries to change them): ``sku``, ``current_qty``,
+    ``tracking_mode``, ``category``, ``unit_cost``. The CSV is a metadata
+    surface; SKU / qty / mode / cost / leaf membership all flow through
+    dedicated paths.
+    """
+    changes: dict[str, Any] = {}
+    before: dict[str, Any] = {}
+    warnings: list[str] = []
+
+    def _diff(field: str, new_val: Any) -> None:
+        old_val = getattr(existing, field)
+        if (old_val or None) != (new_val or None):
+            changes[field] = new_val
+            before[field] = old_val
+
+    # --- Locked columns: warn if the CSV cell tries to change them. ---
+    sku_raw = (raw.get("sku") or "").strip()
+    if sku_raw and sku_raw != existing.sku:
+        warnings.append("sku ignored on update — SKU is server-managed and immutable")
+    qty_raw = (raw.get("current_qty") or "").strip()
+    if qty_raw:
+        try:
+            if Decimal(qty_raw) != existing.current_qty:
+                warnings.append(
+                    "current_qty ignored on update — driven by stock movements"
+                )
+        except InvalidOperation:
+            warnings.append("current_qty value unparseable; ignored on update")
+    tracking_mode_raw = (raw.get("tracking_mode") or "").strip()
+    if tracking_mode_raw and tracking_mode_raw != existing.tracking_mode.value:
+        warnings.append(
+            "tracking_mode ignored on update — derived from archetype"
+        )
+    unit_cost_raw = (raw.get("unit_cost") or "").strip()
+    if unit_cost_raw:
+        warnings.append(
+            "unit_cost ignored on update — FIFO cost layers are append-only"
+        )
+    # Category locked on update: warn if the cell points elsewhere.
+    cat_raw = (raw.get("category") or "").strip()
+    if cat_raw:
+        current_leaf = db.get(TaxonomyNode, existing.taxonomy_node_id)
+        current_path = (
+            _node_breadcrumb(db, current_leaf) if current_leaf is not None else ""
+        )
+        if cat_raw != current_path and cat_raw != str(existing.taxonomy_node_id):
+            warnings.append(
+                "category change via CSV not supported — use the per-item form"
+            )
+
+    # --- Editable columns ---
+    # name (blank = leave alone).
+    name_raw = (raw.get("name") or "").strip()
+    if name_raw:
+        _diff("name", name_raw)
+
+    unit_raw = (raw.get("unit") or "").strip()
+    if unit_raw:
+        _diff("unit", unit_raw)
+
+    rc_raw = (raw.get("requires_checkout") or "").strip()
+    if rc_raw:
+        rc_val, err = _parse_yes_no(rc_raw, field_name="requires_checkout")
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="requires_checkout", error_message=err,
+            )
+        _diff("requires_checkout", rc_val)
+
+    threshold_raw = (raw.get("reorder_threshold") or "").strip()
+    if threshold_raw:
+        threshold, err = _parse_decimal_safe(threshold_raw, field_name="reorder_threshold")
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="reorder_threshold", error_message=err,
+            )
+        _diff("reorder_threshold", threshold)
+
+    qty_o_raw = (raw.get("reorder_qty") or "").strip()
+    if qty_o_raw:
+        qty_val, err = _parse_decimal_safe(qty_o_raw, field_name="reorder_qty")
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="reorder_qty", error_message=err,
+            )
+        _diff("reorder_qty", qty_val)
+
+    # Stage — resolve against the item's *current* leaf since category is
+    # locked on update. Blank cell means "no change"; non-blank "" cell
+    # means "clear stage" (we treat the same as blank — only an explicit
+    # stage name updates).
+    stage_raw = (raw.get("stage") or "").strip()
+    if stage_raw:
+        current_leaf = db.get(TaxonomyNode, existing.taxonomy_node_id)
+        if current_leaf is None:  # pragma: no cover
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="stage",
+                error_message="item's category is missing (data integrity)",
+            )
+        stage_id, err = _resolve_stage_for_upload(db, current_leaf, stage_raw)
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="stage", error_message=err,
+            )
+        _diff("current_stage_id", stage_id)
+
+    ring_size_raw = (raw.get("ring_size") or "").strip()
+    if ring_size_raw:
+        _diff("ring_size", ring_size_raw)
+
+    weight_raw = (raw.get("weight_grams") or "").strip()
+    if weight_raw:
+        weight_val, err = _parse_decimal_safe(weight_raw, field_name="weight_grams")
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="weight_grams", error_message=err,
+            )
+        _diff("weight_grams", weight_val)
+
+    stone_raw = (raw.get("stone_shape") or "").strip()
+    if stone_raw:
+        _diff("stone_shape", stone_raw)
+
+    if not changes:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="skip",
+            error_field="id",
+            error_message=f"no changes (id={existing.id})",
+            warnings=warnings,
+        )
+    return RowResult(
+        row_number=row_number, raw=raw, tag="update",
+        payload={"existing_id": existing.id, "changes": changes, "before": before},
+        warnings=warnings,
+    )
+
+
+def _build_item_row_result(
+    db: Session,
+    row_number: int,
+    raw: dict[str, str],
+    *,
+    existing_ids: set[int],
+) -> RowResult:
+    """Validate one row; return a ``RowResult`` ready for preview or commit."""
+    # id handling first (skip / unknown / error).
+    raw_id = (raw.get("id") or "").strip()
+    if raw_id:
+        try:
+            id_int = int(raw_id)
+        except ValueError:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="id", error_message="id must be a whole number",
+            )
+        if id_int in existing_ids:
+            existing_item = db.get(Item, id_int)
+            if existing_item is None:  # pragma: no cover — defensive
+                return RowResult(
+                    row_number=row_number, raw=raw, tag="error",
+                    error_field="id",
+                    error_message=f"item {id_int} not found",
+                )
+            return _build_item_update_result(db, row_number, raw, existing_item)
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="id",
+            error_message=f"unknown id {id_int} — don't reuse ids from another database",
+        )
+
+    # Category: must resolve to a pickable node.
+    node, err = _resolve_category_for_upload(db, raw.get("category", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="category", error_message=err,
+        )
+    assert node is not None
+    # SKU validation, custom fields, stage all hang off this node's visibility
+    # + schema.
+    visibility = _built_in_visibility_from_picks(_picked_built_in_keys(db, node.id))
+
+    def _vis(field: str, state: str) -> bool:
+        return visibility.get(field) == state
+
+    # name: required iff picked + not hidden.
+    name_raw = (raw.get("name") or "").strip()
+    name: str | None
+    if _vis("name", "hidden"):
+        name = None  # auto-fill to SKU at commit
+    else:
+        if _vis("name", "required") and not name_raw:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="name", error_message="name is required",
+            )
+        name = name_raw or None
+
+    # unit: required iff picked + not hidden; else fall back to leaf default
+    # or 'ea'.
+    unit_raw = (raw.get("unit") or "").strip()
+    if _vis("unit", "hidden"):
+        unit = (node.defaults_json or {}).get("unit") or "ea"
+    else:
+        if _vis("unit", "required") and not unit_raw:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="unit", error_message="unit is required",
+            )
+        unit = unit_raw or ((node.defaults_json or {}).get("unit") or "ea")
+
+    threshold, err = _parse_decimal_safe(
+        raw.get("reorder_threshold", ""), field_name="reorder_threshold"
+    )
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="reorder_threshold", error_message=err,
+        )
+    qty, err = _parse_decimal_safe(
+        raw.get("reorder_qty", ""), field_name="reorder_qty"
+    )
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="reorder_qty", error_message=err,
+        )
+
+    requires_checkout, err = _parse_yes_no(
+        raw.get("requires_checkout", ""), field_name="requires_checkout"
+    )
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="requires_checkout", error_message=err,
+        )
+
+    stage_id, err = _resolve_stage_for_upload(db, node, raw.get("stage", ""))
+    if err is not None:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="stage", error_message=err,
+        )
+
+    # ``unit_cost`` is the per-row override for the FIFO cost layer +
+    # synthetic stock-in movement that auto-receives qty=1 for unique /
+    # unique-variant items. Blank → no auto-receive (item lands at qty=0,
+    # current behaviour). For BULK items this column is ignored with a
+    # warning if non-blank — bulk receipts have a separate flow.
+    unit_cost_raw = (raw.get("unit_cost") or "").strip()
+    unit_cost_for_receipt: Decimal | None = None
+    archetype_for_row = effective_archetype(db, node)
+    if unit_cost_raw:
+        unit_cost_decimal, err = _parse_decimal_safe(
+            unit_cost_raw, field_name="unit_cost"
+        )
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="unit_cost", error_message=err,
+            )
+        if archetype_for_row == Archetype.BULK:
+            # Don't synthesise a receipt for BULK — bulk stock-in has its own
+            # flow (POs, manual stock-in). Warning surfaces but doesn't block.
+            pass  # warning added below
+        else:
+            unit_cost_for_receipt = unit_cost_decimal
+
+    # Promoted standard fields (post-0024). Each maps to an ``Item`` column.
+    # Required-ness comes from the per-category visibility map.
+    ring_size_raw = (raw.get("ring_size") or "").strip()
+    if _vis("ring_size", "required") and not ring_size_raw:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="ring_size", error_message="ring_size is required",
+        )
+    weight_raw = (raw.get("weight_grams") or "").strip()
+    weight_value: Decimal | None
+    if weight_raw:
+        weight_dec, err = _parse_decimal_safe(weight_raw, field_name="weight_grams")
+        if err is not None:
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="weight_grams", error_message=err,
+            )
+        weight_value = weight_dec
+    else:
+        if _vis("weight_grams", "required"):
+            return RowResult(
+                row_number=row_number, raw=raw, tag="error",
+                error_field="weight_grams", error_message="weight_grams is required",
+            )
+        weight_value = None
+    stone_shape_raw = (raw.get("stone_shape") or "").strip()
+    if _vis("stone_shape", "required") and not stone_shape_raw:
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="stone_shape", error_message="stone_shape is required",
+        )
+
+    warnings: list[str] = []
+    # User-supplied SKU on create: accepted for unique / unique_variant
+    # items (each ring/variant often has its own pre-printed SKU); ignored
+    # for BULK (server always allocates).
+    user_sku = (raw.get("sku") or "").strip()
+    user_sku_for_create: str | None = None
+    if user_sku:
+        if archetype_for_row == Archetype.BULK:
+            warnings.append(
+                "sku column ignored on BULK create — server allocates from leaf prefix"
+            )
+        else:
+            # Verify uniqueness against existing SKUs (active + archived).
+            from sqlalchemy import select as _select  # local alias
+
+            collide = db.execute(
+                _select(Item.id).where(Item.sku == user_sku).limit(1)
+            ).first()
+            if collide is not None:
+                return RowResult(
+                    row_number=row_number, raw=raw, tag="error",
+                    error_field="sku",
+                    error_message=f"sku {user_sku!r} already in use",
+                )
+            user_sku_for_create = user_sku
+    if (raw.get("current_qty") or "").strip():
+        warnings.append(
+            "current_qty ignored — items always start at 0 (use stock-in to add)"
+        )
+    if (raw.get("tracking_mode") or "").strip():
+        warnings.append(
+            "tracking_mode ignored — derived from archetype on create"
+        )
+    if unit_cost_raw and archetype_for_row == Archetype.BULK:
+        warnings.append(
+            "unit_cost ignored on BULK items — use stock-in to receive qty + cost"
+        )
+
+    return RowResult(
+        row_number=row_number,
+        raw=raw,
+        tag="new",
+        payload={
+            "category_node_id": node.id,
+            "name": name,
+            "unit": unit,
+            "reorder_threshold": threshold,
+            "reorder_qty": qty,
+            "requires_checkout": requires_checkout,
+            "stage_id": stage_id,
+            "ring_size": ring_size_raw or None,
+            "weight_grams": weight_value,
+            "stone_shape": stone_shape_raw or None,
+            "unit_cost_for_receipt": unit_cost_for_receipt,
+            "user_sku_for_create": user_sku_for_create,
+        },
+        warnings=warnings,
+    )
+
+
+def _validate_items_upload(
+    db: Session, headers: list[str], body: list[list[str]]
+) -> list[RowResult]:
+    check_required_and_known_headers(
+        headers,
+        known=_ITEMS_UPLOAD_KNOWN,
+        required=_ITEMS_UPLOAD_REQUIRED,
+    )
+    existing_ids = {row.id for row in db.execute(select(Item.id)).all()}
+    results: list[RowResult] = []
+    for offset, row in enumerate(body):
+        row_number = offset + 2
+        raw = row_to_dict(headers, row)
+        results.append(
+            _build_item_row_result(
+                db, row_number, raw,
+                existing_ids=existing_ids,
+            )
+        )
+    return results
+
+
+def _summarise_item_row(r: RowResult) -> str:
+    if r.payload is None:
+        return ""
+    if r.tag == "update":
+        return "changed: " + ", ".join(sorted(r.payload.get("changes", {})))
+    name = r.payload.get("name") or "(auto)"
+    return f"name={name}"
+
+
+@upload_router.get("/upload", response_class=HTMLResponse)
+def upload_items_form(
+    request: Request,
+    _user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "csv_upload_form.html",
+        {
+            "current_user": _user,
+            "title": "Upload items CSV",
+            "subtitle": (
+                "Bulk-create items from a CSV. SKUs are allocated by the "
+                "server; current_qty is ignored. Use stock-in to add stock."
+            ),
+            "intro_html": "",
+            "action": "/admin/items/upload",
+            "cancel_url": "/admin/items",
+            "download_url": "/admin/items?format=csv&show=active",
+            "expected_columns": _ITEMS_UPLOAD_COLUMNS,
+        },
+    )
+
+
+@upload_router.post("/upload")
+async def upload_items(
+    request: Request,
+    file: UploadFile = File(...),
+    dry_run: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    raw_bytes = await file.read()
+    is_dry_run = dry_run == "1"
+
+    preview_ctx: dict[str, Any] = {
+        "current_user": user,
+        "title": "Items CSV — preview",
+        "subtitle": "",
+        "upload_url": "/admin/items/upload",
+        "cancel_url": "/admin/items",
+        "rows": [],
+        "headers": [],
+        "new_count": 0,
+        "update_count": 0,
+        "skip_count": 0,
+        "error_count": 0,
+        "top_level_error": None,
+        "committed": False,
+    }
+
+    try:
+        file_sha256, headers, body = read_upload(raw_bytes, filename=file.filename)
+        results = _validate_items_upload(db, headers, body)
+    except CsvUploadError as exc:
+        preview_ctx["top_level_error"] = str(exc)
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    new_count = sum(1 for r in results if r.tag == "new")
+    update_count = sum(1 for r in results if r.tag == "update")
+    skip_count = sum(1 for r in results if r.tag == "skip")
+    error_count = sum(1 for r in results if r.tag == "error")
+    preview_ctx.update(
+        {
+            "headers": headers,
+            "rows": [
+                {
+                    "row_number": r.row_number,
+                    "tag": r.tag,
+                    "error_field": r.error_field,
+                    "error_message": r.error_message,
+                    "warnings": r.warnings,
+                    "summary": _summarise_item_row(r),
+                }
+                for r in results
+            ],
+            "new_count": new_count,
+            "update_count": update_count,
+            "skip_count": skip_count,
+            "error_count": error_count,
+        }
+    )
+
+    if is_dry_run or error_count > 0 or (new_count == 0 and update_count == 0):
+        return templates.TemplateResponse(request, "csv_upload_preview.html", preview_ctx)
+
+    # Commit pass: insert ``new`` rows + apply ``update`` rows + audit each.
+    for r in results:
+        if r.payload is None:
+            continue
+        if r.tag == "update":
+            p = r.payload
+            existing_item = db.get(Item, p["existing_id"])
+            if existing_item is None:  # pragma: no cover
+                continue
+            for field, new_val in p["changes"].items():
+                setattr(existing_item, field, new_val)
+            json_before = {
+                k: (str(v) if isinstance(v, Decimal) else v)
+                for k, v in p["before"].items()
+            }
+            json_after = {
+                k: (str(v) if isinstance(v, Decimal) else v)
+                for k, v in p["changes"].items()
+            }
+            record_audit(
+                db,
+                actor=user,
+                action="item.updated",
+                entity_type="item",
+                entity_id=existing_item.id,
+                before=json_before,
+                after=json_after,
+            )
+            continue
+        if r.tag != "new":
+            continue
+        p = r.payload
+        picked = db.get(TaxonomyNode, p["category_node_id"])
+        if picked is None:  # pragma: no cover — defensive only
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="category disappeared mid-upload",
+            )
+        archetype = effective_archetype(db, picked)
+        if archetype is None:  # pragma: no cover — same as create_item
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="category is missing an archetype (data integrity)",
+            )
+        allocated_sku, allocated_seq, dest_leaf = _allocate_sku(db, picked)
+        # User-supplied SKU overrides the server-allocated one for unique
+        # / unique_variant items (the sequence + auto-leaf are still
+        # server-minted; only the displayed SKU is the user's).
+        user_sku = p.get("user_sku_for_create")
+        if user_sku is not None:
+            allocated_sku = user_sku
+        item_name = p["name"] or allocated_sku
+        # Re-derive stage from the *destination* leaf — for UV trees the
+        # auto-leaf differs from the picked node, but the top-level (where
+        # stages live) is the same, so this stays consistent.
+        stage_id = p["stage_id"]
+        if stage_id is None:
+            stage_id = _initial_stage_id_for_leaf(db, dest_leaf)
+        item = Item(
+            sku=allocated_sku,
+            name=item_name,
+            taxonomy_node_id=dest_leaf.id,
+            unit=p["unit"],
+            tracking_mode=_tracking_mode_for(archetype),
+            requires_checkout=p["requires_checkout"],
+            reorder_threshold=p["reorder_threshold"],
+            reorder_qty=p["reorder_qty"],
+            ring_size=p["ring_size"],
+            weight_grams=p["weight_grams"],
+            stone_shape=p["stone_shape"],
+            current_qty=Decimal("0"),
+            assigned_sequence=allocated_seq,
+            current_stage_id=stage_id,
+        )
+        db.add(item)
+        db.flush()
+
+        audit_after: dict[str, Any] = {
+            "sku": allocated_sku,
+            "name": item_name,
+            "taxonomy_node_id": dest_leaf.id,
+            "unit": p["unit"],
+            "tracking_mode": _tracking_mode_for(archetype).value,
+            "requires_checkout": p["requires_checkout"],
+            "reorder_threshold": p["reorder_threshold"],
+            "reorder_qty": p["reorder_qty"],
+            "ring_size": p["ring_size"],
+            "weight_grams": p["weight_grams"],
+            "stone_shape": p["stone_shape"],
+            "current_qty": Decimal("0"),
+            "assigned_sequence": allocated_seq,
+        }
+        record_audit(
+            db,
+            actor=user,
+            action="item.created",
+            entity_type="item",
+            entity_id=item.id,
+            before=None,
+            after=audit_after,
+        )
+
+        # Optional auto-receive for unique / unique-variant items when the
+        # row carried a ``unit_cost`` value. Synthesises the same shape as
+        # ``record_stock_in`` (movements.py): a ``StockMovement(IN qty=1)``
+        # + a backing ``CostLayer``. Bumps ``item.current_qty`` to 1 and
+        # writes a ``stock_movement.in`` audit row alongside the per-item
+        # ``item.created`` row.
+        cost_for_receipt = p["unit_cost_for_receipt"]
+        if cost_for_receipt is not None:
+            received_at = datetime.now(UTC)
+            movement = StockMovement(
+                item_id=item.id,
+                type=MovementType.IN,
+                qty=Decimal("1"),
+                user_id=user.id,
+                reason="csv_upload",
+                note=f"auto-receive on items CSV upload (file_sha256={file_sha256[:12]}…)",
+            )
+            db.add(movement)
+            db.flush()
+            record_receipt(
+                db,
+                item=item,
+                qty=Decimal("1"),
+                unit_cost=cost_for_receipt,
+                source=CostLayerSource.MANUAL_IN,
+                movement=movement,
+                received_at=received_at,
+            )
+            record_audit(
+                db,
+                actor=user,
+                action="stock_movement.in",
+                entity_type="stock_movement",
+                entity_id=movement.id,
+                before=None,
+                after={
+                    "item_id": item.id,
+                    "qty": "1",
+                    "unit_cost": str(cost_for_receipt),
+                    "total_cost": (
+                        str(movement.total_cost)
+                        if movement.total_cost is not None
+                        else None
+                    ),
+                    "source": CostLayerSource.MANUAL_IN.value,
+                    "reason": movement.reason,
+                    "note": movement.note,
+                    "received_at": received_at.isoformat(),
+                },
+            )
+
+    record_audit(
+        db,
+        actor=user,
+        action="item.csv_uploaded",
+        entity_type="item",
+        entity_id=None,
+        before=None,
+        after={
+            "count": new_count,
+            "updated_count": update_count,
+            "file_sha256": file_sha256,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Imported {new_count} new, updated {update_count} item(s) from CSV.",
+    )
     return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)

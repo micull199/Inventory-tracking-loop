@@ -64,6 +64,9 @@ _EXEMPT_FROM_AUDIT_WRITE: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/auth/_dev-login"),
         # Read-only QR/SKU lookup → 303 redirect; no DB state change.
         ("POST", "/scan/resolve"),
+        # Post-0024: field-def unarchive is a deprecated no-op that 400s
+        # unconditionally. Kept for URL stability; no state change to audit.
+        ("POST", "/admin/taxonomy/fields/{field_id}/unarchive"),
     }
 )
 

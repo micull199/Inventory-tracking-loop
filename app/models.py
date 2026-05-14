@@ -21,7 +21,6 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
-    Text,
     func,
     text,
 )
@@ -372,34 +371,21 @@ class FieldType(enum.StrEnum):
 
 
 class TaxonomyFieldDef(Base):
-    """A custom field on a taxonomy *leaf* node.
+    """Per-leaf "show this catalog field on items" pick.
 
-    Items in this leaf inherit the field; required fields must be filled to
-    save. Edits to the schema are non-retroactive (existing items keep their
-    stored values; that's enforced when items land in I1+, not here).
-    Soft-deletable; never hard-deleted. Archiving hides the field from new
-    entry but keeps the row so historical item values remain meaningful.
+    The schema of an item is fixed (every Item has every catalog-backed
+    column). This table is a **visibility selector**: it lists which catalog
+    keys a given taxonomy node opts into showing on the items form, list,
+    and CSV. Picks inherit downward: a key picked on a top-level node is
+    visible on every descendant.
 
-    Uniqueness:
-    - ``(node_id, name)`` and ``(node_id, key)`` are both unique across
-      *active and archived* rows. Archiving must not free either, because
-      ``item_field_values`` will reference the def by id, and likely by key for
-      cross-version stability — re-using a name on a new def under the same
-      node would silently overload the audit history.
-
-    The "leaf" invariant is enforced in the application layer (the field-def
-    routes), not in this model — a row whose ``node_id`` points at a top-level
-    node *with active children* is still schema-valid in isolation.
+    ``key`` must be a value in ``app.field_catalog.CATALOG_BY_KEY`` (enforced
+    at write time by the picker route). ``required=True`` forces the field
+    to be non-blank when items are created in this category.
     """
 
     __tablename__ = "taxonomy_field_defs"
     __table_args__ = (
-        Index(
-            "uq_taxonomy_field_defs_node_name",
-            "node_id",
-            "name",
-            unique=True,
-        ),
         Index(
             "uq_taxonomy_field_defs_node_key",
             "node_id",
@@ -407,8 +393,6 @@ class TaxonomyFieldDef(Base):
             unique=True,
         ),
         Index("ix_taxonomy_field_defs_node_id", "node_id"),
-        Index("ix_taxonomy_field_defs_archived_at", "archived_at"),
-        Index("ix_taxonomy_field_defs_catalog_key", "catalog_key"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -417,28 +401,12 @@ class TaxonomyFieldDef(Base):
         ForeignKey("taxonomy_nodes.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Catalog key — must match an entry in ``app.field_catalog.FIELD_CATALOG``.
     key: Mapped[str] = mapped_column(String(64), nullable=False)
-    # References ``app.field_catalog.FIELD_CATALOG[*].key``. Nullable for the
-    # backfill window introduced in migration 0021; tightened to NOT NULL in
-    # 0023 once 0022 has matched every row.
-    catalog_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    type: Mapped[FieldType] = mapped_column(
-        SAEnum(
-            FieldType,
-            name="taxonomy_field_type",
-            native_enum=False,
-            length=16,
-            values_callable=lambda enum_cls: [e.value for e in enum_cls],
-        ),
-        nullable=False,
-    )
-    options_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("0")
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -452,8 +420,7 @@ class TaxonomyFieldDef(Base):
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
             f"<TaxonomyFieldDef id={self.id} node_id={self.node_id} "
-            f"name={self.name!r} key={self.key!r} type={self.type} "
-            f"required={self.required} archived={self.archived_at is not None}>"
+            f"key={self.key!r} required={self.required}>"
         )
 
 
@@ -623,6 +590,13 @@ class Item(Base):
     )
     qr_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Standardised fields promoted from the legacy ``item_field_values`` path
+    # (migration 0024). Each is nullable; per-category visibility decides
+    # which appear on the items form. ``unit_cost`` is intentionally not a
+    # column here — FIFO cost layers are the source of truth.
+    ring_size: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    weight_grams: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    stone_shape: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Lifecycle stage owned by the item's top-level taxonomy category. NULL
     # is legitimate for items whose category has no stages defined. Stage
     # transitions are recorded as ``STAGE_CHANGE`` movements; the column
@@ -653,77 +627,6 @@ class Item(Base):
         return (
             f"<Item id={self.id} sku={self.sku!r} name={self.name!r} "
             f"node_id={self.taxonomy_node_id} archived={self.archived_at is not None}>"
-        )
-
-
-class ItemFieldValue(Base):
-    """Custom-field value bound to one (item, field def) pair (I2).
-
-    Sparse storage: exactly one of the ``value_*`` columns is populated for any
-    given row, chosen by the def's ``type``:
-
-    - ``text``        → ``value_text``
-    - ``number``      → ``value_number`` (integer)
-    - ``decimal``     → ``value_decimal``
-    - ``date``        → ``value_date``
-    - ``boolean``     → ``value_bool``
-    - ``select``      → ``value_text`` (the chosen option, as-is)
-    - ``multiselect`` → ``value_json`` (list of chosen options)
-
-    A row exists only when the item has a non-null/non-empty value for that
-    field; clearing a value deletes the row. The ``(item_id, field_def_id)``
-    unique index prevents the route layer from accidentally double-writing.
-
-    The field def is referenced by id, not key. The S5 self-critique flagged
-    that field renames re-derive the slug — a key change is recorded in the
-    audit row but doesn't affect existing values stored here, because the link
-    is by id. ``field_def.archived_at`` is intentionally not enforced at this
-    layer: items keep their stored values when a def is archived (per MISSION
-    §3 "Deleting a field hides it from new entry but preserves the value").
-    """
-
-    __tablename__ = "item_field_values"
-    __table_args__ = (
-        Index(
-            "uq_item_field_values_item_field_def",
-            "item_id",
-            "field_def_id",
-            unique=True,
-        ),
-        Index("ix_item_field_values_item_id", "item_id"),
-        Index("ix_item_field_values_field_def_id", "field_def_id"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    item_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("items.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    field_def_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("taxonomy_field_defs.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    value_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    value_decimal: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
-    value_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    value_bool: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    value_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    def __repr__(self) -> str:  # pragma: no cover - debug aid
-        return (
-            f"<ItemFieldValue id={self.id} item_id={self.item_id} field_def_id={self.field_def_id}>"
         )
 
 

@@ -1,10 +1,8 @@
 """Unit tests for ``app.field_catalog``.
 
 The catalog is a closed, hardcoded list — these tests are forcing functions
-that keep it internally consistent and aligned with the ORM models that hold
-its values. Any catalog edit that breaks one of these invariants is a code
-change that needs explicit thought (e.g. add a column on ``Item``, extend
-``ItemFieldValue``, bump a migration).
+that keep it internally consistent and aligned with the ORM model that
+holds its values. Every catalog entry maps to a column on ``Item`` post-0024.
 """
 
 from __future__ import annotations
@@ -19,17 +17,7 @@ from app.field_catalog import (
     CatalogEntry,
     get_entry,
 )
-from app.models import FieldType, Item, ItemFieldValue
-
-_FIELD_VALUE_COLUMN_FOR_TYPE: dict[FieldType, str] = {
-    FieldType.TEXT: "value_text",
-    FieldType.NUMBER: "value_number",
-    FieldType.DECIMAL: "value_decimal",
-    FieldType.DATE: "value_date",
-    FieldType.BOOLEAN: "value_bool",
-    FieldType.SELECT: "value_text",
-    FieldType.MULTISELECT: "value_json",
-}
+from app.models import FieldType, Item
 
 
 def test_catalog_is_non_empty() -> None:
@@ -66,24 +54,19 @@ def test_entry_invariants(entry: CatalogEntry) -> None:
     else:
         assert not entry.options, f"{entry.key}: non-select must not carry options"
 
-    # Storage shape.
-    assert entry.storage in ("column", "field_value")
-    if entry.storage == "column":
-        assert entry.column, f"{entry.key}: column storage requires a column name"
-    else:
-        assert entry.column is None, f"{entry.key}: field_value storage must not name a column"
+    # Every entry references a real Item column.
+    assert entry.column, f"{entry.key}: every entry needs a column name"
 
 
 @pytest.mark.parametrize(
     "entry",
-    [e for e in FIELD_CATALOG if e.storage == "column"],
+    list(FIELD_CATALOG),
     ids=lambda e: e.key,
 )
-def test_column_entries_reference_real_item_columns(entry: CatalogEntry) -> None:
-    """Every column-backed entry's ``column`` must be a real ``Item`` mapper
-    attribute (not a relationship or hybrid)."""
+def test_entries_reference_real_item_columns(entry: CatalogEntry) -> None:
+    """Every entry's ``column`` must be a real ``Item`` mapper attribute
+    (not a relationship or hybrid)."""
 
-    assert entry.column is not None  # narrowed by the parametrize filter
     attr = getattr(Item, entry.column, None)
     assert attr is not None, f"{entry.key}: Item has no attribute {entry.column!r}"
     assert isinstance(attr, InstrumentedAttribute), (
@@ -93,32 +76,6 @@ def test_column_entries_reference_real_item_columns(entry: CatalogEntry) -> None
     assert not isinstance(prop, RelationshipProperty), (
         f"{entry.key}: Item.{entry.column} is a relationship, not a column"
     )
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [e for e in FIELD_CATALOG if e.storage == "field_value"],
-    ids=lambda e: e.key,
-)
-def test_field_value_entries_have_storage_column(entry: CatalogEntry) -> None:
-    """Every field-value-backed entry's ``type`` must map to a real
-    ``ItemFieldValue.value_*`` column."""
-
-    column_name = _FIELD_VALUE_COLUMN_FOR_TYPE[entry.type]
-    attr = getattr(ItemFieldValue, column_name, None)
-    assert attr is not None, (
-        f"{entry.key}: ItemFieldValue.{column_name} missing for type {entry.type}"
-    )
-    assert isinstance(attr, InstrumentedAttribute)
-
-
-def test_every_field_type_is_exercised() -> None:
-    """Defensive: every ``FieldType`` member should appear at least once in
-    the catalog so the storage abstraction has full coverage."""
-
-    seen = {e.type for e in FIELD_CATALOG}
-    for member in FieldType:
-        assert member in seen, f"FieldType.{member.name} has no catalog entry"
 
 
 def test_tracking_mode_options_match_enum() -> None:
