@@ -19,7 +19,7 @@ The dashboard is read-only — no audit, no movement type, no DB mutations.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -700,3 +700,85 @@ class TestDashboardReadOnly:
         after = db_session.execute(select(AuditLog).order_by(AuditLog.id.desc())).scalars().all()
         # No new rows — only ones present before the GET.
         assert all(a.id in before_ids for a in after)
+
+
+class TestDashboardMemoStonesDueSoon:
+    """The memo-due widget surfaces operationally-important stones whose
+    return date is within the 30-day window (or already past).
+    """
+
+    def _make_stone(
+        self,
+        db: Session,
+        *,
+        code: str,
+        ownership: str,
+        due: date | None,
+    ) -> None:
+        from app.models import Stone, StoneOwnership, StoneShape, StoneType
+
+        shape = db.execute(
+            select(StoneShape).where(StoneShape.name == "round")
+        ).scalar_one_or_none() or StoneShape(name="round")
+        if shape.id is None:
+            db.add(shape)
+            db.commit()
+            db.refresh(shape)
+        db.add(
+            Stone(
+                stone_code=code,
+                stone_type=StoneType.DIAMOND,
+                shape_id=shape.id,
+                carat_weight=Decimal("1.00"),
+                ownership=StoneOwnership(ownership),
+                memo_due_date=due,
+            )
+        )
+        db.commit()
+
+    def test_widget_hidden_when_no_memo_stones(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/dashboard")
+        assert resp.status_code == 200
+        assert 'data-testid="memo-stones-card"' not in resp.text
+
+    def test_widget_shows_due_within_window(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        today = datetime.now(UTC).date()
+        # Due in 10 days — should appear.
+        self._make_stone(
+            db_session, code="STN-SOON", ownership="memo", due=today + timedelta(days=10)
+        )
+        # Due in 60 days — outside the 30-day window.
+        self._make_stone(
+            db_session, code="STN-FAR", ownership="memo", due=today + timedelta(days=60)
+        )
+        # Owned — no due date concept.
+        self._make_stone(db_session, code="STN-OWNED", ownership="owned", due=None)
+        _login_as(client, mgr)
+        resp = client.get("/admin/dashboard")
+        assert resp.status_code == 200
+        assert 'data-testid="memo-stones-card"' in resp.text
+        assert "STN-SOON" in resp.text
+        assert "STN-FAR" not in resp.text
+        assert "STN-OWNED" not in resp.text
+
+    def test_widget_flags_overdue_rows(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        today = datetime.now(UTC).date()
+        # 5 days past due.
+        self._make_stone(
+            db_session, code="STN-LATE", ownership="memo", due=today - timedelta(days=5)
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/dashboard")
+        assert resp.status_code == 200
+        assert 'data-testid="memo-stone-overdue"' in resp.text
+        assert "STN-LATE" in resp.text

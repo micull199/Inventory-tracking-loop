@@ -66,6 +66,18 @@
                        {% if request.url.path.startswith("/admin/suppliers") %}aria-current="page"{% endif %}>Suppliers</a></li>
                     <li><a href="/admin/locations" data-testid="nav-locations"
                        {% if request.url.path.startswith("/admin/locations") %}aria-current="page"{% endif %}>Locations</a></li>
+                    <li><a href="/admin/stones" data-testid="nav-stones"
+                       {% if request.url.path == "/admin/stones" or request.url.path.startswith("/admin/stones/") %}aria-current="page"{% endif %}>Stones</a></li>
+                    <li><a href="/admin/stone-shapes" data-testid="nav-stone-shapes"
+                       {% if request.url.path.startswith("/admin/stone-shapes") %}aria-current="page"{% endif %}>Stone shapes</a></li>
+                    <li><a href="/admin/designs" data-testid="nav-designs"
+                       {% if request.url.path.startswith("/admin/designs") %}aria-current="page"{% endif %}>Designs</a></li>
+                    <li><a href="/admin/metals" data-testid="nav-metals"
+                       {% if request.url.path.startswith("/admin/metals") or request.url.path.startswith("/admin/metal-prices") %}aria-current="page"{% endif %}>Metals</a></li>
+                    <li><a href="/admin/units" data-testid="nav-units"
+                       {% if request.url.path.startswith("/admin/units") %}aria-current="page"{% endif %}>Units</a></li>
+                    <li><a href="/admin/reason-codes" data-testid="nav-reason-codes"
+                       {% if request.url.path.startswith("/admin/reason-codes") %}aria-current="page"{% endif %}>Reason codes</a></li>
                     <li><a href="/admin/taxonomy" data-testid="nav-taxonomy"
                        {% if request.url.path.startswith("/admin/taxonomy") %}aria-current="page"{% endif %}>Taxonomy</a></li>
                     <li><a href="/admin/audit" data-testid="nav-audit"

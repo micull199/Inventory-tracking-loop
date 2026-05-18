@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Set a stone into {{ item.sku }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header("Set a stone into " ~ item.sku) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/items/{{ item.id }}/edit">&larr; Back to item</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <div class="uc-helper">
+            <strong>{{ item.sku }}</strong> — {{ item.name }}
+        </div>
+
+        {% if stone_options %}
+            <form method="post" action="/admin/items/{{ item.id }}/stones" data-testid="item-set-stone-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+                <section class="uc-section">
+                    <div class="uc-field">
+                        <label class="uc-label" for="stone_id">Stone <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="stone_id" name="stone_id" required data-testid="item-set-stone-stone-input">
+                            <option value="">— pick an available stone —</option>
+                            {% for s in stone_options %}
+                                <option value="{{ s.id }}">{{ s.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <small class="uc-helper">Only stones with status <code>available</code> are listed.</small>
+                    </div>
+
+                    <div class="uc-grid-2">
+                        <div class="uc-field">
+                            <label class="uc-label" for="position">Position <span class="uc-required" aria-hidden="true">*</span></label>
+                            <select class="uc-select" id="position" name="position" required data-testid="item-set-stone-position-input">
+                                {% for p in positions %}
+                                    <option value="{{ p }}" {% if p == "centre" %}selected{% endif %}>{{ p }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="uc-field">
+                            <label class="uc-label" for="position_index">Position index</label>
+                            <input class="uc-input" type="number" step="1" min="0" id="position_index" name="position_index"
+                                   value="0" data-testid="item-set-stone-position-index-input">
+                            <small class="uc-helper">For multiple accents in the same role (0, 1, 2…).</small>
+                        </div>
+                    </div>
+
+                    <div class="uc-field">
+                        <label class="uc-label" for="note">Note</label>
+                        <input class="uc-input" type="text" id="note" name="note"
+                               data-testid="item-set-stone-note-input" maxlength="2000">
+                    </div>
+                </section>
+
+                {% call c.form_actions() %}
+                    <button class="uc-btn uc-btn--primary" type="submit" data-testid="item-set-stone-submit">Set stone</button>
+                    <a class="uc-btn uc-btn--secondary" href="/admin/items/{{ item.id }}/edit">Cancel</a>
+                {% endcall %}
+            </form>
+        {% else %}
+            {{ c.empty_state(
+                "No stones available",
+                "Every stone is either already set or in a terminal state. Create a new stone via the stones admin, then come back here.",
+                testid="item-set-stone-empty"
+            ) }}
+        {% endif %}
+    {% endcall %}
+{% endblock %}

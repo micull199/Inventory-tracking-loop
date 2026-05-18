@@ -28,6 +28,17 @@
 {% set _show_ring_size = "ring_size" in _picks %}
 {% set _show_weight_grams = "weight_grams" in _picks %}
 {% set _show_stone_shape = "stone_shape" in _picks %}
+{# S1 stones integration: melee fields are direct form inputs; centre_stone_id
+   is rendered readonly (the set/unset routes are the single mutation pathway). #}
+{% set _show_centre_stone = "centre_stone_id" in _picks %}
+{% set _show_melee_count = "melee_count" in _picks %}
+{% set _show_melee_total_ct = "melee_total_ct" in _picks %}
+{% set _show_melee_stone_type = "melee_stone_type" in _picks %}
+{% set _stones_visible = _show_centre_stone or _show_melee_count or _show_melee_total_ct or _show_melee_stone_type %}
+{# S2 metal-master FKs. #}
+{% set _show_metal = "metal_id" in _picks %}
+{% set _show_secondary_metal = "secondary_metal_id" in _picks %}
+{% set _metals_visible = _show_metal or _show_secondary_metal %}
 
 {% set _identity_visible = item or _show_name %}
 {% set _stock_visible = _show_unit or _show_tracking_mode or _show_checkout %}
@@ -246,5 +257,222 @@
                        {% if ro %}disabled{% endif %}>
             </div>
         {% endif %}
+    </section>
+{% endif %}
+
+{# ---- Stones (S1 — melee aggregates + tracked-stone linkage table) ---- #}
+{% if _stones_visible %}
+    <section class="uc-section" data-testid="item-section-stones">
+        {% if _show_centre_stone %}
+            <div class="uc-field">
+                <span class="uc-label">Stones set in this item</span>
+                {% if linked_stones %}
+                    <div class="uc-table-wrap">
+                        <table class="uc-table" data-testid="item-linked-stones-table">
+                            <thead>
+                                <tr>
+                                    <th>Code</th>
+                                    <th>Type</th>
+                                    <th>Position</th>
+                                    <th class="uc-right">Carat</th>
+                                    <th class="uc-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in linked_stones %}
+                                    <tr data-testid="linked-stone-row" data-stone-id="{{ s.stone_id }}">
+                                        <td><a href="/admin/stones/{{ s.stone_id }}/edit"><code>{{ s.stone_code }}</code></a></td>
+                                        <td>{{ s.stone_type }}</td>
+                                        <td>{{ s.position }}{% if s.position_index %} [{{ s.position_index }}]{% endif %}
+                                            {% if s.is_centre %}{{ c.pill("centre") }}{% endif %}
+                                        </td>
+                                        <td class="uc-right">{{ s.carat_weight }}</td>
+                                        <td class="uc-actions">
+                                            {% if not ro %}
+                                                <form method="post" action="/admin/stones/{{ s.stone_id }}/unset" style="display:inline">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                    <button type="submit" data-testid="unset-linked-stone">Unset</button>
+                                                </form>
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="uc-num" data-testid="item-no-linked-stones"><em>no tracked stones set</em></div>
+                {% endif %}
+                {% if item and not ro %}
+                    <div class="uc-row-2" style="flex-wrap: wrap; gap: var(--s-2);">
+                        <a class="uc-btn uc-btn--secondary uc-btn--sm"
+                           href="/admin/items/{{ item.id }}/stones/new"
+                           data-testid="item-set-new-stone-link">+ Set a stone</a>
+                    </div>
+                {% endif %}
+                <small class="uc-helper">
+                    Stones are set / unset via the
+                    <a href="/admin/stones" data-testid="link-stones-admin">stones admin</a>
+                    or the picker above so the event ledger captures every
+                    transition. Direct edits to <code>centre_stone_id</code>
+                    aren't allowed here — see spec §1.5 (single mutation pathway).
+                </small>
+            </div>
+        {% endif %}
+
+        {% if _show_melee_count or _show_melee_total_ct or _show_melee_stone_type %}
+            <div class="uc-grid-2">
+                {% if _show_melee_count %}
+                    <div class="uc-field">
+                        <label class="uc-label" for="melee_count">Melee count</label>
+                        <input class="uc-input" type="number" step="1" min="0" id="melee_count" name="melee_count"
+                               value="{{ form.melee_count }}"
+                               data-testid="item-melee-count-input"
+                               {% if ro %}disabled{% endif %}>
+                    </div>
+                {% endif %}
+                {% if _show_melee_total_ct %}
+                    <div class="uc-field">
+                        <label class="uc-label" for="melee_total_ct">Melee total (ct)</label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="melee_total_ct" name="melee_total_ct"
+                               value="{{ form.melee_total_ct }}"
+                               data-testid="item-melee-total-ct-input"
+                               {% if ro %}disabled{% endif %}>
+                    </div>
+                {% endif %}
+            </div>
+            {% if _show_melee_stone_type %}
+                <div class="uc-field">
+                    <label class="uc-label" for="melee_stone_type">Melee stone type</label>
+                    <input class="uc-input" type="text" id="melee_stone_type" name="melee_stone_type"
+                           value="{{ form.melee_stone_type }}"
+                           data-testid="item-melee-stone-type-input"
+                           maxlength="32"
+                           placeholder="usually diamond"
+                           {% if ro %}disabled{% endif %}>
+                </div>
+            {% endif %}
+        {% endif %}
+
+        {% if item and item.total_carat_weight %}
+            <div class="uc-field">
+                <span class="uc-label">Total carat weight</span>
+                <div class="uc-num" data-testid="item-total-ct-readonly">
+                    {{ item.total_carat_weight }} ct
+                </div>
+                <small class="uc-helper">Derived from tracked stones + melee total. Updated on save and on stone set/unset.</small>
+            </div>
+        {% endif %}
+    </section>
+{% endif %}
+
+{# ---- Metals (S2) ---- #}
+{% if _metals_visible %}
+    <section class="uc-section" data-testid="item-section-metals">
+        {% if _show_metal %}
+            <div class="uc-field">
+                <label class="uc-label" for="metal_id">Metal</label>
+                <select class="uc-select" id="metal_id" name="metal_id"
+                        data-testid="item-metal-input"
+                        {% if ro %}disabled{% endif %}>
+                    <option value="">— none —</option>
+                    {% for m in metal_options %}
+                        <option value="{{ m.id }}"
+                                {% if form.metal_id == (m.id | string) %}selected{% endif %}>
+                            {{ m.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+        {% endif %}
+        {% if _show_secondary_metal %}
+            <div class="uc-field">
+                <label class="uc-label" for="secondary_metal_id">Secondary metal</label>
+                <select class="uc-select" id="secondary_metal_id" name="secondary_metal_id"
+                        data-testid="item-secondary-metal-input"
+                        {% if ro %}disabled{% endif %}>
+                    <option value="">— none —</option>
+                    {% for m in (secondary_metal_options if secondary_metal_options is defined else metal_options) %}
+                        <option value="{{ m.id }}"
+                                {% if form.secondary_metal_id == (m.id | string) %}selected{% endif %}>
+                            {{ m.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <small class="uc-helper">For two-tone pieces only; otherwise leave blank.</small>
+            </div>
+        {% endif %}
+
+        {% if item and item.pure_metal_weight_g %}
+            <div class="uc-field">
+                <span class="uc-label">Pure metal weight</span>
+                <div class="uc-num" data-testid="item-pure-metal-weight-readonly">
+                    {{ item.pure_metal_weight_g }} g
+                </div>
+                <small class="uc-helper">Derived from weight × purity. Refreshed on every save.</small>
+            </div>
+        {% endif %}
+    </section>
+{% endif %}
+
+{# ---- Side-table-backed catalog fields (spec §9) ----
+
+   Generic input renderer for every SIDE_TABLE catalog entry the leaf has
+   picked. Iterates ``side_table_entries`` (list[CatalogEntry] sorted by
+   ``sort_order``); current values come from ``side_table_form``
+   (dict[key, str]) — populated from the persisted side row on initial
+   render and from the raw form on a 400 re-render. Rendering by
+   ``entry.type`` mirrors the items-list filter input dispatch so
+   inputs feel uniform across the app.
+#}
+{% if side_table_entries is defined and side_table_entries %}
+    <section class="uc-section" data-testid="item-section-side-tables">
+        {% for entry in side_table_entries %}
+            {% set _v = side_table_form.get(entry.key, '') %}
+            <div class="uc-field">
+                <label class="uc-label" for="{{ entry.key }}">{{ entry.label }}</label>
+                {% if entry.type.value == 'boolean' %}
+                    <label class="uc-check">
+                        <input type="checkbox" id="{{ entry.key }}" name="{{ entry.key }}" value="true"
+                               data-testid="item-{{ entry.key }}-input"
+                               {% if _v %}checked{% endif %}
+                               {% if ro %}disabled{% endif %}>
+                        {{ entry.label }}
+                    </label>
+                {% elif entry.type.value == 'select' %}
+                    <select class="uc-select" id="{{ entry.key }}" name="{{ entry.key }}"
+                            data-testid="item-{{ entry.key }}-input"
+                            {% if ro %}disabled{% endif %}>
+                        <option value="">— none —</option>
+                        {% for opt in entry.options %}
+                            <option value="{{ opt }}" {% if _v == opt %}selected{% endif %}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                {% elif entry.type.value == 'date' %}
+                    <input class="uc-input" type="date" id="{{ entry.key }}" name="{{ entry.key }}"
+                           value="{{ _v }}"
+                           data-testid="item-{{ entry.key }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% elif entry.type.value == 'decimal' %}
+                    <input class="uc-input" type="text" inputmode="decimal" id="{{ entry.key }}" name="{{ entry.key }}"
+                           value="{{ _v }}"
+                           data-testid="item-{{ entry.key }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% elif entry.type.value == 'number' %}
+                    <input class="uc-input" type="number" step="1" id="{{ entry.key }}" name="{{ entry.key }}"
+                           value="{{ _v }}"
+                           data-testid="item-{{ entry.key }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% else %}
+                    <input class="uc-input" type="text" id="{{ entry.key }}" name="{{ entry.key }}"
+                           value="{{ _v }}"
+                           data-testid="item-{{ entry.key }}-input"
+                           {% if ro %}disabled{% endif %}>
+                {% endif %}
+                {% if entry.help_text %}
+                    <small class="uc-helper">{{ entry.help_text }}</small>
+                {% endif %}
+            </div>
+        {% endfor %}
     </section>
 {% endif %}

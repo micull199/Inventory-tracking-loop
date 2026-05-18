@@ -39,7 +39,11 @@ from app.auth import require_role
 from app.csv_export import csv_branch
 from app.db import get_session
 from app.models import (
+    Item,
+    ItemStone,
     Location,
+    Metal,
+    MetalSpotPrice,
     Role,
     StockTake,
     StockTakeLine,
@@ -305,5 +309,293 @@ def variance_trend(
             "days": days,
             "rows": rows,
             "totals": totals,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stone-cost-per-ring report (spec §10.3, Strategy A "loaded cost")
+# ---------------------------------------------------------------------------
+
+_STONE_COST_CSV_HEADERS: list[str] = [
+    "item_id",
+    "sku",
+    "name",
+    "mount_cost",
+    "stone_count",
+    "loaded_stones_cost",
+    "owned_stones_cost",
+    "loaded_cost",
+    "owned_cost",
+]
+
+
+def _load_stone_cost_rows(db: Session) -> list[dict[str, Any]]:
+    """Build the per-item loaded / owned cost rows.
+
+    Only items with at least one active ``item_stones`` linkage make
+    the list — the report is "stones-on-rings", not "every item".
+    The ``ix_item_stones_active_item_id`` covering partial index keeps
+    the join cheap as the linkage history grows.
+    """
+    from app.stones import compute_item_stone_costs
+
+    items = list(
+        db.execute(
+            select(Item)
+            .join(ItemStone, ItemStone.item_id == Item.id)
+            .where(ItemStone.unset_at.is_(None))
+            .where(Item.archived_at.is_(None))
+            .distinct()
+            .order_by(Item.sku)
+        ).scalars().all()
+    )
+    return [
+        {"item": item, **compute_item_stone_costs(db, item)}
+        for item in items
+    ]
+
+
+def _csv_rows_for_stone_cost(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    return [
+        [
+            r["item"].id,
+            r["item"].sku,
+            r["item"].name,
+            r["mount_cost"],
+            r["stone_count"],
+            r["loaded_stones_cost"],
+            r["owned_stones_cost"],
+            r["loaded_cost"],
+            r["owned_cost"],
+        ]
+        for r in rows
+    ]
+
+
+@router.get("/stone-cost-per-ring")
+def stone_cost_per_ring(
+    request: Request,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Per-item loaded + owned cost summary.
+
+    Loaded cost = mount + every active stone's acquisition cost.
+    Owned cost = mount + owned active stones only (excludes memo +
+    consignment, which belong to the supplier until paid for). The
+    report proves the spec §10.3 Strategy A model — costs stay
+    separated and the engine doesn't need to know about stones.
+
+    HTML by default; ``?format=csv`` for a spreadsheet download.
+    """
+    rows = _load_stone_cost_rows(db)
+    if (
+        resp := csv_branch(
+            request.query_params.get("format", ""),
+            filename="stone_cost_per_ring.csv",
+            headers=_STONE_COST_CSV_HEADERS,
+            rows=_csv_rows_for_stone_cost(rows),
+        )
+    ) is not None:
+        return resp
+
+    # Totals row for the HTML view's footer.
+    totals = {
+        "mount_cost": sum((r["mount_cost"] for r in rows), Decimal("0")),
+        "stone_count": sum(r["stone_count"] for r in rows),
+        "loaded_stones_cost": sum(
+            (r["loaded_stones_cost"] for r in rows), Decimal("0")
+        ),
+        "owned_stones_cost": sum(
+            (r["owned_stones_cost"] for r in rows), Decimal("0")
+        ),
+        "loaded_cost": sum((r["loaded_cost"] for r in rows), Decimal("0")),
+        "owned_cost": sum((r["owned_cost"] for r in rows), Decimal("0")),
+    }
+    return templates.TemplateResponse(
+        request,
+        "stone_cost_per_ring.html",
+        {
+            "current_user": user,
+            "rows": rows,
+            "totals": totals,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Metal pool reconciliation (S2 — pure-metal accounting)
+# ---------------------------------------------------------------------------
+#
+# Aggregates ``items.pure_metal_weight_g`` per ``metal_master`` row +
+# the latest spot price so the manager can value the precious-metal
+# pool at the most recent fixing. Stale prices (more than
+# ``_METAL_PRICE_STALE_DAYS`` old) are flagged so operators know to
+# enter a fresh fixing.
+#
+# Known limitation (documented in the report header): ``pure_metal_weight_g``
+# is derived from the *primary* metal only (``items.metal_id``). Two-tone
+# pieces with ``secondary_metal_id`` set contribute only to their primary;
+# the spec §2.3 footprint doesn't carry separate primary / secondary weights.
+# Splitting that out is a follow-up schema change, not in scope here.
+
+_METAL_PRICE_STALE_DAYS = 7
+
+_METAL_POOL_CSV_HEADERS: list[str] = [
+    "metal_code",
+    "name",
+    "alloy_family",
+    "purity_pct",
+    "item_count",
+    "total_pure_weight_g",
+    "latest_price_per_gram",
+    "latest_price_date",
+    "days_since_price",
+    "estimated_value",
+]
+
+
+def _load_metal_pool_rows(db: Session) -> list[dict[str, Any]]:
+    """Build the per-metal pool reconciliation rows.
+
+    Each metal in ``metal_master`` (active + archived) gets a row when
+    at least one item references it as ``metal_id``. The latest spot
+    price comes from ``metal_spot_prices`` ordered by ``as_of_date``
+    desc. ``estimated_value`` is ``total_pure_weight_g *
+    latest_price_per_gram`` — ``None`` when there's no price recorded.
+    """
+    from sqlalchemy import func as sa_func
+
+    today = datetime.now(UTC).date()
+    # Per-metal weight sums. The single-table aggregate keeps the query
+    # cheap; the WHERE filters archived items so the pool value reflects
+    # what's actually held.
+    weight_rows = db.execute(
+        select(
+            Item.metal_id,
+            sa_func.count(Item.id).label("item_count"),
+            sa_func.coalesce(
+                sa_func.sum(Item.pure_metal_weight_g), 0
+            ).label("total_weight"),
+        )
+        .where(Item.metal_id.is_not(None))
+        .where(Item.archived_at.is_(None))
+        .group_by(Item.metal_id)
+    ).all()
+    by_metal_id: dict[int, dict[str, Any]] = {
+        row.metal_id: {
+            "item_count": int(row.item_count),
+            "total_pure_weight_g": Decimal(str(row.total_weight or 0)),
+        }
+        for row in weight_rows
+    }
+    if not by_metal_id:
+        return []
+
+    metals = db.execute(
+        select(Metal).where(Metal.id.in_(by_metal_id.keys()))
+        .order_by(Metal.alloy_family, Metal.metal_code)
+    ).scalars().all()
+
+    rows: list[dict[str, Any]] = []
+    for metal in metals:
+        latest_price = db.execute(
+            select(MetalSpotPrice)
+            .where(MetalSpotPrice.metal_id == metal.id)
+            .order_by(MetalSpotPrice.as_of_date.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        weight = by_metal_id[metal.id]["total_pure_weight_g"]
+        if latest_price is not None:
+            estimated_value = weight * latest_price.price_per_gram
+            days_since = (today - latest_price.as_of_date).days
+            is_stale = days_since > _METAL_PRICE_STALE_DAYS
+        else:
+            estimated_value = None
+            days_since = None
+            is_stale = True  # no price at all → flag as stale
+        rows.append(
+            {
+                "metal": metal,
+                "item_count": by_metal_id[metal.id]["item_count"],
+                "total_pure_weight_g": weight,
+                "latest_price": latest_price,
+                "days_since_price": days_since,
+                "is_stale": is_stale,
+                "estimated_value": estimated_value,
+            }
+        )
+    return rows
+
+
+def _csv_rows_for_metal_pool(rows: list[dict[str, Any]]) -> list[list[Any]]:
+    return [
+        [
+            r["metal"].metal_code,
+            r["metal"].name,
+            r["metal"].alloy_family.value,
+            r["metal"].purity_pct,
+            r["item_count"],
+            r["total_pure_weight_g"],
+            r["latest_price"].price_per_gram if r["latest_price"] else "",
+            r["latest_price"].as_of_date if r["latest_price"] else "",
+            r["days_since_price"] if r["days_since_price"] is not None else "",
+            r["estimated_value"] if r["estimated_value"] is not None else "",
+        ]
+        for r in rows
+    ]
+
+
+@router.get("/metal-pool")
+def metal_pool(
+    request: Request,
+    user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Per-metal pool reconciliation against the latest spot price.
+
+    Aggregates ``items.pure_metal_weight_g`` for every metal with at
+    least one active item, surfaces the most recent spot fixing, and
+    estimates the pool value. Stale prices (older than 7 days, or no
+    price at all) render with a warning chip so operators know to
+    enter a fresh fixing.
+
+    HTML by default; ``?format=csv`` for a spreadsheet download.
+    """
+    rows = _load_metal_pool_rows(db)
+    if (
+        resp := csv_branch(
+            request.query_params.get("format", ""),
+            filename="metal_pool.csv",
+            headers=_METAL_POOL_CSV_HEADERS,
+            rows=_csv_rows_for_metal_pool(rows),
+        )
+    ) is not None:
+        return resp
+    totals = {
+        "metal_count": len(rows),
+        "item_count": sum(r["item_count"] for r in rows),
+        "total_pure_weight_g": sum(
+            (r["total_pure_weight_g"] for r in rows), Decimal("0")
+        ),
+        "estimated_value": sum(
+            (
+                r["estimated_value"]
+                for r in rows
+                if r["estimated_value"] is not None
+            ),
+            Decimal("0"),
+        ),
+        "stale_count": sum(1 for r in rows if r["is_stale"]),
+    }
+    return templates.TemplateResponse(
+        request,
+        "metal_pool.html",
+        {
+            "current_user": user,
+            "rows": rows,
+            "totals": totals,
+            "stale_days_threshold": _METAL_PRICE_STALE_DAYS,
         },
     )

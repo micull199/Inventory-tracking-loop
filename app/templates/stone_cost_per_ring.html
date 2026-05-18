@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Stone cost per ring — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Stone cost per ring",
+        subtitle="Spec §10.3 Strategy A — stone cost stays separate from the FIFO cost engine. Loaded cost includes memo / consignment stones; owned cost excludes them (those belong to the supplier until paid for).",
+        heading_testid="stone-cost-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           href="/admin/reports/stone-cost-per-ring?format=csv"
+           data-testid="stone-cost-csv-link">Download CSV</a>
+    {% endcall %}
+
+    {% if rows %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stone-cost-table">
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Name</th>
+                        <th class="uc-right">Mount cost</th>
+                        <th class="uc-right">Stones</th>
+                        <th class="uc-right">Stones loaded</th>
+                        <th class="uc-right">Stones owned</th>
+                        <th class="uc-right">Loaded cost</th>
+                        <th class="uc-right">Owned cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        <tr data-testid="stone-cost-row" data-item-id="{{ r.item.id }}">
+                            <td><a href="/admin/items/{{ r.item.id }}/detail"><code>{{ r.item.sku }}</code></a></td>
+                            <td>{{ r.item.name }}</td>
+                            <td class="uc-right uc-num">{{ r.mount_cost }}</td>
+                            <td class="uc-right uc-num">{{ r.stone_count }}</td>
+                            <td class="uc-right uc-num" data-testid="loaded-stones-cost">{{ r.loaded_stones_cost }}</td>
+                            <td class="uc-right uc-num" data-testid="owned-stones-cost">{{ r.owned_stones_cost }}</td>
+                            <td class="uc-right uc-num uc-strong" data-testid="loaded-cost">{{ r.loaded_cost }}</td>
+                            <td class="uc-right uc-num uc-strong" data-testid="owned-cost">{{ r.owned_cost }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr data-testid="stone-cost-totals">
+                        <td colspan="2"><strong>Totals</strong></td>
+                        <td class="uc-right uc-num">{{ totals.mount_cost }}</td>
+                        <td class="uc-right uc-num">{{ totals.stone_count }}</td>
+                        <td class="uc-right uc-num">{{ totals.loaded_stones_cost }}</td>
+                        <td class="uc-right uc-num">{{ totals.owned_stones_cost }}</td>
+                        <td class="uc-right uc-num uc-strong">{{ totals.loaded_cost }}</td>
+                        <td class="uc-right uc-num uc-strong">{{ totals.owned_cost }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="stone-cost-empty">
+            {{ c.empty_state(
+                "No items currently host tracked stones",
+                "Once a stone is set into an item via the stones admin or the item-context picker, it shows up here."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

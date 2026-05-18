@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Set {{ stone.stone_code }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header("Set stone " ~ stone.stone_code ~ " into an item") %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stones">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <div class="uc-helper">
+            <strong>{{ stone.stone_code }}</strong> — {{ stone.stone_type.value }}, {{ stone.carat_weight }}ct
+            {% if stone.colour_grade %} · colour {{ stone.colour_grade }}{% endif %}
+            {% if stone.clarity_grade %} · clarity {{ stone.clarity_grade }}{% endif %}
+        </div>
+
+        <form method="post" action="/admin/stones/{{ stone.id }}/set" data-testid="stone-set-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="item_id">Item <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-select" id="item_id" name="item_id" required data-testid="stone-set-item-input">
+                        <option value="">— pick —</option>
+                        {% for it in item_options %}
+                            <option value="{{ it.id }}">{{ it.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="position">Position <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="position" name="position" required data-testid="stone-set-position-input">
+                            {% for p in positions %}
+                                <option value="{{ p }}" {% if p == "centre" %}selected{% endif %}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="position_index">Position index</label>
+                        <input class="uc-input" type="number" step="1" min="0" id="position_index" name="position_index"
+                               value="0" data-testid="stone-set-position-index-input">
+                        <small class="uc-helper">For multiple accents in the same role (0, 1, 2…).</small>
+                    </div>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="note">Note</label>
+                    <input class="uc-input" type="text" id="note" name="note"
+                           data-testid="stone-set-note-input" maxlength="2000">
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="stone-set-submit">Set stone</button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/stones">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

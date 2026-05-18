@@ -2,7 +2,6 @@
 name = "uc-inventory"
 version = "0.1.0"
 description = "Inventory tracking for UC's workshop and office."
-readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 

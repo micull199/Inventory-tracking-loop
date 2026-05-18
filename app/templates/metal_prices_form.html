@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/metal-prices">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="metal-price-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="metal_id">Metal <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="metal_id" name="metal_id" required data-testid="metal-price-metal-input">
+                            <option value="">— pick —</option>
+                            {% for m in metal_options %}
+                                <option value="{{ m.id }}"
+                                        {% if form.metal_id == (m.id | string) %}selected{% endif %}>
+                                    {{ m.label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="as_of_date">Date <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="date" id="as_of_date" name="as_of_date" required
+                               value="{{ form.as_of_date }}"
+                               data-testid="metal-price-date-input">
+                        <small class="uc-helper">One price per metal per date.</small>
+                    </div>
+                </div>
+
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="price_per_gram">Price per gram <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="price_per_gram" name="price_per_gram" required
+                               value="{{ form.price_per_gram }}"
+                               data-testid="metal-price-amount-input"
+                               placeholder="e.g. 125.500000">
+                        <small class="uc-helper">In AUD. Up to 6 decimal places.</small>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="source">Source <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" id="source" name="source" required
+                               value="{{ form.source }}"
+                               data-testid="metal-price-source-input"
+                               maxlength="64"
+                               placeholder='e.g. "manual", "lbma_pm_fix", "kitco"'>
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-textarea" id="notes" name="notes"
+                              data-testid="metal-price-notes-input"
+                              maxlength="500"
+                              rows="3">{{ form.notes }}</textarea>
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="metal-price-submit">
+                    {% if price %}Save changes{% else %}Record price{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/metal-prices">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

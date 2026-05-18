@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Metal pool — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Metal pool reconciliation",
+        subtitle="Total pure-metal grams across active items × the latest spot price per gram. Stale-price rows are flagged so operators know to enter a fresh fixing.",
+        heading_testid="metal-pool-heading"
+    ) %}
+        <a class="uc-btn uc-btn--secondary uc-btn--sm"
+           href="/admin/metal-prices"
+           data-testid="metal-pool-prices-link">Enter prices &rarr;</a>
+        <a class="uc-btn uc-btn--ghost uc-btn--sm"
+           href="/admin/reports/metal-pool?format=csv"
+           data-testid="metal-pool-csv-link">Download CSV</a>
+    {% endcall %}
+
+    <div class="uc-helper" data-testid="metal-pool-note">
+        <strong>Known limitation:</strong>
+        <code>items.pure_metal_weight_g</code> is derived from the primary
+        metal only (<code>items.metal_id × weight_grams</code>). Two-tone
+        pieces whose <code>secondary_metal_id</code> is set contribute only
+        to their primary metal's pool — splitting accent weights is a
+        follow-up schema change (spec §2.3 doesn't carry separate primary /
+        secondary weights yet). Stones don't carry metal and never
+        contribute here.
+    </div>
+
+    {% if rows %}
+        <div class="uc-grid-2 uc-mt-6">
+            <div class="uc-stat">
+                <span class="uc-stat-label">Metals tracked</span>
+                <span class="uc-stat-value uc-num" data-testid="metal-pool-totals-metal-count">{{ totals.metal_count }}</span>
+            </div>
+            <div class="uc-stat">
+                <span class="uc-stat-label">Items contributing</span>
+                <span class="uc-stat-value uc-num" data-testid="metal-pool-totals-item-count">{{ totals.item_count }}</span>
+            </div>
+            <div class="uc-stat">
+                <span class="uc-stat-label">Total pure metal (g)</span>
+                <span class="uc-stat-value uc-num" data-testid="metal-pool-totals-weight">{{ totals.total_pure_weight_g }}</span>
+            </div>
+            <div class="uc-stat">
+                <span class="uc-stat-label">Estimated pool value</span>
+                <span class="uc-stat-value uc-num" data-testid="metal-pool-totals-value">{{ totals.estimated_value }}</span>
+                {% if totals.stale_count %}
+                    <small class="uc-helper">
+                        {{ totals.stale_count }} row(s) using stale / missing prices
+                        (older than {{ stale_days_threshold }} days).
+                    </small>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="uc-table-wrap uc-mt-6">
+            <table class="uc-table" data-testid="metal-pool-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Family</th>
+                        <th class="uc-right">Purity %</th>
+                        <th class="uc-right">Items</th>
+                        <th class="uc-right">Pure weight (g)</th>
+                        <th class="uc-right">Price / g</th>
+                        <th>Price date</th>
+                        <th class="uc-right">Days old</th>
+                        <th class="uc-right">Estimated value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        <tr data-testid="metal-pool-row" data-metal-id="{{ r.metal.id }}">
+                            <td><code>{{ r.metal.metal_code }}</code></td>
+                            <td>{{ r.metal.name }}</td>
+                            <td>{{ r.metal.alloy_family.value }}</td>
+                            <td class="uc-right uc-num">{{ r.metal.purity_pct }}</td>
+                            <td class="uc-right uc-num">{{ r.item_count }}</td>
+                            <td class="uc-right uc-num uc-strong">{{ r.total_pure_weight_g }}</td>
+                            <td class="uc-right uc-num">
+                                {% if r.latest_price %}{{ r.latest_price.price_per_gram }}{% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if r.latest_price %}{{ r.latest_price.as_of_date }}{% else %}—{% endif %}
+                            </td>
+                            <td class="uc-right uc-num">
+                                {% if r.days_since_price is not none %}
+                                    {{ r.days_since_price }}
+                                    {% if r.is_stale %}{{ c.pill("stale") }}{% endif %}
+                                {% else %}
+                                    {{ c.pill("no price") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-right uc-num uc-strong" data-testid="metal-pool-estimated-value">
+                                {% if r.estimated_value is not none %}{{ r.estimated_value }}{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="metal-pool-empty">
+            {{ c.empty_state(
+                "No items have a primary metal assigned yet",
+                "Once items are saved with metal_id and weight_grams populated, the pool aggregates them here."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

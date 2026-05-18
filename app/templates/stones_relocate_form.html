@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Relocate {{ stone.stone_code }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header("Relocate stone " ~ stone.stone_code) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stones">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <div class="uc-helper">
+            <strong>{{ stone.stone_code }}</strong> · {{ stone.stone_type.value }} · {{ stone.carat_weight }}ct
+        </div>
+
+        <form method="post" action="/admin/stones/{{ stone.id }}/relocate" data-testid="stone-relocate-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="current_location_id">New location</label>
+                    <select class="uc-select" id="current_location_id" name="current_location_id"
+                            data-testid="stone-relocate-location-input">
+                        <option value="">— none —</option>
+                        {% for l in location_options %}
+                            <option value="{{ l.id }}"
+                                    {% if current_location_id and current_location_id == l.id %}selected{% endif %}>
+                                {{ l.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="note">Note</label>
+                    <input class="uc-input" type="text" id="note" name="note"
+                           data-testid="stone-relocate-note-input" maxlength="2000">
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="stone-relocate-submit">Relocate</button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/stones">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

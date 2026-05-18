@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Stone shapes — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Stone shapes",
+        subtitle="Administered lookup that replaces freetext shape on tracked stones. Seeded with the canonical 13 shapes; add shop-specific shapes here.",
+        heading_testid="stone-shapes-heading"
+    ) %}
+        {{ c.button("+ New shape", href="/admin/stone-shapes/new", testid="new-stone-shape") }}
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter stone shapes" data-testid="stone-shapes-tabs">
+        <a href="/admin/stone-shapes?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/stone-shapes?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if stone_shapes %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stone-shapes-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th class="uc-right">Sort order</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in stone_shapes %}
+                        <tr data-testid="stone-shape-row" data-stone-shape-id="{{ s.id }}">
+                            <td data-testid="stone-shape-name">
+                                {{ s.name }}
+                                {% if s.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-right">{{ s.sort_order }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/stone-shapes/{{ s.id }}/edit" data-testid="edit-stone-shape">Edit</a>
+                                {% if s.archived_at is none %}
+                                    <form method="post" action="/admin/stone-shapes/{{ s.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-stone-shape">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/stone-shapes/{{ s.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-stone-shape">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="stone-shapes-empty">
+            {{ c.empty_state(
+                "No archived stone shapes" if show == "archived" else "No stone shapes yet",
+                "" if show == "archived" else "Create your first shape above to get started."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

@@ -72,6 +72,117 @@
         </div>
     {% endcall %}
 
+    {# Stones + Metals card — renders only when there's something to show
+       (a linked stone, melee, a metal pick, or a derived weight). Keeps
+       the detail page clean for plain-stock items that have none. #}
+    {% set _has_stone_info = linked_stones or item.melee_count or item.melee_total_ct or item.melee_stone_type or item.total_carat_weight %}
+    {% set _has_metal_info = metal or secondary_metal or item.pure_metal_weight_g %}
+    {% if _has_stone_info or _has_metal_info %}
+        <div class="uc-mt-6"></div>
+        {% call c.card("Stones & metals") %}
+            {% if _has_stone_info %}
+                <h3 class="uc-h3">Stones</h3>
+                {% if linked_stones %}
+                    <div class="uc-table-wrap">
+                        <table class="uc-table" data-testid="item-detail-linked-stones-table">
+                            <thead>
+                                <tr>
+                                    <th>Code</th>
+                                    <th>Type</th>
+                                    <th>Position</th>
+                                    <th class="uc-right">Carat</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for s in linked_stones %}
+                                    <tr data-testid="item-detail-linked-stone-row">
+                                        <td><a href="/admin/stones/{{ s.stone_id }}/edit"><code>{{ s.stone_code }}</code></a></td>
+                                        <td>{{ s.stone_type }}</td>
+                                        <td>{{ s.position }}{% if s.position_index %} [{{ s.position_index }}]{% endif %}
+                                            {% if s.is_centre %}{{ c.pill("centre") }}{% endif %}
+                                        </td>
+                                        <td class="uc-right">{{ s.carat_weight }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
+                <div class="uc-grid-2">
+                    {% if item.melee_count %}
+                        <div>
+                            <span class="uc-stat-label">Melee count</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-melee-count">{{ item.melee_count }}</span>
+                        </div>
+                    {% endif %}
+                    {% if item.melee_total_ct %}
+                        <div>
+                            <span class="uc-stat-label">Melee total (ct)</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-melee-total-ct">{{ item.melee_total_ct }}</span>
+                        </div>
+                    {% endif %}
+                    {% if item.melee_stone_type %}
+                        <div>
+                            <span class="uc-stat-label">Melee stone type</span>
+                            <span class="uc-strong">{{ item.melee_stone_type }}</span>
+                        </div>
+                    {% endif %}
+                    {% if item.total_carat_weight %}
+                        <div>
+                            <span class="uc-stat-label">Total carat weight</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-total-ct">{{ item.total_carat_weight }} ct</span>
+                        </div>
+                    {% endif %}
+                </div>
+
+                {% if stone_costs %}
+                    {# Spec §10.3 Strategy A — loaded + owned cost split. #}
+                    <div class="uc-mt-6"></div>
+                    <h4 class="uc-h4">Loaded vs owned cost</h4>
+                    <div class="uc-grid-2">
+                        <div>
+                            <span class="uc-stat-label">Mount cost (FIFO)</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-mount-cost">{{ stone_costs.mount_cost }}</span>
+                        </div>
+                        <div>
+                            <span class="uc-stat-label">Loaded cost (incl. memo)</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-loaded-cost">{{ stone_costs.loaded_cost }}</span>
+                        </div>
+                        <div>
+                            <span class="uc-stat-label">Owned cost (UC books only)</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-owned-cost">{{ stone_costs.owned_cost }}</span>
+                        </div>
+                    </div>
+                {% endif %}
+            {% endif %}
+
+            {% if _has_metal_info %}
+                {% if _has_stone_info %}<div class="uc-mt-6"></div>{% endif %}
+                <h3 class="uc-h3">Metals</h3>
+                <div class="uc-grid-2">
+                    {% if metal %}
+                        <div>
+                            <span class="uc-stat-label">Metal</span>
+                            <span class="uc-strong" data-testid="item-detail-metal">{{ metal.metal_code }} — {{ metal.name }}</span>
+                        </div>
+                    {% endif %}
+                    {% if secondary_metal %}
+                        <div>
+                            <span class="uc-stat-label">Secondary metal</span>
+                            <span class="uc-strong" data-testid="item-detail-secondary-metal">{{ secondary_metal.metal_code }} — {{ secondary_metal.name }}</span>
+                        </div>
+                    {% endif %}
+                    {% if item.pure_metal_weight_g %}
+                        <div>
+                            <span class="uc-stat-label">Pure metal weight</span>
+                            <span class="uc-strong uc-num" data-testid="item-detail-pure-metal-weight">{{ item.pure_metal_weight_g }} g</span>
+                        </div>
+                    {% endif %}
+                </div>
+            {% endif %}
+        {% endcall %}
+    {% endif %}
+
     <div class="uc-mt-6"></div>
 
     {% call c.card("Open cost layers", flush=true) %}

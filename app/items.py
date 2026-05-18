@@ -69,7 +69,7 @@ from app.csv_import import (
     row_to_dict,
 )
 from app.db import get_session
-from app.field_catalog import CATALOG_BY_KEY, CatalogEntry
+from app.field_catalog import CATALOG_BY_KEY, FIELD_CATALOG, CatalogEntry, Storage
 from app.models import (
     Archetype,
     CostLayer,
@@ -85,6 +85,11 @@ from app.models import (
     TaxonomyStage,
     TrackingMode,
     User,
+)
+from app.side_tables import (
+    apply_side_table_payloads,
+    extract_side_table_payloads,
+    side_table_form_values_for_item,
 )
 from app.sku import (
     allocate_sequence,
@@ -127,6 +132,17 @@ _FIELDS: tuple[str, ...] = (
     "ring_size",
     "weight_grams",
     "stone_shape",
+    # S1 melee aggregate carriers + S2 metal FKs. ``centre_stone_id`` and
+    # derived columns (``total_carat_weight``, ``pure_metal_weight_g``)
+    # are NOT in this audit vocabulary — they are maintained by the
+    # set/unset routes and the derivation helpers, not by direct form
+    # entry, so they show up in their own audit actions (``stone.set``,
+    # ``stone.unset``).
+    "melee_count",
+    "melee_total_ct",
+    "melee_stone_type",
+    "metal_id",
+    "secondary_metal_id",
 )
 
 
@@ -359,6 +375,96 @@ def _resolve_optional_location(
     return location.id
 
 
+def _compute_pure_metal_weight(
+    db: Session,
+    metal_id: int | None,
+    weight_grams: Decimal | None,
+) -> Decimal | None:
+    """Derive ``items.pure_metal_weight_g`` from the metal's purity.
+
+    Spec §2.3 documents this as a cached product:
+    ``weight_grams * metal.purity_pct / 100``. Returns ``None`` whenever
+    either input is missing, so an item with no metal-id or no recorded
+    weight reads as "unknown pure weight" rather than zero.
+    """
+    from app.models import Metal
+
+    if metal_id is None or weight_grams is None:
+        return None
+    metal = db.get(Metal, metal_id)
+    if metal is None:  # pragma: no cover — caller should have validated
+        return None
+    return (weight_grams * metal.purity_pct / Decimal("100")).quantize(
+        Decimal("0.0001")
+    )
+
+
+def _resolve_optional_metal(
+    db: Session,
+    raw: str,
+    *,
+    current_id: int | None = None,
+    field_label: str = "metal",
+) -> int | None:
+    """Parse a metal id; preserve an existing archived metal on edit.
+
+    Same contract as ``_resolve_optional_supplier``: blank → None, missing
+    → 400, archived rejected unless ``current_id`` matches (the user is
+    leaving the existing reference alone). ``field_label`` lets the
+    secondary-metal validator emit "secondary metal is archived" rather
+    than the generic "metal is archived".
+    """
+    from app.models import Metal
+
+    text = (raw or "").strip()
+    if text == "":
+        return None
+    try:
+        metal_id = int(text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_label} is invalid",
+        ) from exc
+    metal = db.get(Metal, metal_id)
+    if metal is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_label} not found",
+        )
+    if metal.archived_at is not None and metal.id != current_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_label} is archived",
+        )
+    return metal.id
+
+
+def _parse_optional_int_field(raw: str, *, field_name: str, allow_zero: bool = True) -> int:
+    """Parse an integer field; blank → 0 (since the column defaults to 0)."""
+    text = (raw or "").strip()
+    if text == "":
+        return 0
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be a whole number",
+        ) from exc
+    if value < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} cannot be negative",
+        )
+    if not allow_zero and value == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be greater than zero",
+        )
+    return value
+
+
 def _normalise(
     db: Session,
     *,
@@ -377,9 +483,16 @@ def _normalise(
     ring_size: str = "",
     weight_grams: str = "",
     stone_shape: str = "",
+    melee_count: str = "",
+    melee_total_ct: str = "",
+    melee_stone_type: str = "",
+    metal_id: str = "",
+    secondary_metal_id: str = "",
     current_node_id: int | None = None,
     current_supplier_id: int | None = None,
     current_location_id: int | None = None,
+    current_metal_id: int | None = None,
+    current_secondary_metal_id: int | None = None,
     visibility: dict[str, str] | None = None,
     leaf_defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -467,6 +580,45 @@ def _normalise(
         clean_weight_grams = None
     clean_stone_shape = (_input("stone_shape", stone_shape) or "").strip() or None
 
+    # S1 melee aggregate carriers (item-column, set directly via the form).
+    # ``melee_count`` and ``melee_total_ct`` are NOT NULL with defaults of
+    # 0, so blank inputs collapse to 0 here. ``melee_stone_type`` is
+    # nullable freetext.
+    clean_melee_count = _parse_optional_int_field(
+        _input("melee_count", melee_count), field_name="melee count"
+    )
+    melee_total_ct_raw = (_input("melee_total_ct", melee_total_ct) or "").strip()
+    if melee_total_ct_raw:
+        try:
+            clean_melee_total_ct = Decimal(melee_total_ct_raw)
+        except InvalidOperation as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="melee total (ct) must be a number",
+            ) from exc
+        if clean_melee_total_ct < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="melee total (ct) cannot be negative",
+            )
+    else:
+        clean_melee_total_ct = Decimal("0")
+    clean_melee_stone_type = (
+        _input("melee_stone_type", melee_stone_type) or ""
+    ).strip() or None
+
+    # S2 metal master FKs. Both honour the archived-FK preservation
+    # convention (an existing archived reference survives an edit that
+    # didn't touch the FK; a fresh archived pick is 400).
+    clean_metal_id = _resolve_optional_metal(
+        db, _input("metal_id", metal_id),
+        current_id=current_metal_id, field_label="metal",
+    )
+    clean_secondary_metal_id = _resolve_optional_metal(
+        db, _input("secondary_metal_id", secondary_metal_id),
+        current_id=current_secondary_metal_id, field_label="secondary metal",
+    )
+
     return {
         "sku": clean_sku,
         "name": clean_name,
@@ -485,6 +637,11 @@ def _normalise(
         "ring_size": clean_ring_size,
         "weight_grams": clean_weight_grams,
         "stone_shape": clean_stone_shape,
+        "melee_count": clean_melee_count,
+        "melee_total_ct": clean_melee_total_ct,
+        "melee_stone_type": clean_melee_stone_type,
+        "metal_id": clean_metal_id,
+        "secondary_metal_id": clean_secondary_metal_id,
     }
 
 
@@ -549,6 +706,11 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
             "ring_size": "",
             "weight_grams": "",
             "stone_shape": "",
+            "melee_count": "",
+            "melee_total_ct": "",
+            "melee_stone_type": "",
+            "metal_id": "",
+            "secondary_metal_id": "",
         }
     return {
         "sku": item.sku,
@@ -566,6 +728,15 @@ def _form_for_item(item: Item | None) -> dict[str, Any]:
         "ring_size": item.ring_size or "",
         "weight_grams": str(item.weight_grams) if item.weight_grams is not None else "",
         "stone_shape": item.stone_shape or "",
+        "melee_count": str(item.melee_count) if item.melee_count else "",
+        "melee_total_ct": (
+            str(item.melee_total_ct) if item.melee_total_ct else ""
+        ),
+        "melee_stone_type": item.melee_stone_type or "",
+        "metal_id": str(item.metal_id) if item.metal_id is not None else "",
+        "secondary_metal_id": (
+            str(item.secondary_metal_id) if item.secondary_metal_id is not None else ""
+        ),
     }
 
 
@@ -861,6 +1032,193 @@ def _location_options(db: Session, *, current_id: int | None = None) -> list[dic
     return options
 
 
+def _linked_stones_for(db: Session, item: Item | None) -> list[dict[str, Any]]:
+    """Return the active ``item_stones`` linkages for an item, view-shaped.
+
+    The items form's Stones section uses this to render a table of every
+    currently-set stone with its position + carat + unset button. On
+    create (item is ``None``) returns an empty list — no linkages exist
+    until the item is saved and a stone is set via the stones admin.
+    """
+    from app.models import ItemStone, Stone
+
+    if item is None:
+        return []
+    rows = list(
+        db.execute(
+            select(ItemStone, Stone)
+            .join(Stone, Stone.id == ItemStone.stone_id)
+            .where(ItemStone.item_id == item.id)
+            .where(ItemStone.unset_at.is_(None))
+            .order_by(ItemStone.position, ItemStone.position_index)
+        ).all()
+    )
+    return [
+        {
+            "link_id": link.id,
+            "stone_id": stone.id,
+            "stone_code": stone.stone_code,
+            "stone_type": stone.stone_type.value,
+            "carat_weight": stone.carat_weight,
+            "position": link.position.value,
+            "position_index": link.position_index,
+            "is_centre": link.position.value == "centre",
+        }
+        for link, stone in rows
+    ]
+
+
+def _metal_options(
+    db: Session, *, current_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Active metals + an archived current_id when it's the existing pick.
+
+    Same archived-FK preservation as ``_supplier_options`` /
+    ``_location_options`` — an edit that leaves the metal alone shouldn't
+    silently drop an archived metal reference. Labels include
+    ``(archived)`` for the carry-over so the dropdown is unambiguous.
+    """
+    from app.models import Metal
+
+    rows: list[Metal] = list(
+        db.execute(
+            select(Metal)
+            .where(Metal.archived_at.is_(None))
+            .order_by(Metal.alloy_family, Metal.metal_code)
+        ).scalars().all()
+    )
+    if current_id is not None and not any(m.id == current_id for m in rows):
+        current = db.get(Metal, current_id)
+        if current is not None:
+            rows.append(current)
+    return [
+        {
+            "id": m.id,
+            "label": (
+                f"{m.metal_code} — {m.name}"
+                + (" (archived)" if m.archived_at is not None else "")
+            ),
+        }
+        for m in rows
+    ]
+
+
+# Catalog keys whose stored value is a row id in another table. The
+# items-list renderer swaps the raw integer for a human label
+# resolved through ``_build_fk_label_cache``. Centralising the map
+# keeps cell rendering uniform without spreading FK knowledge across
+# the template.
+_FK_LABEL_TABLES: dict[str, type] = {}
+
+
+def _populate_fk_label_tables() -> dict[str, type]:
+    """Lazy-initialise ``_FK_LABEL_TABLES`` after model imports finish.
+
+    Each value is the ORM class to PK-lookup against. The labels themselves
+    are built in ``_label_for_fk_row`` so adding a new FK catalog key is one
+    entry here + a label-format branch there.
+    """
+    if _FK_LABEL_TABLES:
+        return _FK_LABEL_TABLES
+    from app.models import Location, Metal, Stone, Supplier, Unit
+
+    _FK_LABEL_TABLES.update(
+        {
+            "supplier_id": Supplier,
+            "location_id": Location,
+            "metal_id": Metal,
+            "secondary_metal_id": Metal,
+            "centre_stone_id": Stone,
+            "unit_id": Unit,
+        }
+    )
+    return _FK_LABEL_TABLES
+
+
+def _label_for_fk_row(row: Any) -> str:
+    """Render a human-readable label for a resolved FK row.
+
+    Each model has its own labelling convention: suppliers use
+    ``name``, metals use ``code — name``, stones use ``stone_code``,
+    units use ``code``. Falls back to a model.id signature if the row
+    type isn't recognised — defensive, not expected to fire.
+    """
+    from app.models import Location, Metal, Stone, Supplier, Unit
+
+    if isinstance(row, Metal):
+        return f"{row.metal_code} — {row.name}"
+    if isinstance(row, Stone):
+        return row.stone_code
+    if isinstance(row, Unit):
+        return row.code
+    if isinstance(row, Supplier | Location):
+        return row.name
+    return f"#{row.id}"  # pragma: no cover — defensive
+
+
+def _build_fk_label_cache(
+    db: Session, entries: list[CatalogEntry]
+) -> dict[tuple[str, int], str]:
+    """Pre-resolve FK labels for every (key, id) needed by the items list.
+
+    For each FK catalog entry (per ``_FK_LABEL_TABLES``), collect the
+    distinct ids referenced across the items page and PK-lookup them in
+    one SELECT per table. Cache key is ``(catalog_key, row_id)`` because
+    ``metal_id`` and ``secondary_metal_id`` share the same Metal table
+    but should map to the same value when ids match (only one cache
+    miss per Metal regardless of which catalog key references it).
+    """
+    tables = _populate_fk_label_tables()
+    cache: dict[tuple[str, int], str] = {}
+    # Group entries by their target table so we issue one ``IN`` query
+    # per table rather than per catalog key.
+    targets: dict[type, list[str]] = {}
+    for entry in entries:
+        if entry.column not in tables:
+            continue
+        model = tables[entry.column]
+        targets.setdefault(model, []).append(entry.column)
+
+    if not targets:
+        return cache
+
+    # We don't know which items the renderer will iterate at this point
+    # — so the helper resolves every row in each table. Adequate for
+    # the current scale (suppliers / metals / units have low cardinality;
+    # stones grows but the active-stones-as-FK count is bounded by the
+    # in-progress ring count). When stones explode in count, swap to a
+    # per-page id collection.
+    for model, keys in targets.items():
+        rows: list[Any] = list(db.execute(select(model)).scalars().all())
+        for row in rows:
+            label = _label_for_fk_row(row)
+            for key in keys:
+                cache[(key, row.id)] = label
+    return cache
+
+
+def _fk_label_for(
+    entry: CatalogEntry,
+    value: Any,
+    cache: dict[tuple[str, int], str],
+) -> str | None:
+    """Return the cached FK label, or ``None`` to fall back to the formatter.
+
+    Returns ``None`` for non-FK catalog entries, null values, and
+    cache misses (e.g. a stale FK that no longer resolves) — the
+    caller falls through to ``format_for_display`` so the raw value
+    still appears somewhere rather than dropping silently.
+    """
+    if entry.column is None or entry.column not in _populate_fk_label_tables():
+        return None
+    if value is None or value == "":
+        return ""
+    try:
+        return cache.get((entry.column, int(value)))
+    except (TypeError, ValueError):  # pragma: no cover — defensive
+        return None
+
+
 def _can_edit_thresholds(user: User) -> bool:
     """MISSION §3: Office cannot change reorder thresholds. Manager + Admin can.
 
@@ -1022,16 +1380,27 @@ def _apply_field_def_filters(
 ) -> tuple[Any, dict[str, str]]:
     """Filter ``stmt`` by per-catalog-key search criteria pulled from ``raw``.
 
-    Every catalog entry maps to an ``Item`` column (post-0024), so each
-    filter is a WHERE on the column directly. Query-string keys carry the
-    bare catalog ``key`` (e.g. ``ring_size=j 1/2``). Type dispatch is
-    driven by the catalog entry, not by ``TaxonomyFieldDef`` metadata.
+    Column-backed (``ITEM_COLUMN``) catalog entries map to a real ``Item``
+    column, so each filter is a WHERE on the column directly.
+    Side-table-backed (``Storage.SIDE_TABLE``) entries trigger a LEFT JOIN
+    on the side table (once per table even with multiple filters) and
+    the WHERE goes against the side column. Items lacking a side row
+    will not match any side-table filter — that matches the operator's
+    expectation that "rows with field X = Y" implies the row actually
+    *has* a value for X.
+
+    Query-string keys carry the bare catalog ``key`` (e.g. ``ring_size=j
+    1/2``). Type dispatch is driven by the catalog entry, not by
+    ``TaxonomyFieldDef`` metadata.
 
     Invalid / unparseable values are silently ignored so a hand-typed URL
     never 500s. Returns the patched ``stmt`` plus the dict of applied
     ``{<key>: <raw>}`` echoed back to the template for input echoes.
     """
+    from app.field_storage import _side_model_for
+
     applied: dict[str, str] = {}
+    joined_side_tables: set[str] = set()
     for fd in field_defs:
         key = fd.key
         value = (raw.get(key) or "").strip()
@@ -1040,9 +1409,25 @@ def _apply_field_def_filters(
         entry = CATALOG_BY_KEY.get(key)
         if entry is None:
             continue
-        col = getattr(Item, entry.column, None)
-        if col is None:
-            continue
+        if entry.storage is Storage.SIDE_TABLE:
+            assert entry.side_table is not None
+            assert entry.side_column is not None
+            side_model = _side_model_for(entry.side_table)
+            if side_model is None:  # pragma: no cover — defensive
+                continue
+            if entry.side_table not in joined_side_tables:
+                stmt = stmt.outerjoin(
+                    side_model, side_model.item_id == Item.id
+                )
+                joined_side_tables.add(entry.side_table)
+            col = getattr(side_model, entry.side_column, None)
+            if col is None:  # pragma: no cover — defensive
+                continue
+        else:
+            assert entry.column is not None
+            col = getattr(Item, entry.column, None)
+            if col is None:
+                continue
         applied[key] = value
         type_value = entry.type.value
         if type_value in ("text", "select"):
@@ -1083,6 +1468,25 @@ def _apply_field_def_filters(
     return stmt, applied
 
 
+
+
+def _side_table_entries_for(picked_keys: set[str]) -> list[CatalogEntry]:
+    """Return the picked catalog entries that are SIDE_TABLE-backed.
+
+    Used by the items form template to render an extra input per
+    side-table field after the column-backed builtins. Order is the
+    catalog's declared ``sort_order`` so the layout is stable across
+    requests.
+    """
+
+    entries: list[CatalogEntry] = []
+    for key in picked_keys:
+        entry = CATALOG_BY_KEY.get(key)
+        if entry is None or entry.storage is not Storage.SIDE_TABLE:
+            continue
+        entries.append(entry)
+    entries.sort(key=lambda e: (e.sort_order, e.key))
+    return entries
 
 
 def _category_label(item: Item, db: Session) -> str:
@@ -1137,7 +1541,7 @@ def _stage_label(item: Item, db: Session) -> str:
 _LIST_ORDER = case((Item.archived_at.is_(None), 0), else_=1)
 
 
-_ITEMS_CSV_HEADERS: list[str] = [
+_ITEMS_CSV_FIXED_HEADERS: list[str] = [
     "id",
     "sku",
     "name",
@@ -1151,6 +1555,70 @@ _ITEMS_CSV_HEADERS: list[str] = [
     "requires_checkout",
     "unit_cost",
 ]
+
+
+def _side_table_catalog_entries() -> list[CatalogEntry]:
+    """Return every ``Storage.SIDE_TABLE`` entry, sorted by ``sort_order``.
+
+    The CSV export appends one column per entry after the fixed-header
+    set so existing column ordering stays stable for downstream readers.
+    The import allows the same set of keys as headers — round-tripping
+    a CSV through both paths preserves side-table data.
+    """
+    return sorted(
+        (e for e in FIELD_CATALOG if e.storage is Storage.SIDE_TABLE),
+        key=lambda e: (e.sort_order, e.key),
+    )
+
+
+# Column-backed catalog keys that ship as their own CSV column on top of
+# the fixed header set. Excludes entries already in
+# ``_ITEMS_CSV_FIXED_HEADERS`` (``name`` / ``unit`` / etc.) and
+# ``centre_stone_id`` (maintained by the stones set/unset routes — single
+# mutation pathway per spec §1.5, so it's read-only in CSV exports too).
+_ITEM_COLUMN_EXTRAS_BLACKLIST: frozenset[str] = frozenset(
+    [*_ITEMS_CSV_FIXED_HEADERS, "centre_stone_id"]
+)
+
+
+def _column_backed_extras() -> list[CatalogEntry]:
+    """Return every ``Storage.ITEM_COLUMN`` entry not already covered.
+
+    Each entry contributes a CSV column appended after the side-table
+    columns. Order mirrors the catalog's ``sort_order`` so the columns
+    stay readable.
+    """
+    return sorted(
+        (
+            e
+            for e in FIELD_CATALOG
+            if e.storage is Storage.ITEM_COLUMN
+            and e.key not in _ITEM_COLUMN_EXTRAS_BLACKLIST
+        ),
+        key=lambda e: (e.sort_order, e.key),
+    )
+
+
+def _items_csv_headers() -> list[str]:
+    """Full ordered CSV header set.
+
+    Layout: fixed-12 columns, then every ``Storage.SIDE_TABLE`` catalog
+    key, then every ``Storage.ITEM_COLUMN`` catalog key that isn't
+    already in the fixed-12 set. ``centre_stone_id`` is intentionally
+    omitted from the column-backed extras — operators set / unset
+    centre stones through the stones admin (single mutation pathway).
+    """
+    return (
+        _ITEMS_CSV_FIXED_HEADERS
+        + [e.key for e in _side_table_catalog_entries()]
+        + [e.key for e in _column_backed_extras()]
+    )
+
+
+# Back-compat alias. ``_ITEMS_CSV_HEADERS`` used to be the canonical fixed
+# list; some tests import it. Keep the alias pointing at the dynamic
+# accessor so a future header-set change has a single source of truth.
+_ITEMS_CSV_HEADERS = _ITEMS_CSV_FIXED_HEADERS
 
 
 def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
@@ -1170,24 +1638,42 @@ def _csv_rows_for_items(rows: list[dict[str, Any]]) -> list[list[Any]]:
     only and carries the open FIFO layer's unit cost (the per-row dict's
     ``unit_cost`` key set by ``list_items``). BULK rows render blank — the
     cell is meaningless across multiple FIFO layers and would mislead.
+
+    Side-table catalog cells (one per ``Storage.SIDE_TABLE`` entry,
+    appended after the fixed columns) read via
+    ``field_storage.read_catalog_value`` so the column-vs-side-table
+    decision is transparent. Items without a side row read as blank.
     """
-    return [
-        [
-            r["item"].id,
-            r["item"].sku,
-            r["item"].name,
+    side_entries = _side_table_catalog_entries()
+    column_extras = _column_backed_extras()
+    csv_rows: list[list[Any]] = []
+    for r in rows:
+        item = r["item"]
+        row_cells: list[Any] = [
+            item.id,
+            item.sku,
+            item.name,
             r["category_path"],
             r.get("stage_label", ""),
-            r["item"].unit,
-            r["item"].tracking_mode.value,
-            r["item"].current_qty,
-            r["item"].reorder_threshold,
-            r["item"].reorder_qty,
-            "yes" if r["item"].requires_checkout else "no",
+            item.unit,
+            item.tracking_mode.value,
+            item.current_qty,
+            item.reorder_threshold,
+            item.reorder_qty,
+            "yes" if item.requires_checkout else "no",
             r.get("unit_cost", ""),
         ]
-        for r in rows
-    ]
+        # Side-table cells first (preserves the pre-existing column
+        # ordering of /admin/items?format=csv), then column-backed
+        # extras after.
+        for entry in side_entries:
+            value = field_storage.read_catalog_value(item, entry)
+            row_cells.append(field_storage.format_for_csv(entry, value))
+        for entry in column_extras:
+            value = field_storage.read_catalog_value(item, entry)
+            row_cells.append(field_storage.format_for_csv(entry, value))
+        csv_rows.append(row_cells)
+    return csv_rows
 
 
 def _catalog_columns_for(
@@ -1317,22 +1803,37 @@ def list_items(
 
     # Catalog-driven columns: computed only when a node is picked. Empty list
     # otherwise. Every catalog entry is column-backed post-0024 so reads go
-    # straight to ``Item.<column>`` via ``read_catalog_value``.
+    # straight to ``Item.<column>`` via ``read_catalog_value``. FK-typed
+    # catalog entries (supplier_id, location_id, metal_id, …) substitute
+    # the integer for a human label (``"18KYG — 18ct Yellow Gold"``) via
+    # ``_resolve_fk_label`` so spreadsheets render usefully.
     catalog_columns: list[tuple[TaxonomyFieldDef, CatalogEntry]] = []
     catalog_cells_by_item: dict[int, list[str]] = {}
     if node_id_int is not None:
         catalog_columns = _catalog_columns_for(db, node_id_int)
+        fk_label_cache = _build_fk_label_cache(
+            db, [entry for _, entry in catalog_columns]
+        )
         for item in items:
-            catalog_cells_by_item[item.id] = [
-                field_storage.format_for_display(entry, field_storage.read_catalog_value(item, entry))
-                for _, entry in catalog_columns
-            ]
+            row_cells: list[str] = []
+            for _, entry in catalog_columns:
+                value = field_storage.read_catalog_value(item, entry)
+                # FK column → swap integer for the cached label when we
+                # have one. Falls through to the standard formatter when
+                # the column isn't FK-typed or the value is None.
+                fk_label = _fk_label_for(entry, value, fk_label_cache)
+                row_cells.append(
+                    fk_label
+                    if fk_label is not None
+                    else field_storage.format_for_display(entry, value)
+                )
+            catalog_cells_by_item[item.id] = row_cells
 
     if (
         resp := csv_branch(
             format,
             filename=f"items_{show}.csv",
-            headers=list(_ITEMS_CSV_HEADERS),
+            headers=_items_csv_headers(),
             rows=_csv_rows_for_items(rows),
         )
     ) is not None:
@@ -1418,6 +1919,7 @@ def new_item_form(
         leaf = db.get(TaxonomyNode, node_id)
         _apply_leaf_defaults(form, leaf)
     picked_columns = _picked_built_in_keys(db, node_id)
+    side_entries = _side_table_entries_for(picked_columns)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -1431,11 +1933,15 @@ def new_item_form(
             "pickable_options": _pickable_options(db),
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
+            "metal_options": _metal_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": True,
             "can_save": True,
             "field_visibility": _built_in_visibility_from_picks(picked_columns),
             "picked_column_keys": picked_columns,
+            "side_table_entries": side_entries,
+            "side_table_form": {e.key: "" for e in side_entries},
+            "linked_stones": [],
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form["taxonomy_node_id"]),
             "form_sku_preview": _sku_preview_for_form(db, form["taxonomy_node_id"]),
         },
@@ -1498,6 +2004,7 @@ def custom_fields_fragment(
         if composed:
             sku_preview_caption = f"Next SKU: {composed}"
     picked_columns = _picked_built_in_keys(db, leaf.id if leaf is not None else None)
+    side_entries = _side_table_entries_for(picked_columns)
     return templates.TemplateResponse(
         request,
         "items_form_fields.html",
@@ -1508,8 +2015,11 @@ def custom_fields_fragment(
             "can_edit_thresholds": True,
             "field_visibility": _built_in_visibility_from_picks(picked_columns),
             "picked_column_keys": picked_columns,
+            "side_table_entries": side_entries,
+            "side_table_form": {e.key: "" for e in side_entries},
             "supplier_options": _supplier_options(db),
             "location_options": _location_options(db),
+            "metal_options": _metal_options(db),
             "tracking_modes": [m.value for m in TrackingMode],
             "sku_preview_oob": include_defaults == "1",
             "sku_preview_caption": sku_preview_caption,
@@ -1573,13 +2083,19 @@ async def create_item(
     ring_size: str = Form(""),
     weight_grams: str = Form(""),
     stone_shape: str = Form(""),
+    melee_count: str = Form(""),
+    melee_total_ct: str = Form(""),
+    melee_stone_type: str = Form(""),
+    metal_id: str = Form(""),
+    secondary_metal_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER)),
     db: Session = Depends(get_session),
 ) -> Response:
-    # ``request.form()`` was previously needed to echo custom-field values
-    # back on validation failure. Post-0024 every standard field flows
-    # through a typed ``Form(...)`` parameter, so we no longer touch the
-    # raw form. Kept the call in case the re-render path grows shape later.
+    # Cache the raw form once so the side-table extractor + the
+    # validation re-render path can both read it without round-tripping
+    # the form parser. ``request.form()`` is idempotent — FastAPI has
+    # already parsed it to fill the typed ``Form(...)`` parameters.
+    raw_form = await request.form()
 
     def _re_render(error: str) -> Response:
         # Validation failed — re-render the create form with the typed
@@ -1605,9 +2121,21 @@ async def create_item(
             "ring_size": (ring_size or "").strip(),
             "weight_grams": (weight_grams or "").strip(),
             "stone_shape": (stone_shape or "").strip(),
+            "melee_count": (melee_count or "").strip(),
+            "melee_total_ct": (melee_total_ct or "").strip(),
+            "melee_stone_type": (melee_stone_type or "").strip(),
+            "metal_id": (metal_id or "").strip(),
+            "secondary_metal_id": (secondary_metal_id or "").strip(),
         }
         leaf_id_for_picks = leaf_id_for_view if leaf_id_for_view > 0 else None
         view_picked_columns = _picked_built_in_keys(db, leaf_id_for_picks)
+        view_side_entries = _side_table_entries_for(view_picked_columns)
+        # Echo each side-table input back with whatever the user typed,
+        # so a 400 from one bad value doesn't wipe the rest.
+        view_side_form = {
+            e.key: str(raw_form.get(e.key, "") or "").strip()
+            for e in view_side_entries
+        }
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -1621,11 +2149,15 @@ async def create_item(
                 "pickable_options": _pickable_options(db),
                 "supplier_options": _supplier_options(db),
                 "location_options": _location_options(db),
+                "metal_options": _metal_options(db),
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": True,
                 "can_save": True,
                 "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
                 "picked_column_keys": view_picked_columns,
+                "side_table_entries": view_side_entries,
+                "side_table_form": view_side_form,
+                "linked_stones": [],
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": _sku_preview_for_form(db, form_view["taxonomy_node_id"]),
@@ -1678,6 +2210,11 @@ async def create_item(
             ring_size=ring_size,
             weight_grams=weight_grams,
             stone_shape=stone_shape,
+            melee_count=melee_count,
+            melee_total_ct=melee_total_ct,
+            melee_stone_type=melee_stone_type,
+            metal_id=metal_id,
+            secondary_metal_id=secondary_metal_id,
             visibility=visibility,
             leaf_defaults=leaf_defaults,
         )
@@ -1720,17 +2257,50 @@ async def create_item(
         ring_size=fields["ring_size"],
         weight_grams=fields["weight_grams"],
         stone_shape=fields["stone_shape"],
+        melee_count=fields["melee_count"],
+        melee_total_ct=fields["melee_total_ct"],
+        melee_stone_type=fields["melee_stone_type"],
+        metal_id=fields["metal_id"],
+        secondary_metal_id=fields["secondary_metal_id"],
         current_qty=Decimal("0"),
         assigned_sequence=allocated_seq,
         current_stage_id=initial_stage_id,
     )
+    # Derived fields. ``total_carat_weight`` is just melee on create (no
+    # tracked stones can be set yet — that happens via the set route).
+    # ``pure_metal_weight_g`` = weight_grams * metal.purity_pct / 100.
+    item.total_carat_weight = fields["melee_total_ct"]
+    item.pure_metal_weight_g = _compute_pure_metal_weight(
+        db, fields["metal_id"], fields["weight_grams"]
+    )
     db.add(item)
     db.flush()
+
+    # Side-table-backed catalog fields (spec §9 dispatcher). Apply values
+    # from the previously-cached ``raw_form`` for the leaf's picked
+    # SIDE_TABLE entries inside this same transaction so the create is
+    # atomic. Coercion errors surface as HTTPException(400) and route
+    # into the standard re-render flow.
+    try:
+        side_payloads = extract_side_table_payloads(
+            raw_form,
+            _picked_built_in_keys(db, dest_leaf.id),
+        )
+        side_diff = apply_side_table_payloads(db, item, side_payloads)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        # Roll the partial transaction back so the route's _re_render
+        # doesn't see a half-written item row.
+        db.rollback()
+        return _re_render(str(exc.detail))
 
     audit_after: dict[str, Any] = {f: fields[f] for f in _FIELDS} | {
         "current_qty": item.current_qty,
         "assigned_sequence": allocated_seq,
     }
+    if side_diff:
+        audit_after["side_tables"] = side_diff
 
     record_audit(
         db,
@@ -1770,6 +2340,8 @@ def edit_item_form(
     form = _form_for_item(item)
     can_save = _can_save_item(_user)
     picked_columns = _picked_built_in_keys(db, item.taxonomy_node_id)
+    side_entries = _side_table_entries_for(picked_columns)
+    side_form = side_table_form_values_for_item(item, picked_columns)
     return templates.TemplateResponse(
         request,
         "items_form.html",
@@ -1783,11 +2355,18 @@ def edit_item_form(
             "pickable_options": _pickable_options(db, current_id=item.taxonomy_node_id),
             "supplier_options": _supplier_options(db, current_id=item.supplier_id),
             "location_options": _location_options(db, current_id=item.location_id),
+            "metal_options": _metal_options(db, current_id=item.metal_id),
+            "secondary_metal_options": _metal_options(
+                db, current_id=item.secondary_metal_id
+            ),
+            "linked_stones": _linked_stones_for(db, item),
             "tracking_modes": [m.value for m in TrackingMode],
             "can_edit_thresholds": _can_edit_thresholds(_user),
             "can_save": can_save,
             "field_visibility": _built_in_visibility_from_picks(picked_columns),
             "picked_column_keys": picked_columns,
+            "side_table_entries": side_entries,
+            "side_table_form": side_form,
             "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, item.taxonomy_node_id),
             # Edit form does not preview a "next SKU" — SKU is already
             # allocated and immutable.
@@ -1815,6 +2394,11 @@ async def update_item(
     ring_size: str = Form(""),
     weight_grams: str = Form(""),
     stone_shape: str = Form(""),
+    melee_count: str = Form(""),
+    melee_total_ct: str = Form(""),
+    melee_stone_type: str = Form(""),
+    metal_id: str = Form(""),
+    secondary_metal_id: str = Form(""),
     user: User = Depends(require_role(Role.MANAGER, Role.OFFICE)),
     db: Session = Depends(get_session),
 ) -> Response:
@@ -1828,6 +2412,10 @@ async def update_item(
     if not _can_edit_thresholds(user):
         reorder_threshold = str(item.reorder_threshold)
         reorder_qty = str(item.reorder_qty)
+
+    # Cache the raw form once — both the side-table extractor and the
+    # re-render path read it. ``request.form()`` is idempotent.
+    raw_form = await request.form()
 
     def _re_render(error: str) -> Response:
         # Validation failed — re-render the edit form preserving the user's
@@ -1854,9 +2442,21 @@ async def update_item(
             "ring_size": (ring_size or "").strip(),
             "weight_grams": (weight_grams or "").strip(),
             "stone_shape": (stone_shape or "").strip(),
+            "melee_count": (melee_count or "").strip(),
+            "melee_total_ct": (melee_total_ct or "").strip(),
+            "melee_stone_type": (melee_stone_type or "").strip(),
+            "metal_id": (metal_id or "").strip(),
+            "secondary_metal_id": (secondary_metal_id or "").strip(),
         }
         can_save = _can_save_item(user)
         view_picked_columns = _picked_built_in_keys(db, leaf_id_for_view)
+        view_side_entries = _side_table_entries_for(view_picked_columns)
+        # Echo the user's typed side-table values back rather than the
+        # persisted ones — keeps the form consistent on a 400.
+        view_side_form = {
+            e.key: str(raw_form.get(e.key, "") or "").strip()
+            for e in view_side_entries
+        }
         return templates.TemplateResponse(
             request,
             "items_form.html",
@@ -1870,11 +2470,18 @@ async def update_item(
                 "pickable_options": _pickable_options(db, current_id=item.taxonomy_node_id),
                 "supplier_options": _supplier_options(db, current_id=item.supplier_id),
                 "location_options": _location_options(db, current_id=item.location_id),
+                "metal_options": _metal_options(db, current_id=item.metal_id),
+                "secondary_metal_options": _metal_options(
+                    db, current_id=item.secondary_metal_id
+                ),
+                "linked_stones": _linked_stones_for(db, item),
                 "tracking_modes": [m.value for m in TrackingMode],
                 "can_edit_thresholds": _can_edit_thresholds(user),
                 "can_save": can_save,
                 "field_visibility": _built_in_visibility_from_picks(view_picked_columns),
                 "picked_column_keys": view_picked_columns,
+                "side_table_entries": view_side_entries,
+                "side_table_form": view_side_form,
                 "error": error,
                 "form_taxonomy_breadcrumb": _breadcrumb_for_form(db, form_view["taxonomy_node_id"]),
                 "form_sku_preview": "",
@@ -1908,9 +2515,16 @@ async def update_item(
             ring_size=ring_size,
             weight_grams=weight_grams,
             stone_shape=stone_shape,
+            melee_count=melee_count,
+            melee_total_ct=melee_total_ct,
+            melee_stone_type=melee_stone_type,
+            metal_id=metal_id,
+            secondary_metal_id=secondary_metal_id,
             current_node_id=item.taxonomy_node_id,
             current_supplier_id=item.supplier_id,
             current_location_id=item.location_id,
+            current_metal_id=item.metal_id,
+            current_secondary_metal_id=item.secondary_metal_id,
             visibility=visibility,
             leaf_defaults=leaf_defaults,
         )
@@ -1927,10 +2541,51 @@ async def update_item(
         return _re_render(str(exc.detail))
 
     diff = _diff(item, fields)
-    if diff is not None:
-        before, after = diff
-        for f in _FIELDS:
-            setattr(item, f, fields[f])
+
+    # Side-table-backed catalog fields (spec §9 dispatcher write path).
+    # Run *after* the column diff so any coercion error rolls back the
+    # whole edit cleanly. Apply works on the same in-memory item — we
+    # haven't called setattr for the columns yet, but the side-row
+    # writes don't depend on them.
+    try:
+        side_payloads = extract_side_table_payloads(
+            raw_form,
+            _picked_built_in_keys(db, edit_leaf.id),
+        )
+        side_diff = apply_side_table_payloads(db, item, side_payloads)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        db.rollback()
+        return _re_render(str(exc.detail))
+
+    if diff is not None or side_diff:
+        if diff is not None:
+            before, after = diff
+            for f in _FIELDS:
+                setattr(item, f, fields[f])
+        else:
+            before, after = {}, {}
+        if side_diff:
+            after = dict(after)
+            after["side_tables"] = side_diff
+        # Derived field maintenance. ``pure_metal_weight_g`` depends on
+        # ``weight_grams * metal.purity_pct`` — recompute whenever either
+        # input changed (or the metal's purity changed underneath us,
+        # which we approximate by always recomputing on any edit).
+        # ``total_carat_weight`` recalcs when melee_total_ct changes;
+        # set/unset routes call ``stones._recalculate_total_carat`` for
+        # the tracked-stones side of the equation.
+        if diff is not None and (
+            "weight_grams" in diff[1] or "metal_id" in diff[1]
+        ):
+            item.pure_metal_weight_g = _compute_pure_metal_weight(
+                db, item.metal_id, item.weight_grams
+            )
+        if diff is not None and "melee_total_ct" in diff[1]:
+            from app.stones import _recalculate_total_carat
+
+            _recalculate_total_carat(db, item)
         record_audit(
             db,
             actor=user,
@@ -2016,6 +2671,145 @@ def unarchive_item(
     return RedirectResponse(url="/admin/items", status_code=status.HTTP_303_SEE_OTHER)
 
 
+# ---------------------------------------------------------------------------
+# Item-context stone picker — inverse of /admin/stones/{id}/set
+# ---------------------------------------------------------------------------
+#
+# The stones admin lets a manager pick "stone first, then item". This
+# pair of routes inverts the flow — "item first, then stone" — so a
+# manager working on an item can find an available stone without leaving
+# the item context. Same underlying primitive
+# (``app.stones._set_stone_into_item``).
+
+
+@router.get("/{item_id}/stones/new", response_class=HTMLResponse)
+def new_item_stone_form(
+    request: Request,
+    item_id: int,
+    _user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> HTMLResponse:
+    """Render the pick-an-available-stone form for a specific item."""
+    from app.models import Stone, StonePosition, StoneStatus
+
+    item = db.get(Item, item_id)
+    if item is None or item.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="item not found or archived"
+        )
+    # "Available" stones only — RESERVED is also legal per spec §1.1, but
+    # surfacing reserved stones in this picker would silently steal a
+    # reservation. Operators wanting to set a reserved stone can do so
+    # from the stones admin where the reservation is visible.
+    available = list(
+        db.execute(
+            select(Stone)
+            .where(Stone.status == StoneStatus.AVAILABLE)
+            .where(Stone.archived_at.is_(None))
+            .where(Stone.current_item_id.is_(None))
+            .order_by(Stone.stone_code)
+        ).scalars().all()
+    )
+    return templates.TemplateResponse(
+        request,
+        "item_set_stone_form.html",
+        {
+            "current_user": _user,
+            "item": item,
+            "stone_options": [
+                {
+                    "id": s.id,
+                    "label": (
+                        f"{s.stone_code} — {s.stone_type.value}, {s.carat_weight}ct"
+                        + (f" · colour {s.colour_grade}" if s.colour_grade else "")
+                    ),
+                }
+                for s in available
+            ],
+            "positions": [p.value for p in StonePosition],
+        },
+    )
+
+
+@router.post("/{item_id}/stones")
+def set_stone_into_item_route(
+    request: Request,
+    item_id: int,
+    stone_id: str = Form(""),
+    position: str = Form(""),
+    position_index: str = Form("0"),
+    note: str = Form(""),
+    user: User = Depends(require_role(Role.MANAGER)),
+    db: Session = Depends(get_session),
+) -> Response:
+    """Set a manager-picked stone into the addressed item.
+
+    Routes through the same ``_set_stone_into_item`` primitive as the
+    stones-admin set form so the linkage + denorm + ledger writes stay
+    behaviour-identical. Audit row uses ``stone.set`` to match the
+    stones-side action label.
+    """
+    from app.models import Stone, StonePosition
+    from app.stones import _set_stone_into_item
+
+    item = db.get(Item, item_id)
+    if item is None or item.archived_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="item not found or archived"
+        )
+    try:
+        stone_id_int = int((stone_id or "").strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="stone_id must be an integer",
+        ) from exc
+    stone = db.get(Stone, stone_id_int)
+    if stone is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="stone not found"
+        )
+    try:
+        pos = StonePosition(position.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown position {position!r}",
+        ) from exc
+    try:
+        pos_idx = int((position_index or "0").strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="position_index must be an integer",
+        ) from exc
+
+    _set_stone_into_item(
+        db, stone, item,
+        position=pos, position_index=pos_idx,
+        actor=user, note=note.strip() or None,
+    )
+    record_audit(
+        db, actor=user, action="stone.set",
+        entity_type="stone", entity_id=stone.id,
+        before={"status": "available", "current_item_id": None},
+        after={
+            "status": "set",
+            "current_item_id": item.id,
+            "position": pos.value,
+            "position_index": pos_idx,
+        },
+    )
+    db.commit()
+    _flash(
+        request,
+        f"Stone {stone.stone_code} set into {item.sku} ({pos.value}).",
+    )
+    return RedirectResponse(
+        url=f"/admin/items/{item.id}/edit", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
 # ===========================================================================
 # CSV upload (items)
 # ===========================================================================
@@ -2026,7 +2820,7 @@ def unarchive_item(
 # active field def on the row's leaf (or any ancestor). See
 # ``CSV uploads spec.md`` for the full contract.
 
-_ITEMS_UPLOAD_KNOWN: set[str] = {
+_ITEMS_UPLOAD_FIXED_KNOWN: set[str] = {
     "id",
     "sku",
     "name",
@@ -2043,6 +2837,27 @@ _ITEMS_UPLOAD_KNOWN: set[str] = {
     "weight_grams",
     "stone_shape",
 }
+
+
+def _items_upload_known() -> set[str]:
+    """All accepted upload headers.
+
+    Includes the fixed-column set, every ``Storage.SIDE_TABLE`` catalog
+    key (read + write supported), and every column-backed catalog key
+    not already in the fixed set (read on export; ignored on import —
+    a non-blank cell yields a per-row warning so an operator who
+    re-uploads a download isn't surprised). Round-tripping through
+    download → re-upload is a no-op on these read-only cells.
+    """
+    return (
+        _ITEMS_UPLOAD_FIXED_KNOWN
+        | {e.key for e in _side_table_catalog_entries()}
+        | {e.key for e in _column_backed_extras()}
+    )
+
+
+# Back-compat alias for any external reader.
+_ITEMS_UPLOAD_KNOWN = _ITEMS_UPLOAD_FIXED_KNOWN
 _ITEMS_UPLOAD_REQUIRED: set[str] = {"category"}
 _ITEMS_UPLOAD_COLUMNS = [
     {"name": "id", "required": False, "note": "blank = create; matching id = skip"},
@@ -2411,7 +3226,22 @@ def _build_item_update_result(
     if stone_raw:
         _diff("stone_shape", stone_raw)
 
-    if not changes:
+    # Side-table catalog fields (spec §9). Same extractor as the create
+    # path; coercion errors become row-level errors so the preview page
+    # surfaces them without aborting the whole upload.
+    picked_keys = _picked_built_in_keys(db, existing.taxonomy_node_id)
+    try:
+        side_payloads = extract_side_table_payloads(raw, picked_keys)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="side_table",
+            error_message=str(exc.detail),
+        )
+
+    if not changes and not any(side_payloads.values()):
         return RowResult(
             row_number=row_number, raw=raw, tag="skip",
             error_field="id",
@@ -2420,7 +3250,12 @@ def _build_item_update_result(
         )
     return RowResult(
         row_number=row_number, raw=raw, tag="update",
-        payload={"existing_id": existing.id, "changes": changes, "before": before},
+        payload={
+            "existing_id": existing.id,
+            "changes": changes,
+            "before": before,
+            "side_payloads": side_payloads,
+        },
         warnings=warnings,
     )
 
@@ -2588,6 +3423,23 @@ def _build_item_row_result(
             error_field="stone_shape", error_message="stone_shape is required",
         )
 
+    # Side-table catalog fields (spec §9). Extract whatever the row carries
+    # for the leaf's picked ``Storage.SIDE_TABLE`` keys; the helper coerces
+    # per ``FieldType`` and raises ``HTTPException(400)`` on a bad cell.
+    # Wrap that into a per-row error so the user sees the offending column
+    # on the preview page rather than a 500.
+    picked_keys = _picked_built_in_keys(db, node.id)
+    try:
+        side_payloads = extract_side_table_payloads(raw, picked_keys)
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_400_BAD_REQUEST:
+            raise
+        return RowResult(
+            row_number=row_number, raw=raw, tag="error",
+            error_field="side_table",
+            error_message=str(exc.detail),
+        )
+
     warnings: list[str] = []
     # User-supplied SKU on create: accepted for unique / unique_variant
     # items (each ring/variant often has its own pre-printed SKU); ignored
@@ -2643,6 +3495,7 @@ def _build_item_row_result(
             "stone_shape": stone_shape_raw or None,
             "unit_cost_for_receipt": unit_cost_for_receipt,
             "user_sku_for_create": user_sku_for_create,
+            "side_payloads": side_payloads,
         },
         warnings=warnings,
     )
@@ -2653,7 +3506,7 @@ def _validate_items_upload(
 ) -> list[RowResult]:
     check_required_and_known_headers(
         headers,
-        known=_ITEMS_UPLOAD_KNOWN,
+        known=_items_upload_known(),
         required=_ITEMS_UPLOAD_REQUIRED,
     )
     existing_ids = {row.id for row in db.execute(select(Item.id)).all()}
@@ -2776,6 +3629,12 @@ async def upload_items(
                 continue
             for field, new_val in p["changes"].items():
                 setattr(existing_item, field, new_val)
+            # Apply any side-table cells from the row. Returns a diff
+            # dict; merge into the audit payload so the audit row carries
+            # the side-table change alongside the column change.
+            side_diff = apply_side_table_payloads(
+                db, existing_item, p.get("side_payloads", {})
+            )
             json_before = {
                 k: (str(v) if isinstance(v, Decimal) else v)
                 for k, v in p["before"].items()
@@ -2784,6 +3643,8 @@ async def upload_items(
                 k: (str(v) if isinstance(v, Decimal) else v)
                 for k, v in p["changes"].items()
             }
+            if side_diff:
+                json_after["side_tables"] = side_diff
             record_audit(
                 db,
                 actor=user,
@@ -2842,6 +3703,13 @@ async def upload_items(
         db.add(item)
         db.flush()
 
+        # Side-table cells from the row (spec §9). Apply inside the same
+        # transaction so the create + side rows commit atomically; merge
+        # the diff into the audit payload below.
+        side_diff = apply_side_table_payloads(
+            db, item, p.get("side_payloads", {})
+        )
+
         audit_after: dict[str, Any] = {
             "sku": allocated_sku,
             "name": item_name,
@@ -2857,6 +3725,8 @@ async def upload_items(
             "current_qty": Decimal("0"),
             "assigned_sequence": allocated_seq,
         }
+        if side_diff:
+            audit_after["side_tables"] = side_diff
         record_audit(
             db,
             actor=user,

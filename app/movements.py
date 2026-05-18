@@ -1207,6 +1207,23 @@ def item_detail(
     )
     _attach_directions_and_breakdown(db, movements)
 
+    # Resolve labels for the optional Stones + Metals card. Each is a
+    # PK lookup (or one extra join for linked_stones) — cheap, and keeps
+    # the template free of FK chasing.
+    from app.items import _linked_stones_for
+    from app.models import Metal
+    from app.stones import compute_item_stone_costs
+
+    linked_stones = _linked_stones_for(db, item)
+    metal = db.get(Metal, item.metal_id) if item.metal_id else None
+    secondary_metal = (
+        db.get(Metal, item.secondary_metal_id) if item.secondary_metal_id else None
+    )
+    # Spec §10.3 — show loaded + owned cost on the detail page when
+    # there's at least one active stone. Falls through to None for plain
+    # items so the template can hide the section.
+    stone_costs = compute_item_stone_costs(db, item) if linked_stones else None
+
     return templates.TemplateResponse(
         request,
         "item_detail.html",
@@ -1219,6 +1236,10 @@ def item_detail(
             "pagination": pagination,
             "can_edit_item": _can_edit_item(user),
             "current_stage": _resolve_stage(db, item.current_stage_id),
+            "linked_stones": linked_stones,
+            "metal": metal,
+            "secondary_metal": secondary_metal,
+            "stone_costs": stone_costs,
         },
     )
 

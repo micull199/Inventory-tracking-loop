@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Metals — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Metals",
+        subtitle="Alloy lookup — drives precious-metal accounting, costing, customer display and Thailand transfer-pricing declarations.",
+        heading_testid="metals-heading"
+    ) %}
+        {{ c.button("+ New metal", href="/admin/metals/new", testid="new-metal") }}
+        <a class="uc-btn uc-btn--secondary" href="/admin/metal-prices" data-testid="link-metal-prices">Daily prices &rarr;</a>
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter metals" data-testid="metals-tabs">
+        <a href="/admin/metals?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/metals?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if metals %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="metals-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Family</th>
+                        <th class="uc-right">Karat</th>
+                        <th class="uc-right">Purity %</th>
+                        <th>Colour</th>
+                        <th class="uc-right">Density</th>
+                        <th>Hallmark</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in metals %}
+                        <tr data-testid="metal-row" data-metal-id="{{ m.id }}">
+                            <td data-testid="metal-code"><code>{{ m.metal_code }}</code></td>
+                            <td>{{ m.name }}
+                                {% if m.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td>{{ m.alloy_family.value }}</td>
+                            <td class="uc-right">{{ m.karat if m.karat is not none else "" }}</td>
+                            <td class="uc-right">{{ m.purity_pct }}</td>
+                            <td>{{ m.colour.value }}</td>
+                            <td class="uc-right">{{ m.density_g_per_cc or "" }}</td>
+                            <td>{{ m.hallmark_stamp or "" }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/metals/{{ m.id }}/edit" data-testid="edit-metal">Edit</a>
+                                {% if m.archived_at is none %}
+                                    <form method="post" action="/admin/metals/{{ m.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-metal">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/metals/{{ m.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-metal">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="metals-empty">
+            {{ c.empty_state(
+                "No archived metals" if show == "archived" else "No metals yet",
+                "" if show == "archived" else "Create your first metal above. 14 canonical alloys ship as migration seeds."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

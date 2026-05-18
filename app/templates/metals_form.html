@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/metals">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="metal-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="metal_code">Code <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" id="metal_code" name="metal_code" required
+                               value="{{ form.metal_code }}"
+                               data-testid="metal-code-input"
+                               maxlength="16"
+                               placeholder="e.g. 18KYG, PLAT950">
+                        <small class="uc-helper">Stored uppercase. Unique across active + archived.</small>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" id="name" name="name" required
+                               value="{{ form.name }}"
+                               data-testid="metal-name-input"
+                               maxlength="64">
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="alloy_family">Alloy family <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="alloy_family" name="alloy_family" required data-testid="metal-family-input">
+                            {% for f in alloy_families %}
+                                <option value="{{ f }}" {% if form.alloy_family == f %}selected{% endif %}>{{ f }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="colour">Colour <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="colour" name="colour" required data-testid="metal-colour-input">
+                            {% for c_ in colours %}
+                                <option value="{{ c_ }}" {% if form.colour == c_ %}selected{% endif %}>{{ c_ }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="karat">Karat</label>
+                        <input class="uc-input" type="number" step="1" min="0" id="karat" name="karat"
+                               value="{{ form.karat }}"
+                               data-testid="metal-karat-input">
+                        <small class="uc-helper">9/14/18/22/24 — only for gold alloys.</small>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="purity_pct">Purity (%) <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="purity_pct" name="purity_pct" required
+                               value="{{ form.purity_pct }}"
+                               data-testid="metal-purity-input"
+                               placeholder="e.g. 75.000">
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="density_g_per_cc">Density (g/cm³)</label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="density_g_per_cc" name="density_g_per_cc"
+                               value="{{ form.density_g_per_cc }}"
+                               data-testid="metal-density-input"
+                               placeholder="e.g. 15.500">
+                        <small class="uc-helper">Used for volume→weight calc + yield modelling.</small>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="hallmark_stamp">Hallmark stamp</label>
+                        <input class="uc-input" type="text" id="hallmark_stamp" name="hallmark_stamp"
+                               value="{{ form.hallmark_stamp }}"
+                               data-testid="metal-hallmark-input"
+                               maxlength="16"
+                               placeholder='e.g. "750"'>
+                    </div>
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="metal-submit">
+                    {% if metal %}Save changes{% else %}Create metal{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/metals">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Designs — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Designs",
+        subtitle="Design IP separated from production hierarchy — CAD files, designer credits, intro / discontinued dates. Shared across casting locations.",
+        heading_testid="designs-heading"
+    ) %}
+        {{ c.button("+ New design", href="/admin/designs/new", testid="new-design") }}
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter designs" data-testid="designs-tabs">
+        <a href="/admin/designs?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/designs?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if designs %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="designs-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Collection</th>
+                        <th>Style</th>
+                        <th>Designer</th>
+                        <th>CAD version</th>
+                        <th>Intro</th>
+                        <th>Discontinued</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for d in designs %}
+                        <tr data-testid="design-row" data-design-id="{{ d.id }}">
+                            <td data-testid="design-code"><code>{{ d.design_code }}</code></td>
+                            <td data-testid="design-name">{{ d.name }}
+                                {% if d.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td>{{ d.collection or "" }}</td>
+                            <td>{{ d.style_family.value if d.style_family else "" }}</td>
+                            <td>{{ d.designer or "" }}</td>
+                            <td>{{ d.cad_version or "" }}</td>
+                            <td>{{ d.intro_date or "" }}</td>
+                            <td>{{ d.discontinued_date or "" }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/designs/{{ d.id }}/edit" data-testid="edit-design">Edit</a>
+                                {% if d.archived_at is none %}
+                                    <form method="post" action="/admin/designs/{{ d.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-design">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/designs/{{ d.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-design">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="designs-empty">
+            {{ c.empty_state(
+                "No archived designs" if show == "archived" else "No designs yet",
+                "" if show == "archived" else "Create your first design above. CAD file paths, designer credits and intro dates can be captured here independently of physical inventory."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

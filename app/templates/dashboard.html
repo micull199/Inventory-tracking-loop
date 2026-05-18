@@ -155,4 +155,49 @@
             <div class="uc-stat-value uc-num" data-testid="dashboard-cogs-amount">{{ cogs_amount }}</div>
         </div>
     </section>
+
+    {# Memo / consignment due-soon alerts (S1 — surfaces operationally
+       important stones that belong to a supplier and are approaching
+       their return date). Hidden when there's nothing to show so the
+       dashboard stays clean for shops that don't deal in memo stones. #}
+    {% if memo_stones_due %}
+        <section class="uc-card" data-testid="memo-stones-card">
+            <header class="uc-card-header">
+                <h2>Memo / consignment stones due soon</h2>
+                <a class="uc-btn uc-btn--ghost uc-btn--sm" href="/admin/stones?status_filter=available"
+                   data-testid="memo-stones-stones-link">All stones →</a>
+            </header>
+            <div class="uc-card-body uc-card-body--flush">
+                <table class="uc-table" data-testid="memo-stones-table">
+                    <thead>
+                        <tr>
+                            <th>Code</th>
+                            <th class="uc-right">Carat</th>
+                            <th>Ownership</th>
+                            <th>Due date</th>
+                            <th class="uc-right">Days remaining</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in memo_stones_due %}
+                            <tr data-testid="memo-stone-row"
+                                {% if s.is_overdue %}class="uc-row-warn"{% endif %}>
+                                <td><a href="/admin/stones/{{ s.id }}/edit"><code>{{ s.stone_code }}</code></a></td>
+                                <td class="uc-right uc-num">{{ s.carat_weight }}</td>
+                                <td>{{ s.ownership }}</td>
+                                <td>{{ s.due_date }}</td>
+                                <td class="uc-right uc-num">
+                                    {% if s.is_overdue %}
+                                        <strong data-testid="memo-stone-overdue">{{ s.days_remaining }} (overdue)</strong>
+                                    {% else %}
+                                        {{ s.days_remaining }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
 {% endblock %}

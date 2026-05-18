@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stones">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <div class="uc-helper">
+            <strong>{{ stone.stone_code }}</strong> · {{ stone.stone_type.value }} · {{ stone.carat_weight }}ct
+            · status <code>{{ stone.status.value }}</code>
+        </div>
+
+        {% if warning %}
+            <div class="uc-helper uc-helper--warn" data-testid="stone-action-warning">{{ warning }}</div>
+        {% endif %}
+
+        <form method="post" action="{{ action }}" data-testid="stone-action-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="note">Note (optional)</label>
+                    <input class="uc-input" type="text" id="note" name="note"
+                           data-testid="stone-action-note-input" maxlength="2000"
+                           placeholder="e.g. invoice number, customer, condition…">
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="stone-action-submit">{{ verb }}</button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/stones">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

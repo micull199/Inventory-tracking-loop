@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Stones — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Stones",
+        subtitle="Tracked stones — anything with a grading report or above the melee threshold. Melee continues to live as aggregate count/ct on the parent item.",
+        heading_testid="stones-heading"
+    ) %}
+        {{ c.button("+ New stone", href="/admin/stones/new", testid="new-stone") }}
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter stones" data-testid="stones-tabs">
+        <a href="/admin/stones?show=active{% if selected_status %}&status_filter={{ selected_status }}{% endif %}"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/stones?show=archived{% if selected_status %}&status_filter={{ selected_status }}{% endif %}"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    <form method="get" action="/admin/stones" class="uc-filter-bar" data-testid="stones-filter-form">
+        <input type="hidden" name="show" value="{{ show }}">
+        <div class="uc-field">
+            <label class="uc-label" for="status_filter">Filter by status</label>
+            <select class="uc-select" id="status_filter" name="status_filter"
+                    onchange="this.form.submit()"
+                    data-testid="stones-filter-status">
+                <option value="">— any status —</option>
+                {% for s in status_options %}
+                    <option value="{{ s }}" {% if selected_status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </form>
+
+    {% if rows %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stones-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Type</th>
+                        <th>Shape</th>
+                        <th class="uc-right">Carat</th>
+                        <th>Status</th>
+                        <th>Ownership</th>
+                        <th>Current item</th>
+                        <th>Location</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        {% set s = r.stone %}
+                        <tr data-testid="stone-row" data-stone-id="{{ s.id }}">
+                            <td data-testid="stone-code"><code>{{ s.stone_code }}</code></td>
+                            <td>{{ s.stone_type.value }}</td>
+                            <td>{{ r.shape_label }}</td>
+                            <td class="uc-right">{{ s.carat_weight }}</td>
+                            <td>
+                                {{ c.pill(s.status.value) }}
+                                {% if s.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td>{{ s.ownership.value }}</td>
+                            <td>{{ r.item_label }}</td>
+                            <td>{{ r.location_label }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/stones/{{ s.id }}/edit" data-testid="edit-stone">Edit</a>
+                                <a href="/admin/stones/{{ s.id }}/history" data-testid="stone-history-link">History</a>
+
+                                {# Lifecycle action buttons gated by current status. The
+                                   spec's transition graph (§1.1):
+                                   - available / reserved → set / sell / lost / return / relocate
+                                   - set → unset / sell (auto-unsets)
+                                   - sold / lost / returned → terminal (view only). #}
+                                {% if s.status.value in ("available", "reserved") %}
+                                    <a href="/admin/stones/{{ s.id }}/set" data-testid="set-stone">Set</a>
+                                    <a href="/admin/stones/{{ s.id }}/sell" data-testid="sell-stone">Sell</a>
+                                    <a href="/admin/stones/{{ s.id }}/lost" data-testid="lose-stone">Lost</a>
+                                    <a href="/admin/stones/{{ s.id }}/return" data-testid="return-stone">Return</a>
+                                    <a href="/admin/stones/{{ s.id }}/relocate" data-testid="relocate-stone">Relocate</a>
+                                {% elif s.status.value == "set" %}
+                                    <form method="post" action="/admin/stones/{{ s.id }}/unset" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unset-stone">Unset</button>
+                                    </form>
+                                    <a href="/admin/stones/{{ s.id }}/sell" data-testid="sell-stone">Sell (with ring)</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="stones-empty">
+            {{ c.empty_state(
+                "No archived stones" if show == "archived" else "No stones yet",
+                "" if show == "archived" else "Create your first stone above. Stone codes are allocated as STN-NNNNNN."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

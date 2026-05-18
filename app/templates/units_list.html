@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Units — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Units of measure",
+        subtitle="Administered lookup that replaces freetext Item.unit for new entities. Seeded with 10 canonical units; add shop-specific ones here.",
+        heading_testid="units-heading"
+    ) %}
+        {{ c.button("+ New unit", href="/admin/units/new", testid="new-unit") }}
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter units" data-testid="units-tabs">
+        <a href="/admin/units?show=active"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/units?show=archived"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    {% if units %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="units-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th class="uc-right">Sort order</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in units %}
+                        <tr data-testid="unit-row" data-unit-id="{{ u.id }}">
+                            <td data-testid="unit-code"><code>{{ u.code }}</code></td>
+                            <td>{{ u.name }}
+                                {% if u.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-right">{{ u.sort_order }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/units/{{ u.id }}/edit" data-testid="edit-unit">Edit</a>
+                                {% if u.archived_at is none %}
+                                    <form method="post" action="/admin/units/{{ u.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-unit">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/units/{{ u.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-unit">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="units-empty">
+            {{ c.empty_state(
+                "No archived units" if show == "archived" else "No units yet",
+                ""
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

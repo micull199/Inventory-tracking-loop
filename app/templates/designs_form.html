@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/designs">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="design-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            {% if design %}
+                <section class="uc-section">
+                    <div class="uc-field">
+                        <span class="uc-label">Code</span>
+                        <div class="uc-num uc-strong" data-testid="design-code-readonly">{{ design.design_code }}</div>
+                    </div>
+                </section>
+            {% endif %}
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="name" name="name" required
+                           value="{{ form.name }}"
+                           data-testid="design-name-input"
+                           maxlength="128">
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="collection">Collection</label>
+                    <input class="uc-input" type="text" id="collection" name="collection"
+                           value="{{ form.collection }}"
+                           data-testid="design-collection-input"
+                           maxlength="64">
+                    <small class="uc-helper">Optional grouping (e.g. "Bridal Classics 2026").</small>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="style_family">Style family</label>
+                    <select class="uc-select" id="style_family" name="style_family"
+                            data-testid="design-style-input">
+                        <option value="">— none —</option>
+                        {% for s in style_families %}
+                            <option value="{{ s }}" {% if form.style_family == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="designer">Designer credit</label>
+                    <input class="uc-input" type="text" id="designer" name="designer"
+                           value="{{ form.designer }}"
+                           data-testid="design-designer-input"
+                           maxlength="128">
+                </div>
+            </section>
+
+            {# ---- CAD ---- #}
+            <section class="uc-section">
+                <h3 class="uc-h3">CAD file</h3>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="cad_file_path">File path</label>
+                    <input class="uc-input" type="text" id="cad_file_path" name="cad_file_path"
+                           value="{{ form.cad_file_path }}"
+                           data-testid="design-cad-path-input"
+                           maxlength="512">
+                    <small class="uc-helper">Path, URL or storage key — whatever your team uses.</small>
+                </div>
+
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="cad_version">Version</label>
+                        <input class="uc-input" type="text" id="cad_version" name="cad_version"
+                               value="{{ form.cad_version }}"
+                               data-testid="design-cad-version-input"
+                               maxlength="32"
+                               placeholder='e.g. "v1.2" or "2026-05-15-rev3"'>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="cad_updated_at">Last updated</label>
+                        <input class="uc-input" type="datetime-local" id="cad_updated_at" name="cad_updated_at"
+                               value="{{ form.cad_updated_at }}"
+                               data-testid="design-cad-updated-input">
+                        <small class="uc-helper">Freshness signal for multi-location pulls.</small>
+                    </div>
+                </div>
+            </section>
+
+            {# ---- Defaults + lifecycle ---- #}
+            <section class="uc-section">
+                <h3 class="uc-h3">Defaults & lifecycle</h3>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="default_metal_id">Default metal</label>
+                    <select class="uc-select" id="default_metal_id" name="default_metal_id"
+                            data-testid="design-metal-input">
+                        <option value="">— none —</option>
+                        {% for m in metal_options %}
+                            <option value="{{ m.id }}"
+                                    {% if form.default_metal_id == (m.id | string) %}selected{% endif %}>
+                                {{ m.label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="intro_date">Intro date</label>
+                        <input class="uc-input" type="date" id="intro_date" name="intro_date"
+                               value="{{ form.intro_date }}"
+                               data-testid="design-intro-input">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="discontinued_date">Discontinued date</label>
+                        <input class="uc-input" type="date" id="discontinued_date" name="discontinued_date"
+                               value="{{ form.discontinued_date }}"
+                               data-testid="design-discontinued-input">
+                    </div>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="standard_cost">Standard cost</label>
+                    <input class="uc-input" type="text" inputmode="decimal" id="standard_cost" name="standard_cost"
+                           value="{{ form.standard_cost }}"
+                           data-testid="design-standard-cost-input">
+                    <small class="uc-helper">Planning estimate for pre-build quoting. Optional.</small>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-textarea" id="notes" name="notes"
+                              data-testid="design-notes-input"
+                              maxlength="2000"
+                              rows="4">{{ form.notes }}</textarea>
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="design-submit">
+                    {% if design %}Save changes{% else %}Create design{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/designs">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

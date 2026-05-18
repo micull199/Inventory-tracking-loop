@@ -4461,3 +4461,108 @@ class TestItemDetailCsvLink:
         body = resp.text
         assert 'data-testid="movements-timeline-empty"' in body
         assert 'data-testid="movements-csv-link"' in body
+
+
+class TestItemDetailStonesAndMetals:
+    """The Stones & metals card on the item detail page (S1/S2 read-only summary).
+
+    The card is conditional — only renders when there's something to show.
+    Plain BULK items with no metal / stones don't get a noisy empty card.
+    """
+
+    def test_card_hidden_when_no_data(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="PLAIN-1", name="Plain")
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        # The card is gated on stone / metal info; with neither, no card
+        # rendered, no per-row markers in the response.
+        assert 'data-testid="item-detail-linked-stones-table"' not in resp.text
+        assert 'data-testid="item-detail-melee-count"' not in resp.text
+        assert 'data-testid="item-detail-metal"' not in resp.text
+
+    def test_card_renders_linked_stones(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemStone, Stone, StonePosition, StoneShape, StoneStatus, StoneType
+
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="RING-1", name="Solitaire")
+        shape = StoneShape(name="round")
+        db_session.add(shape)
+        db_session.commit()
+        stone = Stone(
+            stone_code="STN-000001",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("1.50"),
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        db_session.add(stone)
+        db_session.commit()
+        db_session.add(
+            ItemStone(
+                item_id=item.id, stone_id=stone.id, position=StonePosition.CENTRE
+            )
+        )
+        item.centre_stone_id = stone.id
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="item-detail-linked-stones-table"' in resp.text
+        assert "STN-000001" in resp.text
+
+    def test_card_renders_melee_and_total_ct(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        leaf = _make_leaf(db_session)
+        item = _make_item(db_session, leaf=leaf, sku="MEL-1", name="Pavé band")
+        item.melee_count = 12
+        item.melee_total_ct = Decimal("0.4")
+        item.melee_stone_type = "diamond"
+        item.total_carat_weight = Decimal("0.4")
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="item-detail-melee-count"' in resp.text
+        assert 'data-testid="item-detail-melee-total-ct"' in resp.text
+        assert 'data-testid="item-detail-total-ct"' in resp.text
+
+    def test_card_renders_metal_with_label(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        leaf = _make_leaf(db_session)
+        metal = Metal(
+            metal_code="18KYG",
+            name="18ct Yellow Gold",
+            alloy_family=AlloyFamily.GOLD,
+            karat=18,
+            purity_pct=Decimal("75.000"),
+            colour=MetalColour.YELLOW,
+        )
+        db_session.add(metal)
+        db_session.commit()
+        item = _make_item(db_session, leaf=leaf, sku="MTL-1", name="Gold ring")
+        item.metal_id = metal.id
+        item.pure_metal_weight_g = Decimal("3.0000")
+        db_session.commit()
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/detail")
+        assert resp.status_code == 200
+        assert 'data-testid="item-detail-metal"' in resp.text
+        # Metal label is the human-readable form, not the raw FK id.
+        assert "18KYG" in resp.text
+        assert "18ct Yellow Gold" in resp.text
+        assert 'data-testid="item-detail-pure-metal-weight"' in resp.text

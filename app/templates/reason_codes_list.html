@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}Reason codes — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "Movement reason codes",
+        subtitle="Type-scoped vocabulary for stock-movement reasons. Pairs with the freetext Movement.reason column — codes for recurrent reasons, freetext for the long tail.",
+        heading_testid="reason-codes-heading"
+    ) %}
+        {{ c.button("+ New reason", href="/admin/reason-codes/new", testid="new-reason-code") }}
+    {% endcall %}
+
+    <nav class="uc-tabs" aria-label="Filter reason codes" data-testid="reason-codes-tabs">
+        <a href="/admin/reason-codes?show=active{% if selected_movement_type %}&movement_type={{ selected_movement_type }}{% endif %}"
+           data-testid="tab-active"
+           {% if show == "active" %}aria-current="page"{% endif %}>Active</a>
+        <a href="/admin/reason-codes?show=archived{% if selected_movement_type %}&movement_type={{ selected_movement_type }}{% endif %}"
+           data-testid="tab-archived"
+           {% if show == "archived" %}aria-current="page"{% endif %}>Archived</a>
+    </nav>
+
+    <form method="get" action="/admin/reason-codes" class="uc-filter-bar" data-testid="reason-codes-filter-form">
+        <input type="hidden" name="show" value="{{ show }}">
+        <div class="uc-field">
+            <label class="uc-label" for="movement_type">Filter by movement type</label>
+            <select class="uc-select" id="movement_type" name="movement_type"
+                    onchange="this.form.submit()"
+                    data-testid="reason-codes-filter-type">
+                <option value="">— all types —</option>
+                {% for t in movement_types %}
+                    <option value="{{ t }}" {% if selected_movement_type == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </form>
+
+    {% if reason_codes %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="reason-codes-table">
+                <thead>
+                    <tr>
+                        <th>Movement type</th>
+                        <th>Code</th>
+                        <th>Label</th>
+                        <th class="uc-right">Sort order</th>
+                        <th class="uc-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in reason_codes %}
+                        <tr data-testid="reason-code-row" data-reason-code-id="{{ r.id }}">
+                            <td><code>{{ r.movement_type }}</code></td>
+                            <td data-testid="reason-code-code"><code>{{ r.code }}</code></td>
+                            <td>{{ r.label }}
+                                {% if r.archived_at is not none %}
+                                    {{ c.pill("archived") }}
+                                {% endif %}
+                            </td>
+                            <td class="uc-right">{{ r.sort_order }}</td>
+                            <td class="uc-actions">
+                                <a href="/admin/reason-codes/{{ r.id }}/edit" data-testid="edit-reason-code">Edit</a>
+                                {% if r.archived_at is none %}
+                                    <form method="post" action="/admin/reason-codes/{{ r.id }}/archive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="archive-reason-code">Archive</button>
+                                    </form>
+                                {% else %}
+                                    <form method="post" action="/admin/reason-codes/{{ r.id }}/unarchive" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button type="submit" data-testid="unarchive-reason-code">Unarchive</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="reason-codes-empty">
+            {{ c.empty_state(
+                "No archived reason codes" if show == "archived" else "No reason codes yet",
+                "Migration 0042 seeded the canonical 'out' reasons (sale, customer_pickup, …). Add codes for other movement types as recurrent reasons emerge."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

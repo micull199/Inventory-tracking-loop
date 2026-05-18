@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}History — {{ stone.stone_code }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(
+        "History for " ~ stone.stone_code,
+        subtitle="Append-only stone_events ledger — every set / unset / sell / lost / returned / relocated / cert_updated / ownership_changed transition.",
+        heading_testid="stone-history-heading"
+    ) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stones" data-testid="stone-history-back">&larr; Stones</a>
+        <a class="uc-btn uc-btn--secondary" href="/admin/stones/{{ stone.id }}/edit" data-testid="stone-history-edit-link">Edit</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <div class="uc-grid-2">
+            <div>
+                <span class="uc-stat-label">Type</span>
+                <span class="uc-strong">{{ stone.stone_type.value }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Carat</span>
+                <span class="uc-strong uc-num">{{ stone.carat_weight }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Status</span>
+                <span class="uc-strong">{{ c.pill(stone.status.value) }}</span>
+            </div>
+            <div>
+                <span class="uc-stat-label">Ownership</span>
+                <span class="uc-strong">{{ stone.ownership.value }}</span>
+            </div>
+        </div>
+    {% endcall %}
+
+    <div class="uc-mt-6"></div>
+
+    {% if rows %}
+        <div class="uc-table-wrap">
+            <table class="uc-table" data-testid="stone-events-table">
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th>Event</th>
+                        <th>Actor</th>
+                        <th>From → to</th>
+                        <th>Note</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        {% set e = r.event %}
+                        <tr data-testid="stone-event-row" data-event-id="{{ e.id }}">
+                            <td class="uc-num">{{ e.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                            <td><code>{{ e.event_type }}</code></td>
+                            <td>{{ r.actor_label or "—" }}</td>
+                            <td>
+                                {# Show whichever fields changed: status, item, location. #}
+                                {% if e.from_status or e.to_status %}
+                                    <div>
+                                        status:
+                                        <code>{{ e.from_status.value if e.from_status else "—" }}</code>
+                                        →
+                                        <code>{{ e.to_status.value if e.to_status else "—" }}</code>
+                                    </div>
+                                {% endif %}
+                                {% if e.from_item_id or e.to_item_id %}
+                                    <div>
+                                        item:
+                                        {% if r.from_item_label %}
+                                            <a href="/admin/items/{{ e.from_item_id }}/detail">{{ r.from_item_label }}</a>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                        →
+                                        {% if r.to_item_label %}
+                                            <a href="/admin/items/{{ e.to_item_id }}/detail">{{ r.to_item_label }}</a>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+                                {% if e.from_location_id or e.to_location_id %}
+                                    <div>
+                                        location:
+                                        {{ r.from_location_label or "—" }}
+                                        →
+                                        {{ r.to_location_label or "—" }}
+                                    </div>
+                                {% endif %}
+                            </td>
+                            <td>{{ e.note or "" }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div data-testid="stone-events-empty">
+            {{ c.empty_state(
+                "No events recorded yet",
+                "The stone_events ledger fills in as set / unset / sell / lost / returned / relocated actions fire."
+            ) }}
+        </div>
+    {% endif %}
+{% endblock %}

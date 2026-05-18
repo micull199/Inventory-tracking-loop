@@ -2503,14 +2503,22 @@ class TestItemsListCsvHeaders:
 
 class TestItemsListCsvBody:
     def test_empty_emits_only_header_row(self, client: TestClient, db_session: Session) -> None:
+        from app.items import _items_csv_headers
+
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
         _login_as(client, u)
         resp = client.get("/admin/items?format=csv")
         assert resp.status_code == 200
-        assert resp.text == (
-            "id,sku,name,category,stage,unit,tracking_mode,current_qty,"
-            "reorder_threshold,reorder_qty,requires_checkout,unit_cost\r\n"
-        )
+        # Headers = the 12 fixed columns + one cell per ``Storage.SIDE_TABLE``
+        # catalog entry. Pull from ``_items_csv_headers`` rather than
+        # hard-coding the string so adding a new catalog entry doesn't
+        # require touching this assertion.
+        expected = ",".join(_items_csv_headers()) + "\r\n"
+        assert resp.text == expected
+        # Sanity check: the fixed 12 still lead and a known side-table
+        # entry appears in the tail.
+        assert resp.text.startswith("id,sku,name,category,stage,unit,tracking_mode")
+        assert "band_width_mm" in resp.text
 
     def test_one_item_one_data_row(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -2568,11 +2576,12 @@ class TestItemsListCsvBody:
         # The requires_checkout cell carries the literal string "yes" (not
         # "True"). Two-cell match avoids accidental hit on a substring "yes"
         # elsewhere — preceded by tracking_mode=unique and zero qty/threshold/
-        # reorder; ends with a CRLF. (Stage cell — empty here — sits between
-        # ``category`` and ``unit`` in the row layout.)
-        # ``unit_cost`` cell trails after requires_checkout; blank because
-        # no FIFO layer exists for this item yet.
-        assert ",unique,0.0000,0.0000,0.0000,yes,\r\n" in resp.text
+        # reorder, followed by an empty unit_cost cell. (Stage cell — empty
+        # here — sits between ``category`` and ``unit`` in the row layout.)
+        # Side-table catalog cells follow ``unit_cost`` (all blank here
+        # since no side rows exist), so the trailing match is just the
+        # unit_cost separator, not the line terminator.
+        assert ",unique,0.0000,0.0000,0.0000,yes,," in resp.text
 
     def test_show_filter_applies_to_csv(self, client: TestClient, db_session: Session) -> None:
         u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
@@ -3421,6 +3430,884 @@ class TestNewItemFormCategoryPicker:
         assert 'data-testid="sku-preview"' in resp.text
         # Picker script is linked.
         assert "/static/js/category-picker.js" in resp.text
+
+
+class TestSideTableCatalogFields:
+    """End-to-end coverage for the spec §9 side-table dispatcher.
+
+    Picks the sample SIDE_TABLE catalog entry ``band_width_mm`` on a leaf
+    and verifies the form input renders, the create + edit flows write
+    to ``item_ring_attrs``, clearing the value deletes the side row,
+    and bad values bounce to a 400 with an error banner.
+    """
+
+    def _pick_band_width(self, db: Session, node: TaxonomyNode) -> None:
+        db.add(
+            TaxonomyFieldDef(
+                node_id=node.id,
+                key="band_width_mm",
+                required=False,
+                sort_order=410,
+            )
+        )
+        db.commit()
+
+    def test_new_form_renders_side_table_input(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="item-band_width_mm-input"' in resp.text
+        # Decimal type → decimal-mode input, not a checkbox or select.
+        assert 'inputmode="decimal"' in resp.text
+
+    def test_create_writes_side_row(self, client: TestClient, db_session: Session) -> None:
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Solitaire",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        payload["band_width_mm"] = "2.50"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303, resp.text
+        rows = list(db_session.execute(select(ItemRingAttrs)).scalars().all())
+        assert len(rows) == 1
+        assert rows[0].band_width_mm == Decimal("2.50")
+        # Audit row records the side-table change. The audit serializer
+        # (``app.audit._to_jsonable``) doesn't have a Decimal branch, so
+        # the value lands as the repr — same posture as the existing
+        # ``current_qty`` / ``reorder_threshold`` audit cells.
+        created_audit = _audit_rows(db_session, action="item.created")[-1]
+        assert created_audit.after_json is not None
+        assert created_audit.after_json["side_tables"] == {
+            "item_ring_attrs": {"band_width_mm": "Decimal('2.50')"}
+        }
+
+    def test_create_omitted_value_writes_no_side_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Solitaire",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        # No band_width_mm in payload → blank → no side row.
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303, resp.text
+        assert db_session.execute(select(ItemRingAttrs)).first() is None
+
+    def test_update_creates_then_clears_side_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+
+        # 1) Edit: set band_width_mm = 3.00 — side row appears.
+        payload = _create_payload(
+            name=item.name,
+            taxonomy_node_id=item.taxonomy_node_id,
+            unit=item.unit,
+            tracking_mode=item.tracking_mode.value,
+            csrf=csrf,
+        )
+        payload["band_width_mm"] = "3.00"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303, resp.text
+        row = db_session.execute(select(ItemRingAttrs)).scalar_one()
+        assert row.band_width_mm == Decimal("3.00")
+
+        # 2) Edit again: clear the field — side row deletes.
+        payload["band_width_mm"] = ""
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303, resp.text
+        assert db_session.execute(select(ItemRingAttrs)).first() is None
+
+    def test_invalid_decimal_returns_400(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Solitaire",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        payload["band_width_mm"] = "not-a-number"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+        # Error banner from _re_render carries the field label.
+        assert "Band width" in resp.text
+        # No item or side row written.
+        assert db_session.execute(select(Item)).first() is None
+        assert db_session.execute(select(ItemRingAttrs)).first() is None
+
+    def test_edit_form_echoes_existing_side_row_value(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        db_session.add(
+            ItemRingAttrs(item_id=item.id, band_width_mm=Decimal("4.25"))
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'data-testid="item-band_width_mm-input"' in resp.text
+        assert 'value="4.25"' in resp.text
+
+    def test_select_and_boolean_round_trip(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SELECT + BOOLEAN SIDE_TABLE entries write through to the side row.
+
+        Picks ``band_profile`` (SELECT) and ``comfort_fit`` (BOOLEAN) on a
+        ring leaf, POSTs both via the items form, then asserts the side
+        row carries the expected enum + bool values. Covers the template's
+        select / checkbox branches and the extractor's coerce paths.
+        """
+
+        from app.models import BandProfile, ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        for key, order in (("band_profile", 412), ("comfort_fit", 414)):
+            db_session.add(
+                TaxonomyFieldDef(
+                    node_id=leaf.id, key=key, required=False, sort_order=order
+                )
+            )
+        db_session.commit()
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Court band",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        payload["band_profile"] = "court"
+        payload["comfort_fit"] = "true"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303, resp.text
+        row = db_session.execute(select(ItemRingAttrs)).scalar_one()
+        # SAEnum with values_callable round-trips the string to the enum
+        # member on read.
+        assert row.profile == BandProfile.COURT
+        assert row.comfort_fit is True
+
+    def test_select_rejects_unknown_option(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A SELECT value not in the catalog's options bounces with 400."""
+
+        from app.models import ItemRingAttrs
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        db_session.add(
+            TaxonomyFieldDef(
+                node_id=leaf.id, key="band_profile", required=False, sort_order=412
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Bad band",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        payload["band_profile"] = "definitely-not-a-profile"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 400
+        # The error message lists the valid options so the operator knows
+        # what to pick.
+        assert "Band profile" in resp.text
+        assert "court" in resp.text
+        # Item + side row stayed unwritten.
+        assert db_session.execute(select(Item)).first() is None
+        assert db_session.execute(select(ItemRingAttrs)).first() is None
+
+
+class TestFkLabelDisplayOnItemsList:
+    """When the items list renders a catalog column that's an FK
+    (supplier_id, metal_id, etc.), the cell shows a human label rather
+    than the raw integer id."""
+
+    def test_metal_id_renders_as_label(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        # Pick metal_id on the leaf so the items list adds the column.
+        db_session.add(
+            TaxonomyFieldDef(
+                node_id=leaf.id, key="metal_id", required=False, sort_order=300
+            )
+        )
+        metal = Metal(
+            metal_code="18KYG",
+            name="18ct Yellow Gold",
+            alloy_family=AlloyFamily.GOLD,
+            karat=18,
+            purity_pct=Decimal("75.000"),
+            colour=MetalColour.YELLOW,
+        )
+        db_session.add(metal)
+        db_session.commit()
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        item.metal_id = metal.id
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items?node_id={leaf.id}")
+        assert resp.status_code == 200
+        # Label shape: ``"<code> — <name>"``.
+        assert "18KYG — 18ct Yellow Gold" in resp.text
+
+
+class TestItemContextStonePicker:
+    """Inverse-of-stones-admin flow: pick an available stone from the item context.
+
+    Routes through the same ``_set_stone_into_item`` primitive (covered
+    in ``test_stones_routes.py``); these tests target the route shell +
+    redirect to the item edit form.
+    """
+
+    def test_picker_renders_available_stones(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import Stone, StoneShape, StoneStatus, StoneType
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf, sku="RING-1", name="Solitaire")
+        shape = StoneShape(name="round")
+        db_session.add(shape)
+        db_session.commit()
+        available = Stone(
+            stone_code="STN-A001",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("1.50"),
+            status=StoneStatus.AVAILABLE,
+        )
+        already_set = Stone(
+            stone_code="STN-B002",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("0.20"),
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        db_session.add_all([available, already_set])
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/stones/new")
+        assert resp.status_code == 200
+        assert 'data-testid="item-set-stone-form"' in resp.text
+        # The available stone is offered; the already-set one is excluded.
+        assert "STN-A001" in resp.text
+        assert "STN-B002" not in resp.text
+
+    def test_post_sets_stone_into_item(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemStone, Stone, StoneShape, StoneStatus, StoneType
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf, sku="RING-1", name="Solitaire")
+        shape = StoneShape(name="round")
+        db_session.add(shape)
+        db_session.commit()
+        stone = Stone(
+            stone_code="STN-A001",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("1.50"),
+        )
+        db_session.add(stone)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}/stones",
+            data={
+                "stone_id": str(stone.id),
+                "position": "centre",
+                "position_index": "0",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, resp.text
+        # Redirects back to the item edit form (not the stones admin).
+        assert resp.headers["location"] == f"/admin/items/{item.id}/edit"
+        db_session.expire_all()
+        link = db_session.execute(select(ItemStone)).scalar_one()
+        assert link.item_id == item.id
+        assert link.stone_id == stone.id
+        db_session.refresh(stone)
+        assert stone.status is StoneStatus.SET
+        assert stone.current_item_id == item.id
+
+    def test_post_archived_item_is_404(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session)
+        item = _existing_item(db_session, leaf, sku="RING-1", name="Solitaire")
+        item.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.post(
+            f"/admin/items/{item.id}/stones",
+            data={
+                "stone_id": "1",
+                "position": "centre",
+                "csrf_token": _csrf(client),
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 404
+
+
+class TestStoneAndMetalItemFields:
+    """End-to-end coverage for the S1 melee + S2 metal fields on the items form.
+
+    Picks the catalog entries on a leaf and verifies:
+    - Inputs render for melee_count / melee_total_ct / melee_stone_type +
+      metal_id / secondary_metal_id (a select).
+    - centre_stone_id renders read-only with a "stones admin" link
+      (single mutation pathway per spec §1.5).
+    - Round-trip writes to the columns + derives
+      ``total_carat_weight`` from melee + ``pure_metal_weight_g`` from
+      ``weight_grams * metal.purity_pct``.
+    """
+
+    def _pick(self, db: Session, node: TaxonomyNode, key: str, order: int = 0) -> None:
+        db.add(
+            TaxonomyFieldDef(node_id=node.id, key=key, required=False, sort_order=order)
+        )
+        db.commit()
+
+    def test_melee_inputs_render(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick(db_session, leaf, "melee_count")
+        self._pick(db_session, leaf, "melee_total_ct")
+        self._pick(db_session, leaf, "melee_stone_type")
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="item-melee-count-input"' in resp.text
+        assert 'data-testid="item-melee-total-ct-input"' in resp.text
+        assert 'data-testid="item-melee-stone-type-input"' in resp.text
+
+    def test_inline_linked_stones_table_renders(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Items form shows the full set of stones set into this item — code,
+        position, carat, unset button — replacing the older single-id
+        readonly placeholder."""
+        from app.models import ItemStone, Stone, StonePosition, StoneShape, StoneStatus, StoneType
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick(db_session, leaf, "centre_stone_id")
+        shape = StoneShape(name="round")
+        db_session.add(shape)
+        db_session.commit()
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        centre = Stone(
+            stone_code="STN-000001",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("1.50"),
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        accent = Stone(
+            stone_code="STN-000002",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("0.10"),
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        db_session.add_all([centre, accent])
+        db_session.commit()
+        db_session.add_all(
+            [
+                ItemStone(item_id=item.id, stone_id=centre.id, position=StonePosition.CENTRE),
+                ItemStone(
+                    item_id=item.id, stone_id=accent.id,
+                    position=StonePosition.ACCENT_LEFT,
+                ),
+            ]
+        )
+        item.centre_stone_id = centre.id
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        # The new table replaces the old single-id placeholder.
+        assert 'data-testid="item-linked-stones-table"' in resp.text
+        # Both stone codes appear as rows.
+        assert "STN-000001" in resp.text
+        assert "STN-000002" in resp.text
+        # Per-row Unset buttons render (one per stone).
+        assert resp.text.count('data-testid="unset-linked-stone"') >= 2
+        # The stones-admin link still surfaces.
+        assert 'data-testid="link-stones-admin"' in resp.text
+        # No editable centre_stone_id input — single mutation pathway.
+        assert 'name="centre_stone_id"' not in resp.text
+
+    def test_empty_state_for_unset_stones_field(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick(db_session, leaf, "centre_stone_id")
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/{item.id}/edit")
+        assert resp.status_code == 200
+        assert 'data-testid="item-no-linked-stones"' in resp.text
+
+    def test_metal_select_renders_with_options(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick(db_session, leaf, "metal_id")
+        db_session.add(
+            Metal(
+                metal_code="18KYG",
+                name="18ct Yellow Gold",
+                alloy_family=AlloyFamily.GOLD,
+                karat=18,
+                purity_pct=Decimal("75.000"),
+                colour=MetalColour.YELLOW,
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get(f"/admin/items/new?node_id={leaf.id}")
+        assert resp.status_code == 200
+        assert 'data-testid="item-metal-input"' in resp.text
+        # The metal label appears in an option.
+        assert "18KYG" in resp.text
+
+    def test_create_writes_melee_and_metal(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        # ``weight_grams`` is in BUILT_IN_FIELDS, so an unpicked leaf
+        # forces it hidden (and the form ignores any incoming value).
+        # Pick it explicitly so the derived pure_metal_weight_g
+        # calculation has a non-NULL weight to multiply against.
+        self._pick(db_session, leaf, "weight_grams")
+        metal = Metal(
+            metal_code="18KYG",
+            name="18ct Yellow Gold",
+            alloy_family=AlloyFamily.GOLD,
+            karat=18,
+            purity_pct=Decimal("75.000"),
+            colour=MetalColour.YELLOW,
+        )
+        db_session.add(metal)
+        db_session.commit()
+        db_session.refresh(metal)
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        payload = _create_payload(
+            name="Solitaire",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode="unique",
+            csrf=csrf,
+        )
+        payload["melee_count"] = "12"
+        payload["melee_total_ct"] = "0.40"
+        payload["melee_stone_type"] = "diamond"
+        payload["metal_id"] = str(metal.id)
+        payload["weight_grams"] = "4.000"
+        resp = client.post("/admin/items", data=payload, follow_redirects=False)
+        assert resp.status_code == 303, resp.text
+        item = db_session.execute(select(Item)).scalar_one()
+        assert item.melee_count == 12
+        assert item.melee_total_ct == Decimal("0.4000")
+        assert item.melee_stone_type == "diamond"
+        assert item.metal_id == metal.id
+        # Derived: total_carat_weight starts at the melee total (no tracked
+        # stones set yet on a fresh item).
+        assert item.total_carat_weight == Decimal("0.4000")
+        # Derived: pure_metal_weight_g = 4.0g * 75.0% = 3.0000g
+        assert item.pure_metal_weight_g == Decimal("3.0000")
+
+    def test_update_recomputes_pure_metal_weight(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick(db_session, leaf, "weight_grams")
+        metal = Metal(
+            metal_code="18KYG",
+            name="18ct Yellow Gold",
+            alloy_family=AlloyFamily.GOLD,
+            karat=18,
+            purity_pct=Decimal("75.000"),
+            colour=MetalColour.YELLOW,
+        )
+        db_session.add(metal)
+        db_session.commit()
+        db_session.refresh(metal)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        item.metal_id = metal.id
+        item.weight_grams = Decimal("4.000")
+        item.pure_metal_weight_g = Decimal("3.0000")
+        db_session.commit()
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        # Edit the weight only — pure_metal_weight_g must follow.
+        payload = _create_payload(
+            name=item.name,
+            taxonomy_node_id=item.taxonomy_node_id,
+            unit=item.unit,
+            tracking_mode=item.tracking_mode.value,
+            csrf=csrf,
+        )
+        payload["metal_id"] = str(metal.id)
+        payload["weight_grams"] = "8.000"
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303, resp.text
+        db_session.refresh(item)
+        assert item.weight_grams == Decimal("8.000")
+        # 8g * 75% = 6.0000g
+        assert item.pure_metal_weight_g == Decimal("6.0000")
+
+    def test_update_archived_metal_preserved(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        metal = Metal(
+            metal_code="18KYG",
+            name="18ct Yellow Gold",
+            alloy_family=AlloyFamily.GOLD,
+            karat=18,
+            purity_pct=Decimal("75.000"),
+            colour=MetalColour.YELLOW,
+        )
+        db_session.add(metal)
+        db_session.commit()
+        db_session.refresh(metal)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        item.metal_id = metal.id
+        db_session.commit()
+        # Archive the metal after the item already references it.
+        metal.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        csrf = _csrf(client)
+        # Edit some other field but keep metal_id pointing at the archived row.
+        payload = _create_payload(
+            name="Renamed solitaire",
+            taxonomy_node_id=item.taxonomy_node_id,
+            unit=item.unit,
+            tracking_mode=item.tracking_mode.value,
+            csrf=csrf,
+        )
+        payload["metal_id"] = str(metal.id)
+        resp = client.post(
+            f"/admin/items/{item.id}", data=payload, follow_redirects=False
+        )
+        assert resp.status_code == 303
+        db_session.refresh(item)
+        assert item.metal_id == metal.id
+        assert item.name == "Renamed solitaire"
+
+
+class TestSideTableCsvRoundTrip:
+    """CSV export + import path for ``Storage.SIDE_TABLE`` catalog fields.
+
+    Exports include one column per side-table catalog key after the
+    fixed-header set; imports accept the same keys and dispatch through
+    the dispatcher's extractor + writer. Round-trip preserves side-row
+    data without operator intervention.
+    """
+
+    def _pick_band_width(self, db: Session, node: TaxonomyNode) -> None:
+        db.add(
+            TaxonomyFieldDef(
+                node_id=node.id, key="band_width_mm", required=False, sort_order=410
+            )
+        )
+        db.commit()
+
+    def _post_upload(
+        self, client: TestClient, csv_bytes: bytes | str, *, dry_run: bool = False
+    ) -> object:
+        return client.post(
+            "/admin/items/upload",
+            files={"file": ("items.csv", csv_bytes, "text/csv")},
+            data={"csrf_token": _csrf(client), "dry_run": "1" if dry_run else ""},
+            follow_redirects=False,
+        )
+
+    def test_export_includes_side_table_cell(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        db_session.add(
+            ItemRingAttrs(item_id=item.id, band_width_mm=Decimal("2.5"))
+        )
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        # Header carries the side-table column name.
+        first_line = resp.text.split("\r\n", 1)[0]
+        assert "band_width_mm" in first_line.split(",")
+        # The export's cell value is the row's side_row band_width_mm.
+        # Numeric(6,2) → "2.50" string form.
+        assert ",2.50," in resp.text
+
+    def test_upload_writes_side_row(self, client: TestClient, db_session: Session) -> None:
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, u)
+        csv_body = (
+            "name,category,unit,band_width_mm\r\n"
+            "Solitaire,Rings,ea,2.75\r\n"
+        )
+        resp = self._post_upload(client, csv_body, dry_run=False)
+        assert resp.status_code in (200, 303), resp.text  # 303 redirect or 200 preview
+        new_item = db_session.execute(select(Item)).scalar_one()
+        side = db_session.execute(select(ItemRingAttrs)).scalar_one()
+        assert side.item_id == new_item.id
+        assert side.band_width_mm == Decimal("2.75")
+
+    def test_upload_bad_decimal_marks_row_error(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        _login_as(client, u)
+        csv_body = (
+            "name,category,unit,band_width_mm\r\n"
+            "Bad,Rings,ea,not-a-number\r\n"
+        )
+        resp = self._post_upload(client, csv_body, dry_run=False)
+        # Row-level error keeps us on the preview page (200) and writes
+        # nothing.
+        assert resp.status_code == 200
+        assert "Band width" in resp.text  # error label surfaces
+        assert db_session.execute(select(Item)).first() is None
+        assert db_session.execute(select(ItemRingAttrs)).first() is None
+
+    def test_filter_by_side_table_decimal_match(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """``?band_width_mm=2.50`` filters the items list via the side-table join.
+
+        Two items, one with the matching side row + one without; the
+        list response carries only the matching SKU.
+        """
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        match_item = _existing_item(
+            db_session, leaf, sku="RIN-MATCH", name="Match"
+        )
+        miss_item = _existing_item(db_session, leaf, sku="RIN-MISS", name="Miss")
+        db_session.add(
+            ItemRingAttrs(item_id=match_item.id, band_width_mm=Decimal("2.50"))
+        )
+        db_session.add(
+            ItemRingAttrs(item_id=miss_item.id, band_width_mm=Decimal("3.00"))
+        )
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get(
+            f"/admin/items?node_id={leaf.id}&band_width_mm=2.50"
+        )
+        assert resp.status_code == 200
+        assert "RIN-MATCH" in resp.text
+        assert "RIN-MISS" not in resp.text
+
+    def test_filter_by_side_table_select(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """SELECT filter via the side-table join (``band_profile=court``)."""
+
+        from app.models import BandProfile, ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        db_session.add(
+            TaxonomyFieldDef(
+                node_id=leaf.id, key="band_profile", required=False, sort_order=412
+            )
+        )
+        db_session.commit()
+        court_item = _existing_item(db_session, leaf, sku="RIN-COURT", name="Court")
+        flat_item = _existing_item(db_session, leaf, sku="RIN-FLAT", name="Flat")
+        db_session.add(
+            ItemRingAttrs(item_id=court_item.id, profile=BandProfile.COURT)
+        )
+        db_session.add(
+            ItemRingAttrs(item_id=flat_item.id, profile=BandProfile.FLAT)
+        )
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get(f"/admin/items?node_id={leaf.id}&band_profile=court")
+        assert resp.status_code == 200
+        assert "RIN-COURT" in resp.text
+        assert "RIN-FLAT" not in resp.text
+
+    def test_filter_excludes_items_without_side_row(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """A side-table filter never matches items lacking a side row.
+
+        Operator's expectation: "where X = Y" implies the row has a value
+        for X. The LEFT JOIN means missing rows surface as NULL in the
+        side column, and ``col == value`` rejects NULL → those items get
+        filtered out (which is the desired UX).
+        """
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        with_side = _existing_item(
+            db_session, leaf, sku="RIN-HAS-SIDE", name="HasSide"
+        )
+        no_side = _existing_item(  # noqa: F841 — assertion is on its non-appearance
+            db_session, leaf, sku="RIN-NO-SIDE", name="NoSide"
+        )
+        db_session.add(
+            ItemRingAttrs(item_id=with_side.id, band_width_mm=Decimal("2.50"))
+        )
+        db_session.commit()
+        _login_as(client, u)
+        resp = client.get(
+            f"/admin/items?node_id={leaf.id}&band_width_mm=2.50"
+        )
+        assert resp.status_code == 200
+        assert "RIN-HAS-SIDE" in resp.text
+        assert "RIN-NO-SIDE" not in resp.text
+
+    def test_round_trip_via_export_then_upload(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        """Export a side-table-populated item, re-import the CSV, side row survives.
+
+        Establishes the round-trip contract — export → import preserves
+        side-table data with no manual editing.
+        """
+        from app.models import ItemRingAttrs
+
+        u = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_leaf(db_session, "Rings")
+        self._pick_band_width(db_session, leaf)
+        item = _existing_item(db_session, leaf, sku="RIN-001", name="Solitaire")
+        db_session.add(
+            ItemRingAttrs(item_id=item.id, band_width_mm=Decimal("3.25"))
+        )
+        db_session.commit()
+        _login_as(client, u)
+
+        # Export
+        resp = client.get("/admin/items?format=csv")
+        assert resp.status_code == 200
+        csv_text = resp.text
+
+        # Replay the same CSV: every row carries an ``id`` that matches
+        # an existing item, so the importer either skips (no diff) or
+        # applies a no-op update. The side row stays put either way.
+        replay = self._post_upload(client, csv_text, dry_run=False)
+        assert replay.status_code in (200, 303)
+        # The side row's value is unchanged.
+        db_session.expire_all()
+        side = db_session.execute(select(ItemRingAttrs)).scalar_one()
+        assert side.band_width_mm == Decimal("3.25")
 
 
 

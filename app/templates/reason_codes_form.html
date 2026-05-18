@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/reason-codes">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="reason-code-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="movement_type">Movement type <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="movement_type" name="movement_type" required data-testid="reason-code-type-input">
+                            {% for t in movement_types %}
+                                <option value="{{ t }}" {% if form.movement_type == t %}selected{% endif %}>{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                        <small class="uc-helper">Scopes the code so e.g. <code>sale</code> on <code>out</code> doesn't clash with <code>sale</code> on <code>in</code>.</small>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="code">Code <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" id="code" name="code" required
+                               value="{{ form.code }}"
+                               data-testid="reason-code-code-input"
+                               maxlength="32"
+                               placeholder="e.g. sale, customer_pickup">
+                        <small class="uc-helper">Stored lowercase. Unique within movement type.</small>
+                    </div>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="label">Label <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="label" name="label" required
+                           value="{{ form.label }}"
+                           data-testid="reason-code-label-input"
+                           maxlength="128"
+                           placeholder='e.g. "Sale", "Customer pickup"'>
+                    <small class="uc-helper">Human-readable label for select controls.</small>
+                </div>
+
+                <div class="uc-field">
+                    <label class="uc-label" for="sort_order">Sort order</label>
+                    <input class="uc-input" type="number" step="1" id="sort_order" name="sort_order"
+                           value="{{ form.sort_order }}"
+                           data-testid="reason-code-sort-input">
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="reason-code-submit">
+                    {% if reason_code %}Save changes{% else %}Create reason code{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/reason-codes">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

@@ -15,19 +15,25 @@ from app import audit_routes as audit_routes_module
 from app import checkouts as checkouts_module
 from app import checkouts_admin as checkouts_admin_module
 from app import dashboard as dashboard_module
+from app import designs as designs_module
 from app import field_defs as field_defs_module
 from app import item_units as item_units_module
 from app import items as items_module
 from app import locations as locations_module
+from app import metals as metals_module
 from app import movements as movements_module
 from app import purchase_orders as purchase_orders_module
+from app import reason_codes as reason_codes_module
 from app import reorder as reorder_module
 from app import reports as reports_module
 from app import scan as scan_module
 from app import stock_takes as stock_takes_module
+from app import stone_shapes as stone_shapes_module
+from app import stones as stones_module
 from app import suppliers as suppliers_module
 from app import taxonomy as taxonomy_module
 from app import transfers as transfers_module
+from app import units as units_module
 from app.audit import record_audit
 from app.auth import get_current_user, require_role
 from app.auth import router as auth_router
@@ -97,6 +103,13 @@ app.include_router(reports_module.router)
 app.include_router(scan_module.router)
 app.include_router(audit_routes_module.router)
 app.include_router(transfers_module.router)
+app.include_router(stone_shapes_module.router)
+app.include_router(stones_module.router)
+app.include_router(designs_module.router)
+app.include_router(metals_module.router)
+app.include_router(metals_module.prices_router)
+app.include_router(units_module.router)
+app.include_router(reason_codes_module.router)
 
 if settings.oauth_stub_mode:
     from app import oauth_test_stub as oauth_test_stub_module

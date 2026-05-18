@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/units">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="unit-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="code">Code <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="code" name="code" required
+                           value="{{ form.code }}"
+                           data-testid="unit-code-input"
+                           maxlength="16"
+                           placeholder="e.g. ea, g, ct, pair">
+                    <small class="uc-helper">Stored lowercase. Unique across active + archived.</small>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="name">Name <span class="uc-required" aria-hidden="true">*</span></label>
+                    <input class="uc-input" type="text" id="name" name="name" required
+                           value="{{ form.name }}"
+                           data-testid="unit-name-input"
+                           maxlength="64"
+                           placeholder='e.g. "each", "gram", "carat"'>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="sort_order">Sort order</label>
+                    <input class="uc-input" type="number" step="1" id="sort_order" name="sort_order"
+                           value="{{ form.sort_order }}"
+                           data-testid="unit-sort-input">
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="unit-submit">
+                    {% if unit %}Save changes{% else %}Create unit{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/units">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}

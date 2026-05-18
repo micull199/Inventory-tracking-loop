@@ -126,6 +126,76 @@ ROUTES: list[tuple[str, str, str]] = [
     # CSV upload (bulk create) — Manager-only.
     ("GET", "/admin/locations/upload", MANAGER),
     ("POST", "/admin/locations/upload", MANAGER),
+    # --- Manager-only: stone shapes (S1 admin CRUD) ---
+    ("GET", "/admin/stone-shapes", MANAGER),
+    ("GET", "/admin/stone-shapes/new", MANAGER),
+    ("POST", "/admin/stone-shapes", MANAGER),
+    ("GET", "/admin/stone-shapes/99999/edit", MANAGER),
+    ("POST", "/admin/stone-shapes/99999", MANAGER),
+    ("POST", "/admin/stone-shapes/99999/archive", MANAGER),
+    ("POST", "/admin/stone-shapes/99999/unarchive", MANAGER),
+    # --- Manager-only: designs (S3 modified, ADR-003) ---
+    # CRUD + archive UX. items.design_id FK + backfill + design picker
+    # still held for the ADR-003 follow-up signal.
+    ("GET", "/admin/designs", MANAGER),
+    ("GET", "/admin/designs/new", MANAGER),
+    ("POST", "/admin/designs", MANAGER),
+    ("GET", "/admin/designs/99999/edit", MANAGER),
+    ("POST", "/admin/designs/99999", MANAGER),
+    ("POST", "/admin/designs/99999/archive", MANAGER),
+    ("POST", "/admin/designs/99999/unarchive", MANAGER),
+    # --- Manager-only: metals (S2 admin CRUD) ---
+    ("GET", "/admin/metals", MANAGER),
+    ("GET", "/admin/metals/new", MANAGER),
+    ("POST", "/admin/metals", MANAGER),
+    ("GET", "/admin/metals/99999/edit", MANAGER),
+    ("POST", "/admin/metals/99999", MANAGER),
+    ("POST", "/admin/metals/99999/archive", MANAGER),
+    ("POST", "/admin/metals/99999/unarchive", MANAGER),
+    # --- Manager-only: metal-prices (spec §2.2 v1 path) ---
+    ("GET", "/admin/metal-prices", MANAGER),
+    ("GET", "/admin/metal-prices/new", MANAGER),
+    ("POST", "/admin/metal-prices", MANAGER),
+    ("GET", "/admin/metal-prices/99999/edit", MANAGER),
+    ("POST", "/admin/metal-prices/99999", MANAGER),
+    # --- Manager-only: units (S5 admin CRUD) ---
+    ("GET", "/admin/units", MANAGER),
+    ("GET", "/admin/units/new", MANAGER),
+    ("POST", "/admin/units", MANAGER),
+    ("GET", "/admin/units/99999/edit", MANAGER),
+    ("POST", "/admin/units/99999", MANAGER),
+    ("POST", "/admin/units/99999/archive", MANAGER),
+    ("POST", "/admin/units/99999/unarchive", MANAGER),
+    # --- Manager-only: reason codes (S5 admin CRUD) ---
+    ("GET", "/admin/reason-codes", MANAGER),
+    ("GET", "/admin/reason-codes/new", MANAGER),
+    ("POST", "/admin/reason-codes", MANAGER),
+    ("GET", "/admin/reason-codes/99999/edit", MANAGER),
+    ("POST", "/admin/reason-codes/99999", MANAGER),
+    ("POST", "/admin/reason-codes/99999/archive", MANAGER),
+    ("POST", "/admin/reason-codes/99999/unarchive", MANAGER),
+    # --- Manager-only: item-context stone picker ---
+    ("GET", "/admin/items/99999/stones/new", MANAGER),
+    ("POST", "/admin/items/99999/stones", MANAGER),
+    # --- Manager-only: stones (S1 admin CRUD + lifecycle + history) ---
+    ("GET", "/admin/stones", MANAGER),
+    ("GET", "/admin/stones/new", MANAGER),
+    ("POST", "/admin/stones", MANAGER),
+    ("GET", "/admin/stones/99999/edit", MANAGER),
+    ("POST", "/admin/stones/99999", MANAGER),
+    ("GET", "/admin/stones/99999/history", MANAGER),
+    # Lifecycle action routes — paired GET form + POST mutation.
+    ("GET", "/admin/stones/99999/set", MANAGER),
+    ("POST", "/admin/stones/99999/set", MANAGER),
+    ("POST", "/admin/stones/99999/unset", MANAGER),
+    ("GET", "/admin/stones/99999/sell", MANAGER),
+    ("POST", "/admin/stones/99999/sell", MANAGER),
+    ("GET", "/admin/stones/99999/lost", MANAGER),
+    ("POST", "/admin/stones/99999/lost", MANAGER),
+    ("GET", "/admin/stones/99999/return", MANAGER),
+    ("POST", "/admin/stones/99999/return", MANAGER),
+    ("GET", "/admin/stones/99999/relocate", MANAGER),
+    ("POST", "/admin/stones/99999/relocate", MANAGER),
     # --- Manager-only: taxonomy (top-level + sub + field defs) ---
     ("GET", "/admin/taxonomy", MANAGER),
     ("GET", "/admin/taxonomy/new", MANAGER),
@@ -202,6 +272,10 @@ ROUTES: list[tuple[str, str, str]] = [
     ("GET", "/admin/reorder", OFFICE),
     ("POST", "/admin/reorder/draft-po", OFFICE),
     ("GET", "/admin/reports/variance-trend", OFFICE),
+    # Spec §10.3 Strategy A — loaded vs owned cost summary.
+    ("GET", "/admin/reports/stone-cost-per-ring", OFFICE),
+    # S2 — pure-metal pool reconciliation.
+    ("GET", "/admin/reports/metal-pool", OFFICE),
     ("GET", "/admin/checkouts", OFFICE),
     # --- Manager + Office: purchase orders ---
     ("GET", "/admin/purchase-orders", OFFICE),

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -668,3 +669,276 @@ class TestVarianceTrendCsvLink:
         # The link's href preserves the active ``days``.
         assert "format=csv" in resp.text
         assert "days=45" in resp.text
+
+
+class TestStoneCostPerRing:
+    """Spec §10.3 Strategy A — the loaded vs owned cost report."""
+
+    def test_empty_state(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/stone-cost-per-ring")
+        assert resp.status_code == 200
+        assert 'data-testid="stone-cost-empty"' in resp.text
+
+    def test_renders_with_loaded_owned_split(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import (
+            Archetype,
+            ItemStone,
+            Stone,
+            StoneOwnership,
+            StonePosition,
+            StoneShape,
+            StoneStatus,
+            StoneType,
+        )
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        node = TaxonomyNode(
+            name="Rings", sku_prefix="RNG", archetype=Archetype.UNIQUE
+        )
+        db_session.add(node)
+        db_session.commit()
+        item = Item(
+            sku="RNG-0001",
+            name="Solitaire",
+            taxonomy_node_id=node.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+        )
+        db_session.add(item)
+        db_session.commit()
+        shape = StoneShape(name="round")
+        db_session.add(shape)
+        db_session.commit()
+        owned = Stone(
+            stone_code="STN-OWN",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("1.00"),
+            acquisition_cost=Decimal("1000.00"),
+            ownership=StoneOwnership.OWNED,
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        memo = Stone(
+            stone_code="STN-MEM",
+            stone_type=StoneType.DIAMOND,
+            shape_id=shape.id,
+            carat_weight=Decimal("0.20"),
+            acquisition_cost=Decimal("250.00"),
+            ownership=StoneOwnership.MEMO,
+            status=StoneStatus.SET,
+            current_item_id=item.id,
+        )
+        db_session.add_all([owned, memo])
+        db_session.commit()
+        db_session.add_all(
+            [
+                ItemStone(
+                    item_id=item.id, stone_id=owned.id,
+                    position=StonePosition.CENTRE,
+                ),
+                ItemStone(
+                    item_id=item.id, stone_id=memo.id,
+                    position=StonePosition.ACCENT_LEFT,
+                ),
+            ]
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/stone-cost-per-ring")
+        assert resp.status_code == 200
+        assert 'data-testid="stone-cost-table"' in resp.text
+        # Loaded includes BOTH stones (1000 + 250); owned excludes memo.
+        assert "1250" in resp.text
+        # Per-row testids cover both values for spot-checks.
+        assert 'data-testid="loaded-cost"' in resp.text
+        assert 'data-testid="owned-cost"' in resp.text
+
+    def test_csv_branch(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/stone-cost-per-ring?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+        first_line = resp.text.split("\r\n", 1)[0]
+        assert "loaded_cost" in first_line
+        assert "owned_cost" in first_line
+
+
+class TestMetalPool:
+    """S2 metal-pool reconciliation. Per-metal pure-weight aggregate
+    multiplied by the latest spot price. Stale (>7 days) or missing
+    prices flagged so operators know to enter a fresh fixing.
+    """
+
+    def _make_metal(
+        self,
+        db: Session,
+        *,
+        code: str = "18KYG",
+        karat: int = 18,
+        purity: str = "75.000",
+    ) -> Any:
+        # Return type is ``app.models.Metal`` — imported inside the
+        # body to keep test-class scaffolding lazy and avoid circular
+        # imports during model registration. Returning ``Any`` rather
+        # than the string annotation keeps mypy + ruff happy.
+        from app.models import AlloyFamily, Metal, MetalColour
+
+        metal = Metal(
+            metal_code=code,
+            name=f"Test {code}",
+            alloy_family=AlloyFamily.GOLD,
+            karat=karat,
+            purity_pct=Decimal(purity),
+            colour=MetalColour.YELLOW,
+        )
+        db.add(metal)
+        db.commit()
+        db.refresh(metal)
+        return metal
+
+    def _make_item_with_metal(
+        self,
+        db: Session,
+        *,
+        leaf: TaxonomyNode,
+        metal_id: int,
+        sku: str,
+        pure_weight: Decimal,
+    ) -> Item:
+        item = Item(
+            sku=sku,
+            name="Gold ring",
+            taxonomy_node_id=leaf.id,
+            unit="ea",
+            tracking_mode=TrackingMode.UNIQUE,
+            metal_id=metal_id,
+            pure_metal_weight_g=pure_weight,
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return item
+
+    def test_empty_state(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool")
+        assert resp.status_code == 200
+        assert 'data-testid="metal-pool-empty"' in resp.text
+
+    def test_populated_with_fresh_price(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import MetalSpotPrice
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        metal = self._make_metal(db_session)
+        # Two items, 5g + 3g pure → 8g total at $100/g = $800.
+        self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-1", pure_weight=Decimal("5.0000"),
+        )
+        self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-2", pure_weight=Decimal("3.0000"),
+        )
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).date()
+        db_session.add(
+            MetalSpotPrice(
+                metal_id=metal.id,
+                as_of_date=yesterday,
+                price_per_gram=Decimal("100.000000"),
+                source="manual",
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool")
+        assert resp.status_code == 200
+        assert 'data-testid="metal-pool-table"' in resp.text
+        assert "800" in resp.text
+        # Fresh price → no stale chip on the row.
+        assert 'pill">stale<' not in resp.text
+
+    def test_stale_price_flagged(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        from app.models import MetalSpotPrice
+
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        metal = self._make_metal(db_session)
+        self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-1", pure_weight=Decimal("5.0000"),
+        )
+        old = (datetime.now(UTC) - timedelta(days=30)).date()
+        db_session.add(
+            MetalSpotPrice(
+                metal_id=metal.id,
+                as_of_date=old,
+                price_per_gram=Decimal("100.0"),
+                source="manual",
+            )
+        )
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool")
+        assert resp.status_code == 200
+        assert ">stale<" in resp.text
+
+    def test_no_price_flagged(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        metal = self._make_metal(db_session)
+        self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-1", pure_weight=Decimal("5.0000"),
+        )
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool")
+        assert resp.status_code == 200
+        assert ">no price<" in resp.text
+        assert 'data-testid="metal-pool-estimated-value"' in resp.text
+
+    def test_archived_items_excluded(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        leaf = _make_node(db_session)
+        metal = self._make_metal(db_session)
+        self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-ACTIVE", pure_weight=Decimal("5.0000"),
+        )
+        archived = self._make_item_with_metal(
+            db_session, leaf=leaf, metal_id=metal.id,
+            sku="GR-ARCHIVED", pure_weight=Decimal("99.0000"),
+        )
+        archived.archived_at = datetime(2026, 1, 1, tzinfo=UTC)
+        db_session.commit()
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool")
+        assert resp.status_code == 200
+        # Active 5g shows up; archived 99g doesn't contribute to the pool.
+        assert "5.0000" in resp.text
+        assert "99.0000" not in resp.text
+
+    def test_csv_branch(self, client: TestClient, db_session: Session) -> None:
+        mgr = _make_user(db_session, email="m@x.test", role=Role.MANAGER)
+        _login_as(client, mgr)
+        resp = client.get("/admin/reports/metal-pool?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+        first_line = resp.text.split("\r\n", 1)[0]
+        assert "estimated_value" in first_line
+        assert "days_since_price" in first_line

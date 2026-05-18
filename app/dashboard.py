@@ -169,6 +169,50 @@ def _low_stock_count(db: Session) -> int:
     return int(db.execute(stmt).scalar_one())
 
 
+def _memo_stones_due_soon(
+    db: Session, *, window_days: int = 30
+) -> list[dict[str, Any]]:
+    """Return memo / consignment stones whose ``memo_due_date`` is within
+    ``window_days`` of today (or already past).
+
+    Memo stones belong to the supplier until paid for; missing a memo
+    deadline means either paying for the stone or returning it. Surface
+    them on the dashboard so the manager can act before the supplier
+    chases. Past-due rows come first (negative ``days_remaining``).
+    """
+    from app.models import Stone, StoneOwnership
+
+    today = datetime.now(UTC).date()
+    cutoff = today + timedelta(days=window_days)
+    stmt = (
+        select(Stone)
+        .where(Stone.archived_at.is_(None))
+        .where(
+            Stone.ownership.in_(
+                (StoneOwnership.MEMO, StoneOwnership.CONSIGNMENT)
+            )
+        )
+        .where(Stone.memo_due_date.is_not(None))
+        .where(Stone.memo_due_date <= cutoff)
+        .order_by(Stone.memo_due_date)
+    )
+    rows = list(db.execute(stmt).scalars().all())
+    return [
+        {
+            "id": s.id,
+            "stone_code": s.stone_code,
+            "carat_weight": s.carat_weight,
+            "ownership": s.ownership.value,
+            "due_date": s.memo_due_date,
+            "days_remaining": (s.memo_due_date - today).days
+            if s.memo_due_date
+            else None,
+            "is_overdue": s.memo_due_date is not None and s.memo_due_date < today,
+        }
+        for s in rows
+    ]
+
+
 def _open_pos_count(db: Session) -> int:
     """Count POs with status in (draft, sent, in_transit, partially_received)."""
     stmt = select(func.count(PurchaseOrder.id)).where(PurchaseOrder.status.in_(_OPEN_PO_STATUSES))
@@ -289,5 +333,6 @@ def dashboard(
             "cogs_amount": _cogs(db, start=cogs_start, end=cogs_end),
             "cogs_start": cogs_start.isoformat(),
             "cogs_end": cogs_end.isoformat(),
+            "memo_stones_due": _memo_stones_due_soon(db),
         },
     )

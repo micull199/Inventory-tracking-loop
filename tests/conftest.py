@@ -76,6 +76,31 @@ def _make_test_engine(url: str) -> Engine:
     return create_engine(url, future=True)
 
 
+def _seed_required_sequence_counters(engine: Engine) -> None:
+    """Seed ``sequence_counters`` rows the migrations would normally insert.
+
+    ``Base.metadata.create_all`` builds the table shape but doesn't run the
+    bulk_insert statements that live inside migrations 0026 (``stone_code``)
+    and 0044 (``design_code``). Any test that exercises an allocator-backed
+    route (``allocate_stone_code``, ``allocate_design_code``) would otherwise
+    raise ``RuntimeError: counter row missing``. Seeding here keeps the
+    fixture's "schema-only" approach intact while papering over the data
+    that migrations add as part of table creation.
+    """
+    from sqlalchemy import text as _text
+
+    with engine.begin() as conn:
+        for name in ("stone_code", "design_code"):
+            conn.execute(
+                _text(
+                    "INSERT INTO sequence_counters (name, next_value) "
+                    "SELECT :name, 1 WHERE NOT EXISTS "
+                    "(SELECT 1 FROM sequence_counters WHERE name = :name)"
+                ),
+                {"name": name},
+            )
+
+
 @contextmanager
 def _make_isolated_session(engine: Engine) -> Iterator[Session]:
     """Yield a session whose writes never escape an outer transaction.
@@ -93,6 +118,7 @@ def _make_isolated_session(engine: Engine) -> Iterator[Session]:
     engines can drive validation tests without needing a running Postgres.
     """
     Base.metadata.create_all(engine)
+    _seed_required_sequence_counters(engine)
     connection = engine.connect()
     transaction = connection.begin()
     SessionLocal = sessionmaker(
@@ -126,6 +152,7 @@ def db_session() -> Iterator[Session]:
     engine = _make_test_engine(url)
     if url.startswith("sqlite"):
         Base.metadata.create_all(engine)
+        _seed_required_sequence_counters(engine)
         SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
         with SessionLocal() as session:
             yield session

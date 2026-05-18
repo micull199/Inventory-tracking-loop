@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% import "_components.html" as c %}
+{% block title %}{{ title }} — UC Inventory{% endblock %}
+{% block content %}
+    {% call c.page_header(title) %}
+        <a class="uc-btn uc-btn--ghost" href="/admin/stones">&larr; Back</a>
+    {% endcall %}
+
+    {% call c.card() %}
+        <form method="post" action="{{ action }}" data-testid="stone-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            {% if stone %}
+                <section class="uc-section">
+                    <div class="uc-grid-2">
+                        <div class="uc-field">
+                            <span class="uc-label">Code</span>
+                            <div class="uc-num uc-strong" data-testid="stone-code-readonly">{{ stone.stone_code }}</div>
+                        </div>
+                        <div class="uc-field">
+                            <span class="uc-label">Status</span>
+                            <div class="uc-num">{{ c.pill(stone.status.value) }}</div>
+                        </div>
+                    </div>
+                </section>
+            {% endif %}
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Identity</h3>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="stone_type">Type <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="stone_type" name="stone_type" required data-testid="stone-type-input">
+                            {% for t in stone_types %}
+                                <option value="{{ t }}" {% if form.stone_type == t %}selected{% endif %}>{{ t }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="shape_id">Shape <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="shape_id" name="shape_id" required data-testid="stone-shape-input">
+                            <option value="">— pick —</option>
+                            {% for s in shape_options %}
+                                <option value="{{ s.id }}" {% if form.shape_id == (s.id | string) %}selected{% endif %}>{{ s.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Measurements</h3>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="carat_weight">Carat weight <span class="uc-required" aria-hidden="true">*</span></label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="carat_weight" name="carat_weight" required
+                               value="{{ form.carat_weight }}"
+                               data-testid="stone-carat-input">
+                    </div>
+                </div>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="length_mm">Length (mm)</label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="length_mm" name="length_mm"
+                               value="{{ form.length_mm }}" data-testid="stone-length-input">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="width_mm">Width (mm)</label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="width_mm" name="width_mm"
+                               value="{{ form.width_mm }}" data-testid="stone-width-input">
+                    </div>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="depth_mm">Depth (mm)</label>
+                    <input class="uc-input" type="text" inputmode="decimal" id="depth_mm" name="depth_mm"
+                           value="{{ form.depth_mm }}" data-testid="stone-depth-input">
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Quality</h3>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="colour_grade">Colour grade</label>
+                        <input class="uc-input" type="text" id="colour_grade" name="colour_grade"
+                               value="{{ form.colour_grade }}" maxlength="8"
+                               data-testid="stone-colour-input"
+                               placeholder="D-Z (diamonds) or descriptive">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="clarity_grade">Clarity grade</label>
+                        <input class="uc-input" type="text" id="clarity_grade" name="clarity_grade"
+                               value="{{ form.clarity_grade }}" maxlength="8"
+                               data-testid="stone-clarity-input"
+                               placeholder="FL..I3">
+                    </div>
+                </div>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="cut_grade">Cut grade</label>
+                        <input class="uc-input" type="text" id="cut_grade" name="cut_grade"
+                               value="{{ form.cut_grade }}" maxlength="16"
+                               data-testid="stone-cut-input">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="polish">Polish</label>
+                        <input class="uc-input" type="text" id="polish" name="polish"
+                               value="{{ form.polish }}" maxlength="16"
+                               data-testid="stone-polish-input">
+                    </div>
+                </div>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="symmetry">Symmetry</label>
+                        <input class="uc-input" type="text" id="symmetry" name="symmetry"
+                               value="{{ form.symmetry }}" maxlength="16"
+                               data-testid="stone-symmetry-input">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="fluorescence">Fluorescence</label>
+                        <input class="uc-input" type="text" id="fluorescence" name="fluorescence"
+                               value="{{ form.fluorescence }}" maxlength="16"
+                               data-testid="stone-fluorescence-input">
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Certificate</h3>
+                <div class="uc-field">
+                    <label class="uc-label" for="lab">Grading lab</label>
+                    <select class="uc-select" id="lab" name="lab" data-testid="stone-lab-input">
+                        <option value="">— none —</option>
+                        {% for l in labs %}
+                            <option value="{{ l }}" {% if form.lab == l %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="cert_number">Certificate number</label>
+                    <input class="uc-input" type="text" id="cert_number" name="cert_number"
+                           value="{{ form.cert_number }}" maxlength="64"
+                           data-testid="stone-cert-number-input">
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="cert_url">Certificate URL</label>
+                    <input class="uc-input" type="text" id="cert_url" name="cert_url"
+                           value="{{ form.cert_url }}" maxlength="512"
+                           data-testid="stone-cert-url-input">
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Origin</h3>
+                <div class="uc-field">
+                    <label class="uc-label" for="origin">Origin <span class="uc-required" aria-hidden="true">*</span></label>
+                    <select class="uc-select" id="origin" name="origin" required data-testid="stone-origin-input">
+                        {% for o in origins %}
+                            <option value="{{ o }}" {% if form.origin == o %}selected{% endif %}>{{ o }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="treatment">Treatment</label>
+                    <input class="uc-input" type="text" id="treatment" name="treatment"
+                           value="{{ form.treatment }}" maxlength="64"
+                           data-testid="stone-treatment-input"
+                           placeholder="e.g. heat, oil, fracture-filled">
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Ownership</h3>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="ownership">Ownership <span class="uc-required" aria-hidden="true">*</span></label>
+                        <select class="uc-select" id="ownership" name="ownership" required data-testid="stone-ownership-input">
+                            {% for o in ownerships %}
+                                <option value="{{ o }}" {% if form.ownership == o %}selected{% endif %}>{{ o }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="memo_due_date">Memo due date</label>
+                        <input class="uc-input" type="date" id="memo_due_date" name="memo_due_date"
+                               value="{{ form.memo_due_date }}"
+                               data-testid="stone-memo-due-input">
+                        <small class="uc-helper">Required when ownership is <code>memo</code>.</small>
+                    </div>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="supplier_id">Supplier</label>
+                    <select class="uc-select" id="supplier_id" name="supplier_id" data-testid="stone-supplier-input">
+                        <option value="">— none —</option>
+                        {% for s in supplier_options %}
+                            <option value="{{ s.id }}" {% if form.supplier_id == (s.id | string) %}selected{% endif %}>{{ s.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="uc-grid-2">
+                    <div class="uc-field">
+                        <label class="uc-label" for="acquisition_cost">Acquisition cost</label>
+                        <input class="uc-input" type="text" inputmode="decimal" id="acquisition_cost" name="acquisition_cost"
+                               value="{{ form.acquisition_cost }}"
+                               data-testid="stone-acquisition-cost-input">
+                    </div>
+                    <div class="uc-field">
+                        <label class="uc-label" for="acquisition_date">Acquisition date</label>
+                        <input class="uc-input" type="date" id="acquisition_date" name="acquisition_date"
+                               value="{{ form.acquisition_date }}"
+                               data-testid="stone-acquisition-date-input">
+                    </div>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Location</h3>
+                <div class="uc-field">
+                    <label class="uc-label" for="current_location_id">Current location</label>
+                    <select class="uc-select" id="current_location_id" name="current_location_id" data-testid="stone-location-input">
+                        <option value="">— none —</option>
+                        {% for l in location_options %}
+                            <option value="{{ l.id }}" {% if form.current_location_id == (l.id | string) %}selected{% endif %}>{{ l.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <small class="uc-helper">Use the Relocate action from the stones list to record a location change in the event ledger.</small>
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <h3 class="uc-h3">Tracking</h3>
+                <p class="uc-helper">
+                    Spec §10.1: a stone is tracked (rather than left as melee) when
+                    one of these triggers fires:
+                    <strong>cert</strong> (lab + cert number set),
+                    <strong>coloured stone above 0.50 ct</strong>,
+                    or <strong>acquisition cost ≥ $500 AUD</strong>.
+                    If none apply, pick <strong>manual_override</strong> and
+                    explain why this stone is being tracked.
+                </p>
+                <div class="uc-field">
+                    <label class="uc-label" for="tracking_trigger">Tracking trigger</label>
+                    <select class="uc-select" id="tracking_trigger" name="tracking_trigger"
+                            data-testid="stone-tracking-trigger-input">
+                        <option value="">— auto-detect from cert / carat / cost —</option>
+                        <option value="cert" {% if form.tracking_trigger == "cert" %}selected{% endif %}>cert</option>
+                        <option value="coloured_stone_threshold" {% if form.tracking_trigger == "coloured_stone_threshold" %}selected{% endif %}>coloured_stone_threshold</option>
+                        <option value="cost_threshold" {% if form.tracking_trigger == "cost_threshold" %}selected{% endif %}>cost_threshold</option>
+                        <option value="manual_override" {% if form.tracking_trigger == "manual_override" %}selected{% endif %}>manual_override</option>
+                    </select>
+                </div>
+                <div class="uc-field">
+                    <label class="uc-label" for="tracking_override_reason">Override reason</label>
+                    <input class="uc-input" type="text" id="tracking_override_reason" name="tracking_override_reason"
+                           value="{{ form.tracking_override_reason }}"
+                           data-testid="stone-tracking-override-reason-input"
+                           maxlength="255"
+                           placeholder="Required only when tracking_trigger = manual_override">
+                </div>
+            </section>
+
+            <section class="uc-section">
+                <div class="uc-field">
+                    <label class="uc-label" for="notes">Notes</label>
+                    <textarea class="uc-textarea" id="notes" name="notes"
+                              data-testid="stone-notes-input"
+                              maxlength="2000"
+                              rows="4">{{ form.notes }}</textarea>
+                </div>
+            </section>
+
+            {% call c.form_actions() %}
+                <button class="uc-btn uc-btn--primary" type="submit" data-testid="stone-submit">
+                    {% if stone %}Save changes{% else %}Create stone{% endif %}
+                </button>
+                <a class="uc-btn uc-btn--secondary" href="/admin/stones">Cancel</a>
+            {% endcall %}
+        </form>
+    {% endcall %}
+{% endblock %}
